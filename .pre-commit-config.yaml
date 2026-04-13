@@ -1,0 +1,19 @@
+# 可选：安装后提交前自动校验
+#   pip install pre-commit && pre-commit install
+#
+repos:
+  - repo: local
+    hooks:
+      - id: engine-data-validation
+        name: python -m engine.validation
+        entry: python -m engine.validation
+        language: system
+        pass_filenames: false
+        files: ^(data/|engine/validation/|engine/models/enums\.py|tests/test_data_validation\.py|PLAN\.md|PLAN_CODE_MAPPING\.md)
+
+      - id: pytest-data-validation
+        name: pytest tests/test_data_validation.py
+        entry: pytest tests/test_data_validation.py -q
+        language: system
+        pass_filenames: false
+        files: ^(data/|engine/validation/|engine/models/enums\.py|tests/test_data_validation\.py|PLAN\.md|PLAN_CODE_MAPPING\.md)

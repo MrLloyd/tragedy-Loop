@@ -49,6 +49,7 @@ class Effect:
     # 常用 target：
     #   "self"              — 持有该能力的角色
     #   "same_area_other"   — 同区域其他角色（需选择）
+    #   "same_area_any"   — 同区域任意角色（需选择）
     #   "same_area_all"     — 同区域全部角色
     #   "any_character"     — 任意角色（需选择）
     #   "any_board"         — 任意版图（需选择）

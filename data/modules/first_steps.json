@@ -1,0 +1,135 @@
+{
+  "module": {
+    "module_id": "first_steps",
+    "name": "First Steps",
+    "special_rules": [
+      "only_one_rule_x",
+      "no_final_guess"
+    ],
+    "rule_x_count": 1,
+    "has_final_guess": false,
+    "has_ex_gauge": false,
+    "ex_gauge_resets_per_loop": true
+  },
+  "rules_y": [
+    {
+      "rule_id": "fs_murder_plan",
+      "name": "谋杀计划",
+      "rule_type": "Y",
+      "module": "first_steps",
+      "identity_slots": {
+        "key_person": 1,
+        "killer": 1,
+        "mastermind": 1
+      },
+      "abilities": []
+    }
+  ],
+  "rules_x": [
+    {
+      "rule_id": "fs_ripper_shadow",
+      "name": "开膛者的魔影",
+      "rule_type": "X",
+      "module": "first_steps",
+      "identity_slots": {
+        "rumormonger": 1,
+        "serial_killer": 1
+      },
+      "abilities": [
+        {
+          "ability_id": "fs_fail_school_intrigue_2",
+          "name": "学校密谋失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "description": "学校有2枚或以上密谋时主人公失败",
+          "condition": {
+            "condition_type": "token_check",
+            "params": {
+              "target": "school",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "rule_x_loss_condition"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "identities": [
+    {
+      "identity_id": "key_person",
+      "name": "关键人物",
+      "module": "first_steps",
+      "traits": [],
+      "abilities": [
+        {
+          "ability_id": "key_person_on_death",
+          "name": "关键人物死亡",
+          "ability_type": "mandatory",
+          "timing": "on_death",
+          "effects": [
+            { "effect_type": "protagonist_failure", "target": "self", "value": "key_person_dead" },
+            { "effect_type": "force_loop_end", "target": "self", "value": "key_person_dead" }
+          ]
+        }
+      ]
+    },
+    {
+      "identity_id": "killer",
+      "name": "杀手",
+      "module": "first_steps",
+      "traits": ["ignore_goodwill"],
+      "abilities": []
+    },
+    {
+      "identity_id": "mastermind",
+      "name": "主谋",
+      "module": "first_steps",
+      "traits": ["ignore_goodwill"],
+      "abilities": []
+    },
+    {
+      "identity_id": "rumormonger",
+      "name": "传谣人",
+      "module": "first_steps",
+      "traits": [],
+      "max_count": 1,
+      "abilities": []
+    },
+    {
+      "identity_id": "serial_killer",
+      "name": "杀人狂",
+      "module": "first_steps",
+      "traits": [],
+      "abilities": []
+    }
+  ],
+  "incidents": [
+    {
+      "incident_id": "murder",
+      "name": "谋杀",
+      "module": "first_steps",
+      "sequential": false,
+      "effects": [
+        { "effect_type": "kill_character", "target": "same_area_other" }
+      ]
+    },
+    {
+      "incident_id": "hospital_accident",
+      "name": "医院事故",
+      "module": "first_steps",
+      "sequential": true,
+      "effects": [
+        { "effect_type": "kill_character", "target": "hospital_all" },
+        { "effect_type": "protagonist_death", "target": "self", "value": "hospital_intrigue_2" }
+      ]
+    }
+  ]
+}

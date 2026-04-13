@@ -1,0 +1,110 @@
+{
+  "module": {
+    "module_id": "basic_tragedy_x",
+    "name": "Basic Tragedy X",
+    "special_rules": [
+      "base_module_standard"
+    ],
+    "rule_x_count": 2,
+    "has_final_guess": true,
+    "has_ex_gauge": false,
+    "ex_gauge_resets_per_loop": true
+  },
+  "rules_y": [
+    {
+      "rule_id": "btx_murder_plan",
+      "name": "谋杀计划",
+      "rule_type": "Y",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "key_person": 1,
+        "killer": 1,
+        "mastermind": 1
+      },
+      "abilities": []
+    },
+    {
+      "rule_id": "btx_cursed_contract",
+      "name": "和我签订契约吧",
+      "rule_type": "Y",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "key_person": 1
+      },
+      "abilities": [
+        {
+          "ability_id": "btx_fail_key_person_intrigue_2",
+          "name": "关键人物密谋失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "effects": [
+            { "effect_type": "protagonist_failure", "target": "self", "value": "key_person_intrigue_2" }
+          ]
+        }
+      ]
+    }
+  ],
+  "rules_x": [
+    {
+      "rule_id": "btx_rumors",
+      "name": "流言四起",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "rumormonger": 1
+      },
+      "abilities": []
+    },
+    {
+      "rule_id": "btx_latent_serial_killer",
+      "name": "潜伏的杀人狂",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "serial_killer": 1,
+        "friend": 1
+      },
+      "abilities": []
+    }
+  ],
+  "identities": [
+    { "identity_id": "key_person", "name": "关键人物", "module": "basic_tragedy_x", "traits": [], "abilities": [] },
+    { "identity_id": "killer", "name": "杀手", "module": "basic_tragedy_x", "traits": ["ignore_goodwill"], "abilities": [] },
+    { "identity_id": "mastermind", "name": "主谋", "module": "basic_tragedy_x", "traits": ["ignore_goodwill"], "abilities": [] },
+    { "identity_id": "cultist", "name": "邪教徒", "module": "basic_tragedy_x", "traits": ["must_ignore_goodwill"], "abilities": [] },
+    { "identity_id": "friend", "name": "亲友", "module": "basic_tragedy_x", "traits": [], "max_count": 2, "abilities": [] },
+    { "identity_id": "serial_killer", "name": "杀人狂", "module": "basic_tragedy_x", "traits": [], "abilities": [] },
+    { "identity_id": "rumormonger", "name": "传谣人", "module": "basic_tragedy_x", "traits": [], "max_count": 1, "abilities": [] }
+  ],
+  "incidents": [
+    {
+      "incident_id": "murder",
+      "name": "谋杀",
+      "module": "basic_tragedy_x",
+      "sequential": false,
+      "effects": [
+        { "effect_type": "kill_character", "target": "same_area_other" }
+      ]
+    },
+    {
+      "incident_id": "unease_spread",
+      "name": "不安扩散",
+      "module": "basic_tragedy_x",
+      "sequential": true,
+      "effects": [
+        { "effect_type": "place_token", "target": "any_character", "token_type": "paranoia", "amount": 2 },
+        { "effect_type": "place_token", "target": "any_character", "token_type": "intrigue", "amount": 1 }
+      ]
+    },
+    {
+      "incident_id": "hospital_accident",
+      "name": "医院事故",
+      "module": "basic_tragedy_x",
+      "sequential": true,
+      "effects": [
+        { "effect_type": "kill_character", "target": "hospital_all" },
+        { "effect_type": "protagonist_death", "target": "self", "value": "hospital_intrigue_2" }
+      ]
+    }
+  ]
+}

@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from engine.models.enums import GamePhase
+from engine.models.cards import CardPlacement
+from engine.models.enums import GamePhase, PlayerRole
 
 if TYPE_CHECKING:
     from engine.game_state import GameState
@@ -108,11 +109,34 @@ class MastermindActionHandler(PhaseHandler):
     def execute(self, state: GameState) -> PhaseSignal:
         # 剧作家暗置 3 张行动牌
         available = state.mastermind_hand.get_available()
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            # 最小闭环：允许 UI 一次提交 1~3 张牌，合法后标记为已使用并记录放置。
+            selected = choice if isinstance(choice, list) else [choice]
+            if not selected or len(selected) > 3:
+                raise ValueError("mastermind must choose 1 to 3 cards")
+
+            for card in selected:
+                if card not in available:
+                    raise ValueError("selected card is not available in mastermind hand")
+                card.is_used_this_loop = True
+                state.placed_cards.append(
+                    CardPlacement(
+                        card=card,
+                        owner=PlayerRole.MASTERMIND,
+                        target_type="board",
+                        target_id="school",
+                        face_down=True,
+                    )
+                )
+            return PhaseComplete()
+
         return WaitForInput(
             input_type="place_action_cards",
             prompt="剧作家请放置 3 张行动牌",
             options=available,
             player="mastermind",
+            callback=_on_choice,
         )
 
 
@@ -124,11 +148,28 @@ class ProtagonistActionHandler(PhaseHandler):
         leader = state.leader_index
         hand = state.protagonist_hands[leader]
         available = hand.get_available()
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            if choice not in available:
+                raise ValueError("selected card is not available in protagonist hand")
+            choice.is_used_this_loop = True
+            state.placed_cards.append(
+                CardPlacement(
+                    card=choice,
+                    owner=hand.owner,
+                    target_type="board",
+                    target_id="school",
+                    face_down=True,
+                )
+            )
+            return PhaseComplete()
+
         return WaitForInput(
             input_type="place_action_card",
             prompt=f"主人公 {leader + 1}（队长）请放置 1 张行动牌",
             options=available,
             player=f"protagonist_{leader}",
+            callback=_on_choice,
         )
 
 
@@ -210,10 +251,15 @@ class FinalGuessHandler(PhaseHandler):
 
     def execute(self, state: GameState) -> PhaseSignal:
         # 最终决战：主人公推理身份
+        def _on_choice(_: Any) -> PhaseSignal:
+            # Phase 1 最小闭环：接收输入即可继续推进，具体判定后续实现。
+            return PhaseComplete()
+
         return WaitForInput(
             input_type="final_guess",
             prompt="最终决战：请推理所有角色身份与规则",
             player="protagonists",
+            callback=_on_choice,
         )
 
 

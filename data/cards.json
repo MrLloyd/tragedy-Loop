@@ -1,0 +1,31 @@
+{
+  "mastermind_base": [
+    { "card_type": "intrigue_plus_2", "count": 1, "once_per_loop": true },
+    { "card_type": "intrigue_plus_1", "count": 1, "once_per_loop": false },
+    { "card_type": "paranoia_plus_1", "count": 2, "once_per_loop": false },
+    { "card_type": "paranoia_minus_1", "count": 1, "once_per_loop": false },
+    { "card_type": "move_horizontal", "count": 1, "once_per_loop": false },
+    { "card_type": "move_vertical", "count": 1, "once_per_loop": false },
+    { "card_type": "move_diagonal", "count": 1, "once_per_loop": true },
+    { "card_type": "forbid_goodwill", "count": 1, "once_per_loop": false },
+    { "card_type": "forbid_paranoia", "count": 1, "once_per_loop": false }
+  ],
+  "protagonist_base": [
+    { "card_type": "goodwill_plus_1", "count": 1, "once_per_loop": false },
+    { "card_type": "goodwill_plus_2", "count": 1, "once_per_loop": true },
+    { "card_type": "paranoia_plus_1_p", "count": 1, "once_per_loop": false },
+    { "card_type": "paranoia_minus_1_p", "count": 1, "once_per_loop": true },
+    { "card_type": "move_horizontal_p", "count": 1, "once_per_loop": false },
+    { "card_type": "move_vertical_p", "count": 1, "once_per_loop": false },
+    { "card_type": "forbid_intrigue", "count": 1, "once_per_loop": false },
+    { "card_type": "forbid_movement", "count": 1, "once_per_loop": true }
+  ],
+  "extensions": {
+    "mastermind": [
+      { "card_type": "despair_plus_1", "count": 1, "once_per_loop": false }
+    ],
+    "protagonist": [
+      { "card_type": "hope_plus_1", "count": 1, "once_per_loop": false }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+---
+description: 数据契约校验（改 data / validation / 规划文档时必须跑通）
+alwaysApply: true
+---
+
+# 数据契约与校验（Phase 0）
+
+凡修改 **`data/**`**、**`engine/validation/**`**、**`engine/models/enums.py`**、**`PLAN.md`**、**`PLAN_CODE_MAPPING.md`** 或 **`tests/test_data_validation.py`**，在结束该任务前于仓库根目录执行：
+
+1. `python -m engine.validation`
+2. `pytest tests/test_data_validation.py -q`
+
+失败则修复或说明阻塞原因；不要留下已知违约的 JSON/枚举组合。
+
+**远程**：推送/PR 由 `.github/workflows/data-validation.yml` 自动执行相同步骤。
+
+**本地提交（可选）**：`pip install pre-commit && pre-commit install` 后，改动匹配 `.pre-commit-config.yaml` 中 `files` 时于提交前运行上述命令。

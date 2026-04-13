@@ -37,15 +37,19 @@ class DeathResolver:
         if not character.is_alive:
             return DeathResult.PREVENTED_BY_GUARD  # 已经是尸体，忽略
 
-        # ---- 层 1：护卫指示物 ----
+
+         # ---- 层 1：不死特性 ----
+        active_traits = self._get_active_traits(character, state)
+        if Trait.IMMORTAL in active_traits:
+            return DeathResult.PREVENTED_BY_IMMORTAL
+
+
+        # ---- 层 2：护卫指示物 ----
         if character.tokens.guard > 0:
             character.tokens.remove(TokenType.GUARD, 1)
             return DeathResult.PREVENTED_BY_GUARD
 
-        # ---- 层 2：不死特性 ----
-        active_traits = self._get_active_traits(character, state)
-        if Trait.IMMORTAL in active_traits:
-            return DeathResult.PREVENTED_BY_IMMORTAL
+       
 
         # ---- 层 3：实际死亡 ----
         character.is_alive = False

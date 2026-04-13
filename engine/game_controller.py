@@ -90,12 +90,14 @@ class GameController:
 
         由 UI 层调用，将玩家选择传回引擎继续执行。
         """
-        if self._pending_callback:
-            callback = self._pending_callback
-            self._pending_callback = None
-            result = callback(choice)
-            if result is not None:
-                self._handle_signal(result)
+        if self._pending_callback is None:
+            raise RuntimeError("No pending input callback; engine is not waiting for input")
+
+        callback = self._pending_callback
+        self._pending_callback = None
+        result = callback(choice)
+        if result is not None:
+            self._handle_signal(result)
 
     # ==================================================================
     # 核心调度循环
@@ -138,6 +140,10 @@ class GameController:
                 self._advance_and_run()
 
             case WaitForInput() as wait:
+                if wait.callback is None:
+                    raise RuntimeError(
+                        f"WaitForInput({wait.input_type}) missing callback"
+                    )
                 self._pending_callback = wait.callback
                 self.ui_callback.on_wait_for_input(wait)
 

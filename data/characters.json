@@ -1,0 +1,54 @@
+{
+  "characters": [
+    {
+      "character_id": "female_student",
+      "name": "女子学生",
+      "initial_area": "school",
+      "forbidden_areas": [],
+      "attributes": ["student", "girl"],
+      "paranoia_limit": 3,
+      "base_traits": [],
+      "goodwill_abilities": []
+    },
+    {
+      "character_id": "male_student",
+      "name": "男子学生",
+      "initial_area": "school",
+      "forbidden_areas": [],
+      "attributes": ["student", "boy"],
+      "paranoia_limit": 2,
+      "base_traits": [],
+      "goodwill_abilities": []
+    },
+    {
+      "character_id": "office_worker",
+      "name": "职员",
+      "initial_area": "city",
+      "forbidden_areas": [],
+      "attributes": ["adult", "male"],
+      "paranoia_limit": 2,
+      "base_traits": [],
+      "goodwill_abilities": []
+    },
+    {
+      "character_id": "shrine_maiden",
+      "name": "巫女",
+      "initial_area": "shrine",
+      "forbidden_areas": ["city"],
+      "attributes": ["student", "female"],
+      "paranoia_limit": 2,
+      "base_traits": [],
+      "goodwill_abilities": []
+    },
+    {
+      "character_id": "doctor",
+      "name": "医生",
+      "initial_area": "hospital",
+      "forbidden_areas": [],
+      "attributes": ["adult", "male"],
+      "paranoia_limit": 2,
+      "base_traits": [],
+      "goodwill_abilities": []
+    }
+  ]
+}

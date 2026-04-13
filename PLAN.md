@@ -75,25 +75,91 @@ traged/
 
 ## 2. 开发阶段
 
-### Phase 0（当前）: 基础设施 + 数据
-- [ ] `models/enums.py` — GamePhase, TokenType, AreaId 等
-- [ ] `models/character.py` — TokenSet, CharacterState
-- [ ] `models/board.py` — BoardArea, BoardState（2x2网格+远方+相邻关系）
-- [ ] `models/cards.py` — ActionCard, CardHand, CardPlacement
-- [ ] `models/script.py` — Script, PublicInfo, SecretInfo
-- [ ] `models/identity.py` — IdentityDef, Ability, Effect, Condition
-- [ ] `models/incident.py` — IncidentDef, IncidentSchedule
-- [ ] `data/board.json`
-- [ ] `data/cards.json`（含扩展牌位：绝望+1、希望+1）
-- [ ] `data/characters.json`（FS+BTX 所需角色）
-- [ ] `data/modules/first_steps.json`
-- [ ] `data/modules/basic_tragedy_x.json`
+### Phase 0（已完成）: 基础设施 + 数据
+- [x] `models/enums.py` — GamePhase, TokenType, AreaId 等
+- [x] `models/character.py` — TokenSet, CharacterState
+- [x] `models/board.py` — BoardArea, BoardState（2x2网格+远方+相邻关系）
+- [x] `models/cards.py` — ActionCard, CardHand, CardPlacement
+- [x] `models/script.py` — Script（当前以 `Script` 聚合公开/非公开信息）
+- [x] `models/identity.py` — IdentityDef, Ability, Effect, Condition
+- [x] `models/incident.py` — IncidentDef, IncidentSchedule
+- [x] `data/board.json`
+- [x] `data/cards.json`（含扩展牌位：绝望+1、希望+1）
+- [x] `data/characters.json`（FS+BTX 所需角色）
+- [x] `data/modules/first_steps.json`
+- [x] `data/modules/basic_tragedy_x.json`
+- [x] 数据契约与校验：`engine/validation/`、`python -m engine.validation`、`tests/test_data_validation.py`
 
-### Phase 1: 状态机 + 核心引擎
-### Phase 2: 行动牌系统
-### Phase 3: 身份与能力系统（FS+BTX 全部身份）
-### Phase 4: 事件系统
-### Phase 5: 基础 UI
+### Phase 1（进行中）: 状态机 + 核心引擎
+- [x] `engine/state_machine.py`：实现 15 阶段主流程、条件分支与虚线跳转
+- [x] `engine/game_controller.py`：实现调度主循环（phase execute → signal handle → advance）
+- [x] `engine/resolvers/atomic_resolver.py`：原子结算框架（读-写-触发）骨架
+- [x] `engine/resolvers/death_resolver.py`：死亡处理链基础（护卫/不死/死亡）
+- [x] `engine/phases/phase_base.py`：PhaseHandler / PhaseSignal 框架
+- [x] 打通 `WaitForInput` 回填闭环：`provide_input` 后稳定续跑后续阶段
+- [ ] 完成最小阶段业务闭环：`ACTION_RESOLVE`、`INCIDENT`、`TURN_END`、`LOOP_END_CHECK`
+- [ ] 将 `has_final_guess` 从控制器硬编码改为读取 `Script.module`/模组配置
+- [ ] 接通事件触发链与身份能力触发到 `event_bus`
+- [ ] 补充 Phase 1 核心测试：状态机分支、同时裁定、死亡/失败优先级、跨阶段 loop_end 跳转
+
+#### Phase 1 实施顺序（建议）
+
+1. **输入闭环先行（P1-0）**
+   - 实现 `WaitForInput.callback` 生命周期：挂起、回填、续跑、防重复输入。
+   - 先保证 “一次输入 -> 正常推进到下一阶段”。
+2. **最小业务闭环（P1-1）**
+   - `ACTION_RESOLVE`：先实现最小可运行结算入口（可先覆盖少量 effect）。
+   - `INCIDENT`：最小事件触发判定与执行路径。
+   - `TURN_END`：强制效果 -> 任意效果声明 -> 每次后检查是否应结束轮回。
+   - `LOOP_END_CHECK`：三分支闭环（胜利 / NEXT_LOOP / FINAL_GUESS|GAME_END）。
+3. **模组配置接线（P1-2）**
+   - `has_final_guess` 改为读取 `Script`/module 配置，不再硬编码。
+4. **事件总线接线（P1-3）**
+   - 将死亡、失败、轮回终止等关键触发统一发布到 `event_bus`，并接入能力触发入口。
+5. **测试兜底（P1-4）**
+   - 覆盖状态机关键分支、同时裁定、跨阶段终止、输入续跑回归。
+
+#### Phase 1 完成标准（Definition of Done）
+
+- [ ] DoD-1：从 `GAME_PREPARE` 可稳定跑到 `LOOP_END_CHECK`（至少 1 条最小路径）
+- [x] DoD-2：`WaitForInput` 至少完成 1 次 “输入 -> 回调 -> 继续执行” 且无重复消费
+- [ ] DoD-3：`LOOP_END_CHECK` 三分支可验证（胜利 / NEXT_LOOP / 最后一轮失败分支）
+- [ ] DoD-4：关键同时裁定正确（主人公死亡 vs 主人公失败，军人阻止死亡后的分流）
+- [ ] DoD-5：`has_final_guess` 来源于模组配置，不再在控制器硬编码
+- [ ] DoD-6：具备最小自动化回归测试并可本地通过
+### Phase 2（优先）: 数据层完善（loader / registry / 契约联动）
+- [ ] 新增 `engine/rules/module_loader.py`：将 `data/modules/*.json` 装配为运行时结构
+- [ ] 新增 `engine/rules/identity_registry.py`：身份定义注册与按 id 查询
+- [ ] 新增 `engine/rules/incident_registry.py`：事件定义注册与按 id 查询
+- [ ] `game_controller` / phase 逻辑接入 module 配置（含 `has_final_guess`、模组差异）
+- [ ] 数据校验与加载链路打通（校验通过后可被 loader 消费）
+
+#### Phase 2 实施顺序（建议）
+
+1. **注册表先行（P2-0）**
+   - 先落地 `identity_registry` / `incident_registry` 的最小只读查询接口（按 id 获取定义）。
+   - 保持纯数据层，不引入业务结算逻辑。
+2. **模块加载器（P2-1）**
+   - 实现 `module_loader`：读取 `data/modules/*.json`，生成 `Script` + 规则/身份/事件定义对象。
+   - 先支持 `first_steps` 与 `basic_tragedy_x` 两个模组。
+3. **控制器接线（P2-2）**
+   - 用加载结果驱动 `GameState.script` 与关键配置（如 `has_final_guess`），移除硬编码依赖。
+4. **校验联动（P2-3）**
+   - 保证“校验通过的数据”可被 loader 无异常消费；loader 错误信息复用数据路径语义（便于定位）。
+5. **回归测试（P2-4）**
+   - 为 loader/registry 增加最小单元测试 + 一条集成冒烟（加载模组 -> 构造初始状态）。
+
+#### Phase 2 完成标准（Definition of Done）
+
+- [ ] DoD-1：`first_steps`、`basic_tragedy_x` 均可由 loader 成功加载为运行时结构
+- [ ] DoD-2：`identity_registry` / `incident_registry` 支持按 id 查询且覆盖模组定义
+- [ ] DoD-3：`game_controller` 不再硬编码 `has_final_guess`，改为读模组配置
+- [ ] DoD-4：数据校验通过后，loader 消费同一份数据不抛结构性错误
+- [ ] DoD-5：存在最小自动化测试（registry + loader + 一条加载集成路径）并本地通过
+
+### Phase 3: 行动牌系统
+### Phase 4: 身份与能力系统（FS+BTX 全部身份）+ 事件系统
+### Phase 5（暂缓）: 基础 UI（待数据层与核心规则闭环后再启动）
 ### Phase 6: 端到端可玩
 
 ---
