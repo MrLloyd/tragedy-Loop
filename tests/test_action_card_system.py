@@ -79,15 +79,10 @@ def _make_state_for_placement() -> GameState:
 # ---------------------------------------------------------------------------
 
 def test_mastermind_place_3_cards():
-    """剧作家放置3张牌，目标混合角色和版图"""
+    """剧作家逐次放置3张牌，目标混合角色和版图"""
     mm_handler, _, _, _ = _make_action_handlers()
     state = _make_state_for_placement()
 
-    signal = mm_handler.execute(state)
-    assert isinstance(signal, WaitForInput)
-    assert signal.input_type == "place_action_cards"
-
-    # 构造 3 个 PlacementIntent
     intents = [
         PlacementIntent(
             card=state.mastermind_hand.cards[0],  # INTRIGUE_PLUS_2
@@ -96,65 +91,62 @@ def test_mastermind_place_3_cards():
         ),
         PlacementIntent(
             card=state.mastermind_hand.cards[1],  # INTRIGUE_PLUS_1
-            target_type="character",
-            target_id="char_1",
+            target_type="board",
+            target_id=AreaId.SCHOOL.value,
         ),
         PlacementIntent(
             card=state.mastermind_hand.cards[2],  # PARANOIA_PLUS_1
             target_type="board",
-            target_id=AreaId.SCHOOL.value,
+            target_id=AreaId.HOSPITAL.value,
         ),
     ]
 
-    # 提交
-    result = signal.callback(intents)
+    signal = mm_handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "place_action_card"
+    assert signal.player == "mastermind"
+
+    signal = signal.callback(intents[0])
+    assert isinstance(signal, WaitForInput)
+    signal = signal.callback(intents[1])
+    assert isinstance(signal, WaitForInput)
+    result = signal.callback(intents[2])
     assert isinstance(result, PhaseComplete)
 
     # 验证放置记录
     assert len(state.placed_cards) == 3
     assert state.placed_cards[0].target_type == "character"
     assert state.placed_cards[0].target_id == "char_1"
-    assert state.placed_cards[1].target_type == "character"
-    assert state.placed_cards[1].target_id == "char_1"
+    assert state.placed_cards[1].target_type == "board"
+    assert state.placed_cards[1].target_id == AreaId.SCHOOL.value
     assert state.placed_cards[2].target_type == "board"
-    assert state.placed_cards[2].target_id == AreaId.SCHOOL.value
+    assert state.placed_cards[2].target_id == AreaId.HOSPITAL.value
 
 
 # ---------------------------------------------------------------------------
-# T2: 剧作家提交不足3张或超过3张 → ValueError
+# T2: 剧作家不能在同一位置叠放自身行动牌
 # ---------------------------------------------------------------------------
 
-def test_mastermind_invalid_count():
-    """剧作家提交错误数量的牌应该抛出异常"""
+def test_mastermind_rejects_duplicate_slot():
+    """同一剧作家的 3 张行动牌不能放到同一目标"""
     mm_handler, _, _, _ = _make_action_handlers()
     state = _make_state_for_placement()
 
     signal = mm_handler.execute(state)
     assert isinstance(signal, WaitForInput)
 
-    # 提交 2 张（少于3张）
-    intents_2 = [
-        PlacementIntent(state.mastermind_hand.cards[0], "board", AreaId.SCHOOL.value),
-        PlacementIntent(state.mastermind_hand.cards[1], "board", AreaId.HOSPITAL.value),
-    ]
-    try:
-        signal.callback(intents_2)
-        assert False, "should raise ValueError for 2 cards"
-    except ValueError as e:
-        assert "exactly 3" in str(e)
+    next_signal = signal.callback(
+        PlacementIntent(state.mastermind_hand.cards[0], "board", AreaId.SCHOOL.value)
+    )
+    assert isinstance(next_signal, WaitForInput)
 
-    # 提交 4 张（多于3张）
-    intents_4 = [
-        PlacementIntent(state.mastermind_hand.cards[0], "board", AreaId.SCHOOL.value),
-        PlacementIntent(state.mastermind_hand.cards[1], "board", AreaId.HOSPITAL.value),
-        PlacementIntent(state.mastermind_hand.cards[2], "board", AreaId.SHRINE.value),
-        PlacementIntent(state.mastermind_hand.cards[3], "board", AreaId.FARAWAY.value),
-    ]
     try:
-        signal.callback(intents_4)
-        assert False, "should raise ValueError for 4 cards"
+        next_signal.callback(
+            PlacementIntent(state.mastermind_hand.cards[1], "board", AreaId.SCHOOL.value)
+        )
+        assert False, "should raise ValueError for duplicate slot"
     except ValueError as e:
-        assert "exactly 3" in str(e)
+        assert "same target" in str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -169,14 +161,10 @@ def test_mastermind_no_action_cards_trait():
     signal = mm_handler.execute(state)
     assert isinstance(signal, WaitForInput)
 
-    intents = [
-        PlacementIntent(state.mastermind_hand.cards[0], "character", "char_2"),  # NO_ACTION_CARDS
-        PlacementIntent(state.mastermind_hand.cards[1], "board", AreaId.SCHOOL.value),
-        PlacementIntent(state.mastermind_hand.cards[2], "board", AreaId.HOSPITAL.value),
-    ]
-
     try:
-        signal.callback(intents)
+        signal.callback(
+            PlacementIntent(state.mastermind_hand.cards[0], "character", "char_2")
+        )
         assert False, "should raise ValueError for NO_ACTION_CARDS"
     except ValueError as e:
         assert "NO_ACTION_CARDS" in str(e) or "cannot receive" in str(e)
@@ -232,6 +220,43 @@ def test_protagonist_all_three_place_cards():
     assert state.placed_cards[0].owner == PlayerRole.PROTAGONIST_0
     assert state.placed_cards[1].owner == PlayerRole.PROTAGONIST_1
     assert state.placed_cards[2].owner == PlayerRole.PROTAGONIST_2
+
+
+def test_protagonists_reject_duplicate_slot_but_allow_mastermind_slot_overlap():
+    """主人公之间不能同位叠放，但可以放到剧作家的卡位。"""
+    _, pp_handler, _, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    state.placed_cards.append(
+        CardPlacement(
+            state.mastermind_hand.cards[0],
+            PlayerRole.MASTERMIND,
+            "board",
+            AreaId.SCHOOL.value,
+        )
+    )
+
+    signal1 = pp_handler.execute(state)
+    assert isinstance(signal1, WaitForInput)
+    signal2 = signal1.callback(
+        PlacementIntent(
+            state.protagonist_hands[0].cards[0],
+            "board",
+            AreaId.SCHOOL.value,
+        )
+    )
+    assert isinstance(signal2, WaitForInput)
+
+    try:
+        signal2.callback(
+            PlacementIntent(
+                state.protagonist_hands[1].cards[0],
+                "board",
+                AreaId.SCHOOL.value,
+            )
+        )
+        assert False, "should reject duplicate protagonist slot"
+    except ValueError as e:
+        assert "same target" in str(e)
 
 
 # ---------------------------------------------------------------------------

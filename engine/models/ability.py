@@ -28,7 +28,7 @@ class Ability:
     sequential: bool = False
 
     # 使用限制
-    goodwill_cost: int = 0
+    goodwill_requirement: int = 0
     once_per_loop: bool = False
     once_per_day: bool = False
 

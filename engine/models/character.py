@@ -105,7 +105,7 @@ class CharacterState:
 
     # --- 运行时状态（不序列化到 JSON） ---
     goodwill_ability_texts: list[str] = field(default_factory=list)
-    goodwill_ability_goodwill_costs: list[int] = field(default_factory=list)
+    goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)
     goodwill_abilities_used: dict[str, int] = field(default_factory=dict)
     # ability_id -> 本轮回已使用次数

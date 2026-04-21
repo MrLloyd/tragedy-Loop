@@ -15,6 +15,8 @@ from typing import Any, Callable, Optional
 from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.game_state import GameState
 from engine.models.enums import GamePhase, Outcome
+from engine.models.incident import IncidentSchedule
+from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
     ForceLoopEnd, PhaseComplete, PhaseHandler, PhaseSignal, WaitForInput,
     create_phase_handlers,
@@ -72,6 +74,7 @@ class GameController:
 
         # 当前挂起的回调
         self._pending_callback: Optional[Callable] = None
+        self._wire_ui_announcements()
 
     # ==================================================================
     # 游戏生命周期
@@ -83,6 +86,10 @@ class GameController:
         *,
         loop_count: int | None = None,
         days_per_loop: int | None = None,
+        character_setups: list[CharacterSetup] | None = None,
+        incidents: list[IncidentSchedule] | None = None,
+        rule_y_id: str | None = None,
+        rule_x_ids: list[str] | None = None,
     ) -> None:
         """从 `data/modules/{module_id}.json` 加载并开局。"""
         from engine.rules.module_loader import build_game_state_from_module
@@ -91,6 +98,16 @@ class GameController:
             module_id,
             loop_count=loop_count,
             days_per_loop=days_per_loop,
+            character_setups=character_setups,
+            incidents=incidents,
+            rule_y_id=rule_y_id,
+            rule_x_ids=rule_x_ids,
+            skip_script_validation=(
+                character_setups is None
+                or incidents is None
+                or rule_y_id is None
+                or rule_x_ids is None
+            ),
         )
         self.state_machine.reset()
         self.state.current_phase = GamePhase.GAME_PREPARE
@@ -219,6 +236,33 @@ class GameController:
         self.ui_callback.on_phase_changed(
             self.state_machine.current_phase, visible
         )
+
+    def _wire_ui_announcements(self) -> None:
+        event_map = {
+            GameEventType.TOKEN_CHANGED: "token_change",
+            GameEventType.CHARACTER_DEATH: "character_death",
+            GameEventType.CHARACTER_MOVED: "character_move",
+            GameEventType.PROTAGONIST_DEATH: "protagonist_death",
+            GameEventType.PROTAGONIST_FAILURE: "protagonist_failure",
+            GameEventType.IDENTITY_REVEALED: "reveal_identity",
+            GameEventType.INCIDENT_OCCURRED: "incident_occurred",
+            GameEventType.LOOP_ENDED: "loop_ended",
+            GameEventType.GAME_ENDED: "game_ended",
+            GameEventType.ABILITY_REFUSED: "ability_refused",
+        }
+        for event_type, announcement_type in event_map.items():
+            self.event_bus.subscribe(
+                event_type,
+                lambda event, announcement_type=announcement_type: self._forward_announcement(
+                    announcement_type,
+                    event.data,
+                ),
+            )
+
+    def _forward_announcement(self, announcement_type: str, details: dict[str, Any]) -> None:
+        text = Visibility.create_announcement(announcement_type, details)
+        if text:
+            self.ui_callback.on_announcement(text)
 
     def get_visible_state(self, role) -> VisibleGameState:
         """获取指定角色的可见状态"""

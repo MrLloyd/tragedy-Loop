@@ -236,22 +236,22 @@ def validate_characters(
                             )
                         )
 
-        gcosts = ch.get("goodwill_ability_goodwill_costs")
-        if gcosts is not None:
-            if not isinstance(gcosts, list) or len(gcosts) != 4:
+        grequirements = ch.get("goodwill_ability_goodwill_requirements")
+        if grequirements is not None:
+            if not isinstance(grequirements, list) or len(grequirements) != 4:
                 issues.append(
                     ValidationIssue(
-                        f"{p}.goodwill_ability_goodwill_costs",
+                        f"{p}.goodwill_ability_goodwill_requirements",
                         "must be an array of length 4 (友好能力1–4 所需友好度)",
                     )
                 )
             else:
-                for j, c in enumerate(gcosts):
-                    if not isinstance(c, int) or c < 0:
+                for j, requirement in enumerate(grequirements):
+                    if not isinstance(requirement, int) or requirement < 0:
                         issues.append(
                             ValidationIssue(
-                                f"{p}.goodwill_ability_goodwill_costs[{j}]",
-                                f"expected int >= 0, got {c!r}",
+                                f"{p}.goodwill_ability_goodwill_requirements[{j}]",
+                                f"expected int >= 0, got {requirement!r}",
                             )
                         )
 

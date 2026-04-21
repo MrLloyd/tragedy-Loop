@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from engine.game_controller import GameController, UICallback
 from engine.models.cards import PlacementIntent
-from engine.models.enums import AreaId, CardType, GamePhase, Outcome
+from engine.models.enums import AreaId, CardType, GamePhase, Outcome, PlayerRole
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import WaitForInput
@@ -54,7 +54,7 @@ def test_first_steps_three_loop_three_day_suicide_scenario_closes() -> None:
             break
         assert controller._pending_callback is not None
         wait = ui.waits[-1]
-        controller.provide_input(_choice_for(wait))
+        controller.provide_input(_choice_for(wait, controller))
 
     assert controller.state_machine.current_phase == GamePhase.GAME_END
     assert ui.outcome == Outcome.MASTERMIND_WIN
@@ -67,30 +67,43 @@ def test_first_steps_three_loop_three_day_suicide_scenario_closes() -> None:
     assert GamePhase.INCIDENT in ui.phases
 
 
-def _choice_for(wait: WaitForInput):
-    if wait.input_type == "place_action_cards":
-        paranoia_card = _card(wait.options, CardType.PARANOIA_PLUS_1)
-        fillers = [card for card in wait.options if card is not paranoia_card][:2]
-        return [
-            PlacementIntent(
-                card=paranoia_card,
-                target_type="character",
-                target_id="female_student",
-            ),
-            *[
-                PlacementIntent(
-                    card=card,
-                    target_type="board",
-                    target_id=AreaId.CITY.value,
-                )
-                for card in fillers
-            ],
-        ]
+def _choice_for(wait: WaitForInput, controller: GameController):
     if wait.input_type == "place_action_card":
+        if wait.player == "mastermind":
+            used_slots = {
+                (placement.target_type, placement.target_id)
+                for placement in controller.state.placed_cards
+                if placement.owner == PlayerRole.MASTERMIND
+            }
+            card = (
+                _card(wait.options, CardType.PARANOIA_PLUS_1)
+                if not used_slots
+                else wait.options[0]
+            )
+            for target_type, target_id in (
+                ("character", "female_student"),
+                ("board", AreaId.CITY.value),
+                ("board", AreaId.SCHOOL.value),
+            ):
+                if (target_type, target_id) not in used_slots:
+                    return PlacementIntent(card, target_type, target_id)
+
+        protagonist_slots = {
+            (placement.target_type, placement.target_id)
+            for placement in controller.state.placed_cards
+            if placement.owner in {
+                PlayerRole.PROTAGONIST_0,
+                PlayerRole.PROTAGONIST_1,
+                PlayerRole.PROTAGONIST_2,
+            }
+        }
+        for target_id in (AreaId.CITY.value, AreaId.SCHOOL.value, AreaId.HOSPITAL.value):
+            if ("board", target_id) not in protagonist_slots:
+                return PlacementIntent(wait.options[0], "board", target_id)
         return PlacementIntent(
             card=wait.options[0],
             target_type="board",
-            target_id=AreaId.CITY.value,
+            target_id=AreaId.SHRINE.value,
         )
     if "pass" in wait.options:
         return "pass"

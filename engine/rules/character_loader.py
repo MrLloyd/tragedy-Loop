@@ -33,7 +33,7 @@ class CharacterDef:
     trait_rule: str = ""
     script_constraints: list[str] = field(default_factory=list)
     goodwill_ability_texts: list[str] = field(default_factory=list)
-    goodwill_ability_goodwill_costs: list[int] = field(default_factory=list)
+    goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)
     initial_area_candidates: list[AreaId] = field(default_factory=list)
 
@@ -101,7 +101,7 @@ def instantiate_character_state(
         paranoia_limit=char_def.paranoia_limit,
         forbidden_areas=list(char_def.forbidden_areas),
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
-        goodwill_ability_goodwill_costs=list(char_def.goodwill_ability_goodwill_costs),
+        goodwill_ability_goodwill_requirements=list(char_def.goodwill_ability_goodwill_requirements),
         goodwill_ability_once_per_loop=list(char_def.goodwill_ability_once_per_loop),
     )
 
@@ -133,7 +133,8 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
     script_constraints = [str(v) for v in data.get("script_constraints", [])]
 
     goodwill_texts = [str(v) for v in data.get("goodwill_ability_texts", [])]
-    goodwill_costs = [int(v) for v in data.get("goodwill_ability_goodwill_costs", [])]
+    raw_goodwill_requirements = data.get("goodwill_ability_goodwill_requirements", [])
+    goodwill_requirements = [int(v) for v in raw_goodwill_requirements]
     goodwill_once = [bool(v) for v in data.get("goodwill_ability_once_per_loop", [])]
 
     return CharacterDef(
@@ -147,7 +148,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
         trait_rule=trait_rule,
         script_constraints=script_constraints,
         goodwill_ability_texts=goodwill_texts,
-        goodwill_ability_goodwill_costs=goodwill_costs,
+        goodwill_ability_goodwill_requirements=goodwill_requirements,
         goodwill_ability_once_per_loop=goodwill_once,
         initial_area_candidates=initial_area_candidates,
     )

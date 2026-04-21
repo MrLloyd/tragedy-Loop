@@ -120,7 +120,7 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
         identity_id="killer",
         original_identity_id="killer",
         goodwill_ability_texts=["能力1", "", "", ""],
-        goodwill_ability_goodwill_costs=[3, 0, 0, 0],
+        goodwill_ability_goodwill_requirements=[3, 0, 0, 0],
         goodwill_ability_once_per_loop=[True, False],
     )
     state.characters["ai"].tokens.add(TokenType.GOODWILL, 3)
@@ -132,7 +132,7 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
     assert abilities[0].source_kind == "goodwill"
     assert abilities[0].source_id == "ai"
     assert abilities[0].ability.ability_id == "goodwill:ai:1"
-    assert abilities[0].ability.goodwill_cost == 3
+    assert abilities[0].ability.goodwill_requirement == 3
     assert abilities[0].ability.once_per_loop is True
     assert abilities[0].ability.can_be_refused is True
 

@@ -247,7 +247,7 @@ def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
         identity_id="平民",
         original_identity_id="平民",
         goodwill_ability_texts=["能力1", "", "", ""],
-        goodwill_ability_goodwill_costs=[1, 0, 0, 0],
+        goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
         goodwill_ability_once_per_loop=[False],
     )
     state.characters["ai"].tokens.add(TokenType.GOODWILL, 2)
@@ -268,10 +268,10 @@ def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     assert isinstance(allow_wait, WaitForInput)
     done = allow_wait.callback("allow")
     assert isinstance(done, WaitForInput)
-    assert state.characters["ai"].tokens.get(TokenType.GOODWILL) == 1
+    assert state.characters["ai"].tokens.get(TokenType.GOODWILL) == 2
 
 
-def test_protagonist_ability_refuse_consumes_once_per_loop_without_cost() -> None:
+def test_protagonist_ability_refuse_consumes_once_per_loop_without_spending_goodwill() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
     state = GameState()
@@ -283,7 +283,7 @@ def test_protagonist_ability_refuse_consumes_once_per_loop_without_cost() -> Non
         identity_id="平民",
         original_identity_id="平民",
         goodwill_ability_texts=["能力1", "", "", ""],
-        goodwill_ability_goodwill_costs=[1, 0, 0, 0],
+        goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
         goodwill_ability_once_per_loop=[True],
     )
     state.characters["ai"].tokens.add(TokenType.GOODWILL, 2)
@@ -314,7 +314,7 @@ def test_protagonist_ability_ignores_refusal_when_identity_ignores_goodwill() ->
         identity_id="killer",
         original_identity_id="killer",
         goodwill_ability_texts=["能力1", "", "", ""],
-        goodwill_ability_goodwill_costs=[1, 0, 0, 0],
+        goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
         goodwill_ability_once_per_loop=[False],
     )
     state.characters["killer"].tokens.add(TokenType.GOODWILL, 1)
@@ -324,8 +324,8 @@ def test_protagonist_ability_ignores_refusal_when_identity_ignores_goodwill() ->
     choice = next(option for option in signal.options if getattr(option, "ability", None) is not None)
     follow_up = signal.callback(choice)
 
-    assert isinstance(follow_up, PhaseComplete)
-    assert state.characters["killer"].tokens.get(TokenType.GOODWILL) == 0
+    assert isinstance(follow_up, WaitForInput)
+    assert state.characters["killer"].tokens.get(TokenType.GOODWILL) == 1
 
 
 def test_turn_end_handler_executes_mandatory_then_optional() -> None:

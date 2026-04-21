@@ -126,6 +126,7 @@
 | PLAN 主题 | 代码落点 |
 |-----------|----------|
 | UI 框架结构 | `ui/widgets/`、`ui/controllers/`、`ui/screens/`（目录结构已建，awaiting 实现） |
+| 新游戏非公开信息表 | `ui/screens/` + `ui/controllers/`（默认加载 Phase 5 的 `first_steps` 剧本内容） |
 | 与引擎协作接口 | `game_controller.py` 中预留的 UI 协作接口 |
 
 - **规划**：见 `PLAN.md` 目录树中 `ui/`。

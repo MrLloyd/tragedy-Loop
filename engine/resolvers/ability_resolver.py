@@ -14,8 +14,8 @@ from typing import Optional
 
 from engine.game_state import GameState
 from engine.models.ability import Ability
-from engine.models.effects import Condition
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, TokenType, Trait
+from engine.models.effects import Condition, Effect
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
 from engine.models.identity import IdentityDef
 from engine.rules.runtime_identities import sync_dynamic_identities
 
@@ -58,16 +58,16 @@ class AbilityResolver:
                 continue
 
             texts = ch.goodwill_ability_texts
-            costs = ch.goodwill_ability_goodwill_costs
+            requirements = ch.goodwill_ability_goodwill_requirements
             once_limits = ch.goodwill_ability_once_per_loop
 
-            for slot in range(min(len(texts), len(costs))):
+            for slot in range(min(len(texts), len(requirements))):
                 text = texts[slot].strip()
                 if not text:
                     continue
 
-                cost = costs[slot]
-                if ch.tokens.goodwill < cost:
+                requirement = requirements[slot]
+                if ch.tokens.goodwill < requirement:
                     continue
 
                 once_per_loop = once_limits[slot] if slot < len(once_limits) else False
@@ -81,11 +81,15 @@ class AbilityResolver:
                         ability_type=AbilityType.OPTIONAL,
                         timing=AbilityTiming.PROTAGONIST_ABILITY,
                         description=text,
-                        goodwill_cost=cost,
+                        condition=self._goodwill_condition_for(ch.character_id, slot),
+                        effects=self._goodwill_effects_for(ch.character_id, slot),
+                        goodwill_requirement=requirement,
                         once_per_loop=once_per_loop,
                         can_be_refused=True,
                     ),
                 )
+                if not self.evaluate_condition(state, candidate.ability.condition, owner_id=ch.character_id):
+                    continue
                 if not self.is_ability_available(state, candidate):
                     continue
                 result.append(candidate)
@@ -314,6 +318,12 @@ class AbilityResolver:
             return [
                 ch.character_id
                 for ch in state.characters_in_area(owner.area, alive_only=alive_only)  # type: ignore[union-attr]
+            ]
+        if selector == "same_area_other":
+            return [
+                ch.character_id
+                for ch in state.characters_in_area(owner.area, alive_only=alive_only)  # type: ignore[union-attr]
+                if ch.character_id != owner_id
             ]
         if selector.startswith("same_area_identity:"):
             identity_id = selector.split(":", 1)[1]
@@ -549,6 +559,73 @@ class AbilityResolver:
                 continue
             result.append(candidate)
         return result
+
+    @staticmethod
+    def _goodwill_condition_for(character_id: str, slot: int) -> Condition | None:
+        if character_id == "shrine_maiden" and slot == 0:
+            return Condition(
+                condition_type="area_is",
+                params={"target": "self", "value": AreaId.SHRINE.value},
+            )
+        return None
+
+    @staticmethod
+    def _goodwill_effects_for(character_id: str, slot: int) -> list[Effect]:
+        goodwill_map: dict[tuple[str, int], list[Effect]] = {
+            ("female_student", 0): [
+                Effect(
+                    effect_type=EffectType.REMOVE_TOKEN,
+                    target="same_area_other",
+                    token_type=TokenType.PARANOIA,
+                    amount=1,
+                )
+            ],
+            ("male_student", 0): [
+                Effect(
+                    effect_type=EffectType.REMOVE_TOKEN,
+                    target="same_area_other",
+                    token_type=TokenType.PARANOIA,
+                    amount=1,
+                )
+            ],
+            ("idol", 0): [
+                Effect(
+                    effect_type=EffectType.REMOVE_TOKEN,
+                    target="same_area_other",
+                    token_type=TokenType.PARANOIA,
+                    amount=1,
+                )
+            ],
+            ("idol", 1): [
+                Effect(
+                    effect_type=EffectType.PLACE_TOKEN,
+                    target="same_area_other",
+                    token_type=TokenType.GOODWILL,
+                    amount=1,
+                )
+            ],
+            ("office_worker", 0): [
+                Effect(
+                    effect_type=EffectType.REVEAL_IDENTITY,
+                    target="self",
+                )
+            ],
+            ("shrine_maiden", 0): [
+                Effect(
+                    effect_type=EffectType.REMOVE_TOKEN,
+                    target="same_area_board",
+                    token_type=TokenType.INTRIGUE,
+                    amount=1,
+                )
+            ],
+            ("shrine_maiden", 1): [
+                Effect(
+                    effect_type=EffectType.REVEAL_IDENTITY,
+                    target="same_area_any",
+                )
+            ],
+        }
+        return list(goodwill_map.get((character_id, slot), []))
 
     def _evaluate_token_check(
         self,

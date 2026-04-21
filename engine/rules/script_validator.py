@@ -84,7 +84,8 @@ def validate_basic_script(
             issues.append(ValidationIssue(f"{path}.identity_id", f"unknown identity: {setup.identity_id!r}"))
 
     selected_character_ids = {setup.character_id for setup in script.characters}
-    seen_incident_keys: set[tuple[int, str]] = set()
+    seen_incident_days: set[int] = set()
+    seen_incident_perpetrators: set[str] = set()
     for idx, incident in enumerate(script.incidents):
         path = f"script.incidents[{idx}]"
         if incident.incident_id not in context.incident_defs:
@@ -131,10 +132,17 @@ def validate_basic_script(
                         f"unknown incident token type: {token_name!r}",
                     )
                 )
-        key = (incident.day, incident.incident_id)
-        if key in seen_incident_keys:
-            issues.append(ValidationIssue(path, f"duplicated incident on day: {incident.incident_id!r}"))
-        seen_incident_keys.add(key)
+        if incident.day in seen_incident_days:
+            issues.append(ValidationIssue(path, f"multiple incidents scheduled on day: {incident.day}"))
+        seen_incident_days.add(incident.day)
+        if incident.perpetrator_id in seen_incident_perpetrators:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.perpetrator_id",
+                    f"duplicated incident perpetrator across days: {incident.perpetrator_id!r}",
+                )
+            )
+        seen_incident_perpetrators.add(incident.perpetrator_id)
 
     if script.rule_y is not None:
         issues.extend(_validate_identity_slots(script, [script.rule_y, *script.rules_x], context))

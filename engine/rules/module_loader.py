@@ -175,6 +175,60 @@ def build_game_state_from_module(
     return state
 
 
+def apply_script_setup_payload(state: GameState, payload: dict[str, Any]) -> None:
+    """将 UI 提交的非公开信息表 payload 装配回现有 GameState。"""
+    module_id = str(payload["module_id"])
+    loop_count = int(payload["loop_count"])
+    days_per_loop = int(payload["days_per_loop"])
+    rule_y_id = str(payload["rule_y_id"])
+    rule_x_ids = [str(item) for item in payload["rule_x_ids"]]
+
+    character_setups = payload["character_setups"]
+    incidents = payload["incidents"]
+    if not isinstance(character_setups, list):
+        raise TypeError("character_setups must be a list")
+    if not isinstance(incidents, list):
+        raise TypeError("incidents must be a list")
+
+    built = build_game_state_from_module(
+        module_id,
+        loop_count=loop_count,
+        days_per_loop=days_per_loop,
+        rule_y_id=rule_y_id,
+        rule_x_ids=rule_x_ids,
+        character_setups=character_setups,
+        incidents=incidents,
+    )
+    state.__dict__.clear()
+    state.__dict__.update(copy.deepcopy(built.__dict__))
+
+
+def build_script_setup_context(
+    module_id: str,
+    *,
+    loop_count: int | None = None,
+    days_per_loop: int | None = None,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    """为 `script_setup` 输入生成 UI 渲染元数据。"""
+    loaded = load_module(module_id)
+    character_defs = load_character_defs()
+
+    return {
+        "module_id": module_id,
+        "loop_count": loop_count,
+        "days_per_loop": days_per_loop,
+        "errors": list(errors or []),
+        "available_modules": sorted(path.stem for path in _DATA_DIR.glob("*.json")),
+        "rule_x_count": loaded.module_def.rule_x_count,
+        "available_rule_y_ids": [rule.rule_id for rule in loaded.module_def.rules_y],
+        "available_rule_x_ids": [rule.rule_id for rule in loaded.module_def.rules_x],
+        "available_identities": sorted(loaded.identity_defs.keys()),
+        "available_incidents": sorted(loaded.incident_defs.keys()),
+        "available_characters": sorted(character_defs.keys()),
+    }
+
+
 def _script_has_instance_input(
     *,
     character_setups: list[CharacterSetup] | None,
@@ -264,7 +318,7 @@ def _parse_ability(data: dict[str, Any]) -> Ability:
         condition=_parse_condition(data["condition"]) if data.get("condition") else None,
         effects=[_parse_effect(e) for e in data.get("effects", [])],
         sequential=data.get("sequential", False),
-        goodwill_cost=data.get("goodwill_cost", 0),
+        goodwill_requirement=data.get("goodwill_requirement", 0),
         once_per_loop=data.get("once_per_loop", False),
         once_per_day=data.get("once_per_day", False),
         can_be_refused=data.get("can_be_refused", False),

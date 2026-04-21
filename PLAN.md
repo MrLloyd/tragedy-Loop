@@ -209,7 +209,7 @@ traged/
 - [x] 从 `CharacterDef + CharacterSetup` 初始化 `CharacterState`，正确填充 `base_traits`、`attributes`、`paranoia_limit`、`forbidden_areas` ✅ 2026-04-19
 - [x] 平民身份兼容：支持 `"commoner"` 输入并归一化为 `"平民"`（保留现有运行时写法）✅ 2026-04-19
 - [x] `build_game_state_from_module()` 在 Phase 4 只保持数据层兼容，不承担本局实例输入职责 ✅ 2026-04-19
-- [x] 在 `data/characters.json` 补全附录 C 全表角色（含 `trait_rule`、`goodwill_ability_texts`、`goodwill_ability_goodwill_costs`、`goodwill_ability_once_per_loop`、`initial_area_candidates` 等）✅ 2026-04-18
+- [x] 在 `data/characters.json` 补全附录 C 全表角色（含 `trait_rule`、`goodwill_ability_texts`、`goodwill_ability_goodwill_requirements`、`goodwill_ability_once_per_loop`、`initial_area_candidates` 等）✅ 2026-04-18
 
 > **为何是前置**：P4-1/P4-2/P4-3 需要依赖真实的角色 traits / attributes / paranoia_limit；P4-5 的身份派生与变更也依赖“原始身份 + 当前身份”的双轨状态。实例导入流程本身后置到 UI 阶段。
 
@@ -225,7 +225,7 @@ traged/
 
 - [x] 将 `CharacterDef.goodwill_ability_*` 接入运行时能力候选，形成“角色友好能力”数据入口 ✅ 2026-04-19
 - [x] 在 `ability_resolver` 中新增 `collect_goodwill_abilities()`，与身份/规则能力分层收集 ✅ 2026-04-19
-- [x] 主人公能力阶段所需字段打通：`goodwill_cost`、`once_per_loop`、`can_be_refused` ✅ 2026-04-19
+- [x] 主人公能力阶段所需字段打通：`goodwill_requirement`、`once_per_loop`、`can_be_refused` ✅ 2026-04-19
 - [x] `base_traits`、`attributes`、`paranoia_limit` 仅先服务于能力条件判断与拒绝逻辑 ✅ 2026-04-19
 - [x] 暂不把全部 `trait_rule` 做成完整机制；仅把 Phase 4 主线所需的角色侧最小能力链先接通 ✅ 2026-04-19
 
@@ -370,9 +370,64 @@ traged/
 
 ### Phase 5 : 测试第一个模组
 
-    模组 first step，3轮回，每轮回三天，无特殊规则。规则X谋杀计划，规则Y开膛者的魔影。登场角色，男学生（平民），女学生(关键人物)，偶像（传谣人），职员（杀手），医生（主谋）。 事件：第三天 自杀
+- [x] `first_steps` 冒烟场景已补齐自动化测试：`tests/test_first_steps_smoke_scenario.py` ✅ 2026-04-21
+- [x] 已验证三轮回、每轮回三天的最小完整流程可跑通并正常结束 ✅ 2026-04-21
+- [x] 当前测试剧本：
 
-### Phase 6（暂缓）: 基础 UI（待数据层与核心规则闭环后再启动）
+    模组 first step，3轮回，每轮回三天，无特殊规则。规则X谋杀计划，规则Y开膛者的魔影。登场角色，男子学生（主谋），女子学生(关键人物)，偶像（传谣人），职员（杀手），巫女（杀人狂），。事件：第三天 自杀
+
+    本次确认通过的能力
+
+  - Phase 5 角色友好能力：
+      - 女学生移除同区域不安
+      - 偶像给同区域角色放置友好
+      - 职员公开自身身份
+      - 巫女仅在神社可移除神社密谋
+  - Phase 5 身份能力：
+      - 主谋放置密谋
+      - 传谣人放置不安
+      - 杀手回合结束击杀/致死
+      - 杀人狂回合结束强制击杀
+
+  相关实现位置
+
+  - 友好能力效果映射与条件：engine/resolvers/ability_resolver.py:42
+  - same_area_other 目标解析：engine/resolvers/ability_resolver.py:322
+  - 阶段层目标选择接线：engine/phases/phase_base.py:220
+  - 新增 Phase 5 能力测试：tests/test_phase5_first_steps_abilities.py:1
+
+### Phase 6（计划中）: 基础 UI
+
+- [x] P6-1：确定 UI 最小闭环范围（主菜单 / 新游戏 / 对局主界面 / 结算页）✅ 2026-04-21
+- [x] P6-2：实现引擎到 UI 的基础 adapter，统一 `UICallback` 与输入回传（仅 `ui/` 层；不新增 engine 接口）✅ 2026-04-21
+- [x] P6-3：完成新游戏非公开信息表填写页（默认填入 Phase 5 剧本；可编辑模组、轮回/天数、规则、角色身份、事件当事人）✅ 2026-04-21
+- [x] P6-4：完成对局主界面基础信息展示（阶段、角色、区域、指示物、事件公告）✅ 2026-04-21
+- [x] P6-5：完成等待输入交互（放牌、任意能力、pass、确认）✅ 2026-04-21
+- [x] P6-6：接入调试面板最小能力（读取 debug snapshot，不直接改 resolver 内部状态）✅ 2026-04-21
+- [x] P6-7：补齐 UI 冒烟测试 / 交互回归测试，验证最小可玩链路 ✅ 2026-04-21
+- [x] DoD-1：可通过 UI 创建 `first_steps` 最小剧本并进入首个可操作阶段 ✅ 2026-04-21
+- [x] DoD-2：UI 能正确消费 `WaitForInput` 并回传用户选择到 `GameController` ✅ 2026-04-21
+- [x] DoD-3：UI 不越权修改引擎内部状态；调试功能仅经 debug API 暴露 ✅ 2026-04-21
+- [x] DoD-4：至少 1 条从开局到结束的 UI/集成冒烟路径可本地通过 ✅ 2026-04-21
+
+#### P6-1 范围冻结：UI 最小闭环
+
+- **页面范围**：仅实现 `主菜单` → `新游戏` → `对局主界面` → `结算页` 四页闭环；不拆更多向导页。
+- **主菜单**：提供 `开始新游戏` / `退出` 两项；暂不做设置、存档、继续游戏、规则浏览。
+- **新游戏页**：进入后展示“非公开信息表”填写 UI；默认加载 Phase 5 剧本内容，允许编辑模组、轮回/天数、规则 Y/X、登场角色与身份、事件日程与当事人。
+- **默认非公开信息表**：`first_steps`，3 轮回，每轮 3 天；规则 Y=`fs_murder_plan`（谋杀计划），规则 X=`fs_ripper_shadow`（开膛者的魔影）；角色为男子学生=主谋、女子学生=关键人物、偶像=传谣人、职员=杀手、巫女=杀人狂；第 3 天事件 `suicide`，当事人=女子学生。
+- **信息边界**：新游戏填写页属于剧作家/调试输入，不展示给主人公；进入对局主界面后仅显示公开信息，身份真值与事件当事人只在调试/剧作家视图中可见。
+- **对局主界面**：必须同时展示当前阶段、当前轮回/天数、队长、角色列表（区域/生死/身份公开状态/指示物）、版图区域指示物、事件公告日志。
+- **输入交互**：必须支持 `WaitForInput` 的最小集合：放置行动牌、选择能力、选择目标、`pass`、允许/拒绝友好能力。
+- **结算页**：展示胜负结果、失败/死亡原因、轮回历史摘要；提供 `返回主菜单`。
+- **成功闭环**：用户可从主菜单进入，对 `first_steps` 剧本完成建局，进行完整对局，最终到达结算页并返回主菜单。
+
+#### P6-1 暂不纳入
+
+- **不做**：存档/读档、联网、动画、音效、皮肤、快捷键自定义、复杂调试面板、多模组剧本编辑器。
+- **不做**：最终决战专属 UI、EX 槽/EX 牌展示、后续模组特有组件。
+- **不做**：拖拽放牌；最小版统一用列表/按钮选择即可，先保证正确性再做交互优化。
+- **不做**：完整规则百科与附录浏览；只保留必要字段提示与错误提示。
 
 ### Phase 7: 端到端可玩
 

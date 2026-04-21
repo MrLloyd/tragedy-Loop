@@ -40,6 +40,7 @@ class WaitForInput:
     input_type: str              # 输入类型标识
     prompt: str = ""             # 提示文本
     options: list[Any] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
     player: str = "mastermind"   # 谁需要输入
     callback: Optional[Callable] = None
 
@@ -52,6 +53,44 @@ class ForceLoopEnd:
 
 # 阶段返回类型
 PhaseSignal = PhaseComplete | WaitForInput | ForceLoopEnd
+
+
+def _validate_action_target(state: GameState, intent: PlacementIntent) -> None:
+    if intent.target_type == "character":
+        ch = state.characters.get(intent.target_id)
+        if ch is None:
+            raise ValueError(f"target character {intent.target_id} not found")
+        if not ch.is_alive:
+            raise ValueError(f"target character {intent.target_id} is not alive")
+        if Trait.NO_ACTION_CARDS in ch.base_traits:
+            raise ValueError(f"target character {intent.target_id} cannot receive action cards")
+        return
+    if intent.target_type == "board":
+        try:
+            from engine.models.enums import AreaId
+
+            area_id = AreaId(intent.target_id)
+        except ValueError:
+            raise ValueError(f"invalid board target area: {intent.target_id}")
+        if area_id == AreaId.FARAWAY:
+            raise ValueError("faraway is not a valid board action target")
+        return
+    raise ValueError(f"invalid target_type: {intent.target_type}")
+
+
+def _validate_action_slot(
+    state: GameState,
+    intent: PlacementIntent,
+    *,
+    block_against_roles: set[PlayerRole],
+) -> None:
+    for placement in state.placed_cards:
+        if not placement.face_down:
+            continue
+        if placement.owner not in block_against_roles:
+            continue
+        if placement.target_type == intent.target_type and placement.target_id == intent.target_id:
+            raise ValueError("cannot place another action card on the same target")
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +227,7 @@ class PhaseHandler(ABC):
                         condition=candidate.ability.condition,
                         effects=updated,
                         sequential=candidate.ability.sequential,
-                        goodwill_cost=candidate.ability.goodwill_cost,
+                        goodwill_requirement=candidate.ability.goodwill_requirement,
                         once_per_loop=candidate.ability.once_per_loop,
                         once_per_day=candidate.ability.once_per_day,
                         can_be_refused=candidate.ability.can_be_refused,
@@ -217,7 +256,10 @@ class PhaseHandler(ABC):
         owner_id: str,
         effect: Effect,
     ) -> list[str] | None:
-        if effect.target in {"same_area_any", "any_character", "any_board"} or effect.target.startswith("same_area_identity:"):
+        if (
+            effect.target in {"same_area_any", "same_area_other", "any_character", "any_board"}
+            or effect.target.startswith("same_area_identity:")
+        ):
             return self.ability_resolver.resolve_targets(
                 state,
                 owner_id=owner_id,
@@ -261,9 +303,65 @@ class GamePrepareHandler(PhaseHandler):
     phase = GamePhase.GAME_PREPARE
 
     def execute(self, state: GameState) -> PhaseSignal:
-        # 游戏准备：确认剧本已加载，初始化手牌等
-        state.init_protagonist_hands()
-        return PhaseComplete()
+        if self._is_script_ready(state):
+            state.init_protagonist_hands()
+            return PhaseComplete()
+        return self._build_script_setup_wait(state)
+
+    @staticmethod
+    def _is_script_ready(state: GameState) -> bool:
+        return (
+            state.script.rule_y is not None
+            and bool(state.script.rules_x)
+            and bool(state.script.characters)
+            and bool(state.script.incidents)
+        )
+
+    def _build_script_setup_wait(
+        self,
+        state: GameState,
+        *,
+        errors: list[str] | None = None,
+    ) -> WaitForInput:
+        from engine.rules.module_loader import build_script_setup_context
+        from engine.rules.script_validator import ScriptValidationError
+
+        context = build_script_setup_context(
+            state.script.module_id or "first_steps",
+            loop_count=state.script.loop_count,
+            days_per_loop=state.script.days_per_loop,
+            errors=errors,
+        )
+
+        def _on_submit(choice: Any) -> PhaseSignal:
+            from engine.rules.module_loader import apply_script_setup_payload
+
+            if not isinstance(choice, dict):
+                return self._build_script_setup_wait(
+                    state,
+                    errors=["非公开信息表提交格式错误：需要字典 payload"],
+                )
+
+            try:
+                apply_script_setup_payload(state, choice)
+            except ScriptValidationError as exc:
+                return self._build_script_setup_wait(
+                    state,
+                    errors=[f"{issue.path}: {issue.message}" for issue in exc.issues],
+                )
+            except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+                return self._build_script_setup_wait(state, errors=[str(exc)])
+
+            state.init_protagonist_hands()
+            return PhaseComplete()
+
+        return WaitForInput(
+            input_type="script_setup",
+            prompt="请填写非公开信息表",
+            context=context,
+            player="mastermind",
+            callback=_on_submit,
+        )
 
 
 class LoopStartHandler(PhaseHandler):
@@ -318,57 +416,65 @@ class MastermindActionHandler(PhaseHandler):
     phase = GamePhase.MASTERMIND_ACTION
 
     def execute(self, state: GameState) -> PhaseSignal:
-        # 剧作家暗置恰好 3 张行动牌（可用牌不足时取全部）
-        available = state.mastermind_hand.get_available()
-        max_cards = min(3, len(available))
+        return self._request_placement(state, placed_count=0)
 
-        def _on_choice(choice: Any) -> PhaseSignal:
-            # 接收 list[PlacementIntent]
-            intents = choice if isinstance(choice, list) else [choice]
-            if not intents or len(intents) != max_cards:
-                raise ValueError(f"mastermind must choose exactly {max_cards} cards")
-
-            for intent in intents:
-                if intent.card not in available:
-                    raise ValueError("selected card is not available in mastermind hand")
-
-                # 验证目标合法性
-                if intent.target_type == "character":
-                    ch = state.characters.get(intent.target_id)
-                    if ch is None:
-                        raise ValueError(f"target character {intent.target_id} not found")
-                    if not ch.is_alive:
-                        raise ValueError(f"target character {intent.target_id} is not alive")
-                    if Trait.NO_ACTION_CARDS in ch.base_traits:
-                        raise ValueError(f"target character {intent.target_id} cannot receive action cards")
-                elif intent.target_type == "board":
-                    # 验证 target_id 是合法 AreaId
-                    try:
-                        from engine.models.enums import AreaId
-                        AreaId(intent.target_id)
-                    except ValueError:
-                        raise ValueError(f"invalid board target area: {intent.target_id}")
-                else:
-                    raise ValueError(f"invalid target_type: {intent.target_type}")
-
-                # 创建放置记录（不标记 is_used_this_loop）
-                state.placed_cards.append(
-                    CardPlacement(
-                        card=intent.card,
-                        owner=PlayerRole.MASTERMIND,
-                        target_type=intent.target_type,
-                        target_id=intent.target_id,
-                        face_down=True,
-                    )
-                )
+    def _request_placement(self, state: GameState, *, placed_count: int) -> PhaseSignal:
+        if placed_count >= 3:
             return PhaseComplete()
 
+        available = [
+            card for card in state.mastermind_hand.get_available()
+            if all(
+                not placement.face_down
+                or placement.owner != PlayerRole.MASTERMIND
+                or placement.card is not card
+                for placement in state.placed_cards
+            )
+        ]
+
+        def _on_choice(intent: Any) -> PhaseSignal:
+            if not isinstance(intent, PlacementIntent):
+                raise ValueError("mastermind must choose one placement intent each time")
+            self._validate_placement_intent(
+                state,
+                intent,
+                available_cards=available,
+                block_against_roles={PlayerRole.MASTERMIND},
+            )
+            state.placed_cards.append(
+                CardPlacement(
+                    card=intent.card,
+                    owner=PlayerRole.MASTERMIND,
+                    target_type=intent.target_type,
+                    target_id=intent.target_id,
+                    face_down=True,
+                )
+            )
+            return self._request_placement(state, placed_count=placed_count + 1)
+
         return WaitForInput(
-            input_type="place_action_cards",
-            prompt="剧作家请放置 3 张行动牌",
+            input_type="place_action_card",
+            prompt=f"剧作家请放置第 {placed_count + 1} / 3 张行动牌",
             options=available,
             player="mastermind",
             callback=_on_choice,
+        )
+
+    @staticmethod
+    def _validate_placement_intent(
+        state: GameState,
+        intent: PlacementIntent,
+        *,
+        available_cards: list[ActionCard],
+        block_against_roles: set[PlayerRole],
+    ) -> None:
+        if intent.card not in available_cards:
+            raise ValueError("selected card is not available")
+        _validate_action_target(state, intent)
+        _validate_action_slot(
+            state,
+            intent,
+            block_against_roles=block_against_roles,
         )
 
 
@@ -391,28 +497,18 @@ class ProtagonistActionHandler(PhaseHandler):
         available = hand.get_available()
 
         def _on_choice(intent: Any) -> PhaseSignal:
-            # 接收 PlacementIntent
-            if intent.card not in available:
-                raise ValueError("selected card is not available in protagonist hand")
-
-            # 验证目标合法性
-            if intent.target_type == "character":
-                ch = state.characters.get(intent.target_id)
-                if ch is None:
-                    raise ValueError(f"target character {intent.target_id} not found")
-                if not ch.is_alive:
-                    raise ValueError(f"target character {intent.target_id} is not alive")
-                if Trait.NO_ACTION_CARDS in ch.base_traits:
-                    raise ValueError(f"target character {intent.target_id} cannot receive action cards")
-            elif intent.target_type == "board":
-                # 验证 target_id 是合法 AreaId
-                try:
-                    from engine.models.enums import AreaId
-                    AreaId(intent.target_id)
-                except ValueError:
-                    raise ValueError(f"invalid board target area: {intent.target_id}")
-            else:
-                raise ValueError(f"invalid target_type: {intent.target_type}")
+            if not isinstance(intent, PlacementIntent):
+                raise ValueError("protagonist must choose one placement intent each time")
+            MastermindActionHandler._validate_placement_intent(
+                state,
+                intent,
+                available_cards=available,
+                block_against_roles={
+                    PlayerRole.PROTAGONIST_0,
+                    PlayerRole.PROTAGONIST_1,
+                    PlayerRole.PROTAGONIST_2,
+                },
+            )
 
             # 创建放置记录（不标记 is_used_this_loop）
             state.placed_cards.append(
@@ -671,10 +767,8 @@ class ProtagonistAbilityHandler(PhaseHandler):
         state: GameState,
         candidate: AbilityCandidate,
     ) -> PhaseSignal:
-        owner = state.characters.get(candidate.source_id)
-        if owner is None:
+        if candidate.source_id not in state.characters:
             return self._request_goodwill_ability(state)
-        owner.tokens.remove(TokenType.GOODWILL, candidate.ability.goodwill_cost)
         return self._resolve_candidate(
             state,
             candidate,

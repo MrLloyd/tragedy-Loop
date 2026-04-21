@@ -4,8 +4,9 @@ import pytest
 
 from engine.game_controller import GameController, UICallback
 from engine.models.cards import PlacementIntent
-from engine.models.enums import AreaId, GamePhase
+from engine.models.enums import AreaId, GamePhase, PlayerRole
 from engine.phases.phase_base import WaitForInput
+from ui.controllers.new_game_controller import NewGameController, default_phase5_draft
 
 
 class _StubUI(UICallback):
@@ -25,24 +26,34 @@ def test_wait_for_input_resume_advances_flow() -> None:
     controller = GameController(ui_callback=ui)
     controller.start_game("first_steps", loop_count=1, days_per_loop=1)
 
-    # 进入第一处输入阶段（剧作家行动）
-    assert controller.state_machine.current_phase == GamePhase.MASTERMIND_ACTION
+    # 第一处输入阶段：GAME_PREPARE 的非公开信息表
+    assert controller.state_machine.current_phase == GamePhase.GAME_PREPARE
     assert ui.waits, "expected at least one wait request"
     first_wait = ui.waits[-1]
     assert first_wait.callback is not None
-    assert first_wait.options, "expected non-empty options for action cards"
+    assert first_wait.input_type == "script_setup"
+    assert "available_rule_y_ids" in first_wait.context
 
-    # 回填输入：提交 3 张 PlacementIntent（剧作家放牌需要恰好 3 张）
-    cards = first_wait.options[:3]
-    intents = [
-        PlacementIntent(card=cards[0], target_type="board", target_id=AreaId.SCHOOL.value),
-        PlacementIntent(card=cards[1], target_type="board", target_id=AreaId.HOSPITAL.value),
-        PlacementIntent(card=cards[2], target_type="board", target_id=AreaId.SHRINE.value),
-    ]
-    controller.provide_input(intents)
-    assert controller.state_machine.current_phase == GamePhase.PROTAGONIST_ACTION
+    controller.provide_input(NewGameController.build_payload(default_phase5_draft()))
+
+    # 进入下一处输入阶段（剧作家行动）
+    assert controller.state_machine.current_phase == GamePhase.MASTERMIND_ACTION
     assert len(ui.waits) >= 2
     assert ui.waits[-1].callback is not None
+
+
+def test_invalid_script_setup_reprompts_with_errors() -> None:
+    ui = _StubUI()
+    controller = GameController(ui_callback=ui)
+    controller.start_game("first_steps", loop_count=1, days_per_loop=1)
+
+    bad_payload = NewGameController.build_payload(default_phase5_draft())
+    bad_payload["rule_x_ids"] = []
+    controller.provide_input(bad_payload)
+
+    assert controller.state_machine.current_phase == GamePhase.GAME_PREPARE
+    assert ui.waits[-1].input_type == "script_setup"
+    assert ui.waits[-1].context["errors"]
 
 
 def test_provide_input_raises_without_pending_callback() -> None:
@@ -83,7 +94,7 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
     )
 
     # 循环回填所有 WaitForInput 直到游戏到达目标阶段或结束
-    max_iterations = 50  # 防止无限循环
+    max_iterations = 200  # 防止无限循环；剧作家逐张放牌会产生更多等待
     iteration = 0
 
     while (controller.state_machine.current_phase != GamePhase.LOOP_END_CHECK
@@ -93,27 +104,14 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
         # 如果有待处理的等待，回填输入
         if controller._pending_callback is not None:
             last_wait = ui.waits[-1]
-            assert last_wait.options, f"No options for {last_wait.input_type}"
 
             # 根据输入类型生成不同的输入
-            if last_wait.input_type == "place_action_cards":
-                # 剧作家放牌：需要提交 3 张 PlacementIntent
-                cards = last_wait.options[:3]
-                intents = [
-                    PlacementIntent(card=cards[0], target_type="board", target_id=AreaId.SCHOOL.value),
-                    PlacementIntent(card=cards[1], target_type="board", target_id=AreaId.HOSPITAL.value),
-                    PlacementIntent(card=cards[2], target_type="board", target_id=AreaId.SHRINE.value),
-                ]
-                controller.provide_input(intents)
+            if last_wait.input_type == "script_setup":
+                controller.provide_input(NewGameController.build_payload(default_phase5_draft()))
             elif last_wait.input_type == "place_action_card":
-                # 主人公放牌：提交 1 张 PlacementIntent
-                intent = PlacementIntent(
-                    card=last_wait.options[0],
-                    target_type="board",
-                    target_id=AreaId.SCHOOL.value,
-                )
-                controller.provide_input(intent)
+                controller.provide_input(_placement_for_wait(controller, last_wait))
             else:
+                assert last_wait.options, f"No options for {last_wait.input_type}"
                 # 其他输入类型（final_guess）：直接提交第一个选项
                 controller.provide_input(last_wait.options[0])
 
@@ -134,3 +132,29 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
     # 额外验证：确保经过了 Stub 处理器
     assert GamePhase.ACTION_RESOLVE in phases_visited, "Should have visited ACTION_RESOLVE"
     assert GamePhase.INCIDENT in phases_visited, "Should have visited INCIDENT"
+
+
+def _placement_for_wait(controller: GameController, wait: WaitForInput) -> PlacementIntent:
+    if wait.player == "mastermind":
+        used_slots = {
+            (placement.target_type, placement.target_id)
+            for placement in controller.state.placed_cards
+            if placement.owner == PlayerRole.MASTERMIND
+        }
+        for target_id in (AreaId.SCHOOL.value, AreaId.HOSPITAL.value, AreaId.SHRINE.value):
+            if ("board", target_id) not in used_slots:
+                return PlacementIntent(wait.options[0], "board", target_id)
+
+    protagonist_slots = {
+        (placement.target_type, placement.target_id)
+        for placement in controller.state.placed_cards
+        if placement.owner in {
+            PlayerRole.PROTAGONIST_0,
+            PlayerRole.PROTAGONIST_1,
+            PlayerRole.PROTAGONIST_2,
+        }
+    }
+    for target_id in (AreaId.SCHOOL.value, AreaId.HOSPITAL.value, AreaId.SHRINE.value):
+        if ("board", target_id) not in protagonist_slots:
+            return PlacementIntent(wait.options[0], "board", target_id)
+    return PlacementIntent(wait.options[0], "board", AreaId.CITY.value)

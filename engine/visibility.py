@@ -14,6 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from engine.display_names import (
+    area_name,
+    character_name,
+    display_target_name,
+    identity_name,
+    incident_name,
+    outcome_name,
+    token_name,
+)
 from engine.models.enums import AreaId, PlayerRole, TokenType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
@@ -134,21 +143,27 @@ class Visibility:
         """将结算结果转为主人公可见的公告文本"""
         match mutation_type:
             case "token_change":
-                target = details.get("target_id", "?")
-                token = details.get("token_type", "?")
+                target = display_target_name(str(details.get("target_id", "?")))
+                token = token_name(str(details.get("token_type", "?")))
                 delta = details.get("delta", 0)
-                token_name = Visibility._token_display_name(token)
                 if delta > 0:
-                    return f"{target} 获得了 {delta} 枚{token_name}"
+                    return f"{target} 获得了 {delta} 枚{token}"
                 elif delta < 0:
-                    return f"{target} 失去了 {-delta} 枚{token_name}"
+                    return f"{target} 失去了 {-delta} 枚{token}"
                 return ""
 
             case "character_death":
-                return f"{details.get('target_id', '?')} 死亡了"
+                target = character_name(
+                    str(details.get("target_id") or details.get("character_id") or "?")
+                )
+                return f"{target} 死亡了"
 
             case "character_move":
-                return f"{details.get('target_id', '?')} 移动到了 {details.get('destination', '?')}"
+                target = character_name(
+                    str(details.get("target_id") or details.get("character_id") or "?")
+                )
+                destination = area_name(str(details.get("destination", "?")))
+                return f"{target} 移动到了 {destination}"
 
             case "protagonist_death":
                 return "主人公死亡"
@@ -157,9 +172,23 @@ class Visibility:
                 return "主人公失败"
 
             case "reveal_identity":
-                cid = details.get("target_id", "?")
-                identity = details.get("identity_id", "?")
+                cid = character_name(
+                    str(details.get("target_id") or details.get("character_id") or "?")
+                )
+                identity = identity_name(str(details.get("identity_id", "?")))
                 return f"{cid} 的身份是 {identity}"
+
+            case "incident_occurred":
+                incident_id = incident_name(str(details.get("incident_id", "?")))
+                day = details.get("day", "?")
+                return f"第 {day} 天发生事件：{incident_id}"
+
+            case "loop_ended":
+                return f"轮回 {details.get('loop', '?')} 结束"
+
+            case "game_ended":
+                outcome = outcome_name(str(details.get("outcome", "?")))
+                return f"对局结束：{outcome}"
 
             case "ability_refused":
                 return "技能发动失败"
@@ -189,8 +218,4 @@ class Visibility:
 
     @staticmethod
     def _token_display_name(token_value: str) -> str:
-        names = {
-            "paranoia": "不安", "intrigue": "密谋", "goodwill": "友好",
-            "hope": "希望", "despair": "绝望", "guard": "护卫",
-        }
-        return names.get(token_value, token_value)
+        return token_name(token_value)

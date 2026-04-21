@@ -23,7 +23,7 @@ def test_load_character_defs_reads_character_templates() -> None:
     assert ai.initial_area == AreaId.CITY
     assert ai.paranoia_limit == 4
     assert len(ai.goodwill_ability_texts) == 4
-    assert len(ai.goodwill_ability_goodwill_costs) == 4
+    assert len(ai.goodwill_ability_goodwill_requirements) == 4
     assert len(ai.goodwill_ability_once_per_loop) == 2
 
 
@@ -38,7 +38,7 @@ def test_instantiate_character_state_applies_template_and_identity_alias() -> No
     assert state.paranoia_limit == 4
     assert Attribute.CREATION in state.attributes
     assert len(state.goodwill_ability_texts) == 4
-    assert len(state.goodwill_ability_goodwill_costs) == 4
+    assert len(state.goodwill_ability_goodwill_requirements) == 4
     assert len(state.goodwill_ability_once_per_loop) == 2
 
 
