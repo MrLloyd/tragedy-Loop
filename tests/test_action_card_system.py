@@ -446,8 +446,8 @@ def test_movement_card_horizontal():
     initial_area = state.characters[char_id].area
     assert initial_area == AreaId.HOSPITAL
 
-    # 医院的横相邻是学校
-    expected_dest = AreaId.SCHOOL
+    # 医院的横相邻是神社
+    expected_dest = AreaId.SHRINE
 
     card = ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND)
     state.placed_cards = [

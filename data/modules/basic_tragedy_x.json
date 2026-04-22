@@ -53,11 +53,109 @@
               "value": "key_person_intrigue_2"
             }
           ]
+          }
+        ]
+    },
+    {
+      "rule_id": "btx_sealed_evil",
+      "name": "被封印的邪灵",
+      "rule_type": "Y",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "mastermind": 1,
+        "cultist": 1
+      },
+      "abilities": [
+        {
+          "ability_id": "btx_fail_shrine_intrigue_2",
+          "name": "神社密谋失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "condition": {
+            "condition_type": "token_check",
+            "params": {
+              "target": "shrine",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "shrine_intrigue_2"
+            }
+          ]
         }
       ]
+    },
+    {
+      "rule_id": "btx_change_future",
+      "name": "改变未来",
+      "rule_type": "Y",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "cultist": 1,
+        "time_traveler": 1
+      },
+      "abilities": [
+        {
+          "ability_id": "btx_fail_butterfly_effect_occurred",
+          "name": "蝴蝶效应失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "condition": {
+            "condition_type": "incident_occurred",
+            "params": {
+              "incident_id": "butterfly_effect"
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "butterfly_effect_occurred"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rule_id": "btx_giant_time_bomb_x",
+      "name": "巨大定时炸弹X",
+      "rule_type": "Y",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "witch": 1
+      },
+      "abilities": [],
+      "description": "失败条件：轮回结束时，魔女的初始区域有2枚或以上密谋"
     }
   ],
   "rules_x": [
+    {
+      "rule_id": "btx_friends_circle",
+      "name": "好友圈",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "friend": 2,
+        "rumormonger": 1
+      },
+      "abilities": []
+    },
+    {
+      "rule_id": "btx_love_scenic_line",
+      "name": "恋爱风景线",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "beloved": 1,
+        "lover": 1
+      },
+      "abilities": []
+    },
     {
       "rule_id": "btx_rumors",
       "name": "流言四起",
@@ -101,6 +199,28 @@
       "rule_type": "X",
       "module": "basic_tragedy_x",
       "identity_slots": {},
+      "abilities": [],
+      "description": "轮回开始时，上轮轮回结束时所有带有友好的角色（包括尸体和被移除对象）全部放置2枚不安"
+    },
+    {
+      "rule_id": "btx_delusion_spread_virus",
+      "name": "妄想扩大病毒",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "rumormonger": 1
+      },
+      "abilities": [],
+      "description": "常驻：某平民有3枚或以上不安时，该平民身份变为杀人狂；低于3枚时恢复平民"
+    },
+    {
+      "rule_id": "btx_unknown_factor_chi",
+      "name": "未知因子Χ",
+      "rule_type": "X",
+      "module": "basic_tragedy_x",
+      "identity_slots": {
+        "unstable_factor": 1
+      },
       "abilities": []
     }
   ],
@@ -257,6 +377,15 @@
           ]
         }
       ]
+    },
+    {
+      "identity_id": "witch",
+      "name": "魔女",
+      "module": "basic_tragedy_x",
+      "traits": [
+        "must_ignore_goodwill"
+      ],
+      "abilities": []
     },
     {
       "identity_id": "friend",

@@ -109,6 +109,14 @@ def _character_names() -> dict[str, str]:
 
 
 @lru_cache(maxsize=1)
+def _character_initial_areas() -> dict[str, str]:
+    return {
+        character_id: area_name(character.initial_area.value)
+        for character_id, character in load_character_defs().items()
+    }
+
+
+@lru_cache(maxsize=1)
 def _module_catalog() -> dict[str, dict[str, str]]:
     modules: dict[str, str] = {}
     rules: dict[str, str] = {}
@@ -214,7 +222,11 @@ def incident_option_label(incident_id: str) -> str:
 
 
 def character_option_label(character_id: str) -> str:
-    return option_label(character_name(character_id), character_id)
+    name = character_name(character_id)
+    initial_area = _character_initial_areas().get(character_id)
+    if initial_area:
+        return f"{name}（{initial_area}｜{character_id}）"
+    return option_label(name, character_id)
 
 
 def format_tokens(tokens: dict[str, int]) -> str:

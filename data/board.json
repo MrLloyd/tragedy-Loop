@@ -1,9 +1,9 @@
 {
   "layout": {
     "hospital": { "row": 0, "col": 0 },
-    "school": { "row": 0, "col": 1 },
-    "shrine": { "row": 1, "col": 0 },
-    "city": { "row": 1, "col": 1 }
+    "shrine": { "row": 0, "col": 1 },
+    "city": { "row": 1, "col": 0 },
+    "school": { "row": 1, "col": 1 }
   },
   "special_areas": [
     "faraway"

@@ -46,7 +46,8 @@ class GameScreenSnapshot:
     characters: list[GameCharacterRow] = field(default_factory=list)
     board_tokens: dict[str, dict[str, int]] = field(default_factory=dict)
     public_info: dict[str, object] = field(default_factory=dict)
-    announcements: list[str] = field(default_factory=list)
+    protagonist_announcements: list[str] = field(default_factory=list)
+    mastermind_announcements: list[str] = field(default_factory=list)
     wait_input_type: str = ""
     wait_prompt: str = ""
     wait_player: str = ""
@@ -54,6 +55,10 @@ class GameScreenSnapshot:
     debug_snapshot: dict[str, object] = field(default_factory=dict)
     debug_text: str = ""
     outcome: str = ""
+
+    @property
+    def announcements(self) -> list[str]:
+        return self.protagonist_announcements
 
 
 class GameScreenModel:
@@ -69,7 +74,7 @@ class GameScreenModel:
         debug_snapshot: dict[str, object] | None = None,
     ) -> None:
         snapshot = GameScreenSnapshot()
-        visible = view_state.visible_state
+        visible = view_state.protagonist_visible_state
         if visible is not None:
             snapshot.phase = phase_name(visible.phase)
             snapshot.loop_text = f"第 {visible.current_loop} / {visible.max_loops} 轮"
@@ -95,7 +100,8 @@ class GameScreenModel:
             }
             snapshot.public_info = dict(visible.public_info)
 
-        snapshot.announcements = list(view_state.announcements)
+        snapshot.protagonist_announcements = list(view_state.protagonist_announcements)
+        snapshot.mastermind_announcements = list(view_state.mastermind_announcements)
 
         wait = view_state.current_wait
         if wait is not None:
@@ -119,9 +125,9 @@ class GameScreenModel:
     def board_target_options() -> list[str]:
         return [
             AreaId.HOSPITAL.value,
-            AreaId.SCHOOL.value,
             AreaId.SHRINE.value,
             AreaId.CITY.value,
+            AreaId.SCHOOL.value,
         ]
 
     @staticmethod
@@ -211,9 +217,9 @@ else:
             self.board_area_texts: dict[str, QTextEdit] = {}
             for area_id, row, col in (
                 (AreaId.HOSPITAL.value, 0, 0),
-                (AreaId.SCHOOL.value, 0, 1),
-                (AreaId.SHRINE.value, 1, 0),
-                (AreaId.CITY.value, 1, 1),
+                (AreaId.SHRINE.value, 0, 1),
+                (AreaId.CITY.value, 1, 0),
+                (AreaId.SCHOOL.value, 1, 1),
             ):
                 area_box = QGroupBox(area_name(area_id))
                 area_layout = QVBoxLayout(area_box)
@@ -226,10 +232,20 @@ else:
             root.addWidget(board_box)
 
             token_box = QGroupBox("事件公告")
-            token_layout = QVBoxLayout(token_box)
-            self.announce_text = QTextEdit()
-            self.announce_text.setReadOnly(True)
-            token_layout.addWidget(self.announce_text)
+            token_layout = QHBoxLayout(token_box)
+            protagonist_box = QGroupBox("主人公视角")
+            protagonist_layout = QVBoxLayout(protagonist_box)
+            self.protagonist_announce_text = QTextEdit()
+            self.protagonist_announce_text.setReadOnly(True)
+            protagonist_layout.addWidget(self.protagonist_announce_text)
+            token_layout.addWidget(protagonist_box)
+
+            mastermind_box = QGroupBox("剧作家视角")
+            mastermind_layout = QVBoxLayout(mastermind_box)
+            self.mastermind_announce_text = QTextEdit()
+            self.mastermind_announce_text.setReadOnly(True)
+            mastermind_layout.addWidget(self.mastermind_announce_text)
+            token_layout.addWidget(mastermind_box)
             root.addWidget(token_box)
 
             debug_box = QGroupBox("调试快照（只读）")
@@ -290,6 +306,7 @@ else:
 
         def bind_session(self, session: GameSessionController) -> None:
             self._session = session
+            self._session.set_state_updated_callback(self.refresh)
             self.refresh()
 
         def set_after_submit(self, callback: Callable[[], None]) -> None:
@@ -311,7 +328,12 @@ else:
             self.public_events_value.setText(format_public_incidents(snapshot.public_info))
 
             self._render_board(snapshot)
-            self.announce_text.setPlainText("\n".join(snapshot.announcements))
+            self.protagonist_announce_text.setPlainText(
+                "\n".join(snapshot.protagonist_announcements)
+            )
+            self.mastermind_announce_text.setPlainText(
+                "\n".join(snapshot.mastermind_announcements)
+            )
             self.debug_text.setPlainText(snapshot.debug_text)
             self.wait_prompt.setText(
                 f"[{wait_type_name(snapshot.wait_input_type)}] {snapshot.wait_prompt}（{player_name(snapshot.wait_player)}）"
@@ -357,7 +379,9 @@ else:
                 for area_id in self._model.board_target_options():
                     self.target_id.addItem(area_name(area_id), area_id)
                 return
-            visible = self._session.view_state.visible_state
+            visible = self._session.view_state.mastermind_visible_state
+            if visible is None:
+                visible = self._session.view_state.protagonist_visible_state
             if visible is None:
                 return
             for item in visible.characters:

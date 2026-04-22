@@ -41,6 +41,14 @@ class UICallback:
         """引擎挂起，等待玩家输入"""
         pass
 
+    def on_state_changed(
+        self,
+        protagonist_visible_state: VisibleGameState,
+        mastermind_visible_state: VisibleGameState,
+    ) -> None:
+        """状态变化通知（用于原子结算后的即时刷新）"""
+        pass
+
     def on_announcement(self, text: str) -> None:
         """结算公告"""
         pass
@@ -233,9 +241,13 @@ class GameController:
         visible = self.visibility.filter_for_role(
             self.state, PlayerRole.PROTAGONIST_0
         )
+        mastermind_visible = self.visibility.filter_for_role(
+            self.state, PlayerRole.MASTERMIND
+        )
         self.ui_callback.on_phase_changed(
             self.state_machine.current_phase, visible
         )
+        self.ui_callback.on_state_changed(visible, mastermind_visible)
 
     def _wire_ui_announcements(self) -> None:
         event_map = {
@@ -250,6 +262,20 @@ class GameController:
             GameEventType.GAME_ENDED: "game_ended",
             GameEventType.ABILITY_REFUSED: "ability_refused",
         }
+        state_update_events = {
+            GameEventType.TOKEN_CHANGED,
+            GameEventType.CHARACTER_DEATH,
+            GameEventType.CHARACTER_MOVED,
+            GameEventType.PROTAGONIST_DEATH,
+            GameEventType.PROTAGONIST_FAILURE,
+            GameEventType.IDENTITY_REVEALED,
+            GameEventType.INCIDENT_OCCURRED,
+            GameEventType.LOOP_STARTED,
+            GameEventType.LOOP_ENDED,
+            GameEventType.GAME_ENDED,
+            GameEventType.ABILITY_DECLARED,
+            GameEventType.ABILITY_REFUSED,
+        }
         for event_type, announcement_type in event_map.items():
             self.event_bus.subscribe(
                 event_type,
@@ -258,11 +284,30 @@ class GameController:
                     event.data,
                 ),
             )
+        for event_type in state_update_events:
+            self.event_bus.subscribe(
+                event_type,
+                lambda _event: self._notify_state_changed(),
+            )
 
     def _forward_announcement(self, announcement_type: str, details: dict[str, Any]) -> None:
         text = Visibility.create_announcement(announcement_type, details)
         if text:
             self.ui_callback.on_announcement(text)
+
+    def _notify_state_changed(self) -> None:
+        from engine.models.enums import PlayerRole
+
+        protagonist_visible = self.visibility.filter_for_role(
+            self.state, PlayerRole.PROTAGONIST_0
+        )
+        mastermind_visible = self.visibility.filter_for_role(
+            self.state, PlayerRole.MASTERMIND
+        )
+        self.ui_callback.on_state_changed(
+            protagonist_visible,
+            mastermind_visible,
+        )
 
     def get_visible_state(self, role) -> VisibleGameState:
         """获取指定角色的可见状态"""

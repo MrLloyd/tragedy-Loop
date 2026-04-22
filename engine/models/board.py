@@ -37,9 +37,9 @@ class BoardArea:
 #
 #   col 0     col 1
 #  ┌────────┬────────┐
-#  │ 医院   │ 学校   │  row 0
+#  │ 医院   │ 神社   │  row 0
 #  ├────────┼────────┤
-#  │ 神社   │ 都市   │  row 1
+#  │ 都市   │ 学校   │  row 1
 #  └────────┴────────┘
 #
 #  远方不属于网格，单独管理
@@ -48,9 +48,9 @@ class BoardArea:
 # 默认版图定义
 DEFAULT_LAYOUT: dict[AreaId, tuple[int, int]] = {
     AreaId.HOSPITAL: (0, 0),
-    AreaId.SCHOOL:   (0, 1),
-    AreaId.SHRINE:   (1, 0),
-    AreaId.CITY:     (1, 1),
+    AreaId.SHRINE:   (0, 1),
+    AreaId.CITY:     (1, 0),
+    AreaId.SCHOOL:   (1, 1),
 }
 
 

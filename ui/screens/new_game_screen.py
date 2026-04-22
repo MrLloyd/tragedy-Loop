@@ -78,6 +78,18 @@ class NewGameScreenModel:
         )
         self._draft = replace(self._draft, characters=characters)
 
+    def add_character(self) -> None:
+        characters = list(self._draft.characters)
+        characters.append(CharacterDraft("", "平民"))
+        self._draft = replace(self._draft, characters=characters)
+
+    def remove_character(self) -> None:
+        if len(self._draft.characters) <= 1:
+            return
+        characters = list(self._draft.characters)
+        characters.pop()
+        self._draft = replace(self._draft, characters=characters)
+
     def update_incident(
         self,
         index: int,
@@ -248,17 +260,16 @@ else:
             layout.addLayout(form)
 
             layout.addWidget(QLabel("登场角色与身份"))
-            characters_grid = QGridLayout()
-            characters_grid.addWidget(QLabel("角色"), 0, 0)
-            characters_grid.addWidget(QLabel("身份"), 0, 1)
-            for index, item in enumerate(self.model.draft.characters, start=1):
-                character_input = QComboBox()
-                identity_input = QComboBox()
-                character_input.currentIndexChanged.connect(self._refresh_perpetrator_options)
-                characters_grid.addWidget(character_input, index, 0)
-                characters_grid.addWidget(identity_input, index, 1)
-                self._character_inputs.append((character_input, identity_input))
-            layout.addLayout(characters_grid)
+            character_actions = QHBoxLayout()
+            self.add_character_button = QPushButton("增加角色")
+            self.remove_character_button = QPushButton("减少角色")
+            character_actions.addWidget(self.add_character_button)
+            character_actions.addWidget(self.remove_character_button)
+            character_actions.addStretch(1)
+            layout.addLayout(character_actions)
+
+            self.characters_grid = QGridLayout()
+            layout.addLayout(self.characters_grid)
 
             layout.addWidget(QLabel("事件日程"))
             self.incidents_grid = QGridLayout()
@@ -273,6 +284,9 @@ else:
 
             self.module_input.currentIndexChanged.connect(self._on_module_changed)
             self.day_input.valueChanged.connect(self._on_days_changed)
+            self.add_character_button.clicked.connect(self._on_add_character)
+            self.remove_character_button.clicked.connect(self._on_remove_character)
+            self._rebuild_character_inputs()
             self._rebuild_incident_inputs()
             self._refresh_select_options()
             self.refresh_errors()
@@ -310,6 +324,7 @@ else:
             self.refresh_errors()
 
         def _on_module_changed(self) -> None:
+            self.sync_model_from_inputs()
             module_id = self._combo_value(self.module_input)
             if not module_id:
                 return
@@ -326,8 +341,21 @@ else:
             self._refresh_select_options()
 
         def _on_days_changed(self) -> None:
+            self.sync_model_from_inputs()
             self.model.set_basic(days_per_loop=self.day_input.value())
             self._rebuild_incident_inputs()
+            self._refresh_select_options()
+
+        def _on_add_character(self) -> None:
+            self.sync_model_from_inputs()
+            self.model.add_character()
+            self._rebuild_character_inputs()
+            self._refresh_select_options()
+
+        def _on_remove_character(self) -> None:
+            self.sync_model_from_inputs()
+            self.model.remove_character()
+            self._rebuild_character_inputs()
             self._refresh_select_options()
 
         def _refresh_select_options(self) -> None:
@@ -349,7 +377,7 @@ else:
                 draft.rule_y_id,
             )
 
-            self._rebuild_rule_x_inputs()
+            self._ensure_rule_x_inputs()
             self._refresh_rule_x_options()
 
             character_options = [
@@ -386,34 +414,61 @@ else:
                 self._set_combo_items(incident_input, incident_options, current_incident)
 
             self._refresh_perpetrator_options()
+            self.remove_character_button.setEnabled(len(draft.characters) > 1)
 
-        def _rebuild_rule_x_inputs(self) -> None:
-            while self._rule_x_inputs:
+        def _rebuild_character_inputs(self) -> None:
+            while self.characters_grid.count():
+                item = self.characters_grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+            self._character_inputs.clear()
+            self.characters_grid.addWidget(QLabel("角色"), 0, 0)
+            self.characters_grid.addWidget(QLabel("身份"), 0, 1)
+            for index, _item in enumerate(self.model.draft.characters, start=1):
+                character_input = QComboBox()
+                identity_input = QComboBox()
+                character_input.currentIndexChanged.connect(self._refresh_perpetrator_options)
+                self.characters_grid.addWidget(character_input, index, 0)
+                self.characters_grid.addWidget(identity_input, index, 1)
+                self._character_inputs.append((character_input, identity_input))
+
+        def _ensure_rule_x_inputs(self) -> None:
+            while len(self._rule_x_inputs) > self.model.rule_x_count():
                 combo = self._rule_x_inputs.pop()
                 self.rule_x_layout.removeWidget(combo)
                 combo.deleteLater()
-            for _ in range(self.model.rule_x_count()):
+            while len(self._rule_x_inputs) < self.model.rule_x_count():
                 combo = QComboBox()
-                combo.currentIndexChanged.connect(self._refresh_rule_x_options)
+                combo.currentIndexChanged.connect(self._on_rule_x_changed)
                 self._rule_x_inputs.append(combo)
                 self.rule_x_layout.addWidget(combo)
 
         def _refresh_rule_x_options(self) -> None:
             available_rule_x = self.model.available_ids("available_rule_x_ids")
-            current_values = [self._combo_value(combo) for combo in self._rule_x_inputs]
+            current_values = []
+            for index, combo in enumerate(self._rule_x_inputs):
+                current = self._combo_value(combo)
+                if not current and index < len(self.model.draft.rule_x_ids):
+                    current = self.model.draft.rule_x_ids[index]
+                current_values.append(current)
             for index, combo in enumerate(self._rule_x_inputs):
                 current = current_values[index] if index < len(current_values) else ""
-                selected_other = {
-                    value
-                    for other_index, value in enumerate(current_values)
-                    if other_index != index and value
-                }
                 options = [
                     (rule_id, rule_option_label(rule_id))
                     for rule_id in available_rule_x
-                    if rule_id == current or rule_id not in selected_other
                 ]
                 self._set_combo_items(combo, options, current)
+
+        def _on_rule_x_changed(self) -> None:
+            self.model.set_basic(
+                rule_x_ids=[
+                    self._combo_value(combo)
+                    for combo in self._rule_x_inputs
+                    if self._combo_value(combo)
+                ],
+            )
 
         def _rebuild_incident_inputs(self) -> None:
             while self.incidents_grid.count():

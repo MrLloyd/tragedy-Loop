@@ -23,6 +23,29 @@
         "mastermind": 1
       },
       "abilities": []
+    },
+    {
+      "rule_id": "fs_revenge_kindling",
+      "name": "复仇的火种",
+      "rule_type": "Y",
+      "module": "first_steps",
+      "identity_slots": {
+        "mastermind": 1
+      },
+      "abilities": [],
+      "description": "First Steps 附录规则Y：复仇的火种"
+    },
+    {
+      "rule_id": "fs_protect_this_place",
+      "name": "守护此地",
+      "rule_type": "Y",
+      "module": "first_steps",
+      "identity_slots": {
+        "key_person": 1,
+        "cultist": 1
+      },
+      "abilities": [],
+      "description": "失败条件：轮回结束时，主谋的初始区域有2枚或以上密谋"
     }
   ],
   "rules_x": [
@@ -60,6 +83,45 @@
           ]
         }
       ]
+    },
+    {
+      "rule_id": "fs_rumors",
+      "name": "流言四起",
+      "rule_type": "X",
+      "module": "first_steps",
+      "identity_slots": {
+        "rumormonger": 1
+      },
+      "abilities": [
+        {
+          "ability_id": "fs_rumors_playwright_place_intrigue",
+          "name": "流言四起放置密谋",
+          "ability_type": "optional",
+          "timing": "playwright_ability",
+          "once_per_loop": true,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": "any_board",
+              "token_type": "intrigue",
+              "amount": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "rule_id": "fs_darkest_script",
+      "name": "最黑暗的剧本",
+      "rule_type": "X",
+      "module": "first_steps",
+      "identity_slots": {
+        "rumormonger": 1,
+        "friend": 1,
+        "thug": 2
+      },
+      "abilities": [],
+      "description": "剧本制作时，暴徒的人数可以为0-2人"
     }
   ],
   "identities": [
@@ -179,6 +241,103 @@
           ]
         }
       ]
+    },
+    {
+      "identity_id": "cultist",
+      "name": "邪教徒",
+      "module": "first_steps",
+      "traits": [
+        "must_ignore_goodwill"
+      ],
+      "abilities": [
+        {
+          "ability_id": "fs_cultist_action_resolve_nullify_forbid_intrigue_character",
+          "name": "邪教徒无效化角色禁止密谋",
+          "ability_type": "optional",
+          "timing": "action_resolve",
+          "effects": [
+            {
+              "effect_type": "nullify_card",
+              "target": "same_area_any",
+              "value": "forbid_intrigue"
+            }
+          ]
+        },
+        {
+          "ability_id": "fs_cultist_action_resolve_nullify_forbid_intrigue_board",
+          "name": "邪教徒无效化版图禁止密谋",
+          "ability_type": "optional",
+          "timing": "action_resolve",
+          "effects": [
+            {
+              "effect_type": "nullify_card",
+              "target": "same_area_board",
+              "value": "forbid_intrigue"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "identity_id": "friend",
+      "name": "亲友",
+      "module": "first_steps",
+      "traits": [],
+      "max_count": 2,
+      "abilities": [
+        {
+          "ability_id": "fs_friend_loop_end_revealed_loss",
+          "name": "亲友死亡失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "condition": {
+            "condition_type": "character_dead",
+            "params": {
+              "target": "self"
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": "self"
+            },
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "friend_dead"
+            }
+          ]
+        },
+        {
+          "ability_id": "fs_friend_loop_start_place_goodwill",
+          "name": "亲友公开后轮回开始加友好",
+          "ability_type": "mandatory",
+          "timing": "loop_start",
+          "condition": {
+            "condition_type": "identity_revealed",
+            "params": {
+              "target": "self"
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": "self",
+              "token_type": "goodwill",
+              "amount": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "identity_id": "thug",
+      "name": "暴徒",
+      "module": "first_steps",
+      "traits": [
+        "ignore_goodwill"
+      ],
+      "abilities": []
     },
     {
       "identity_id": "rumormonger",

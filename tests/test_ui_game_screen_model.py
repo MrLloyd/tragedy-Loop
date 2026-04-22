@@ -90,9 +90,9 @@ def test_session_read_debug_snapshot_reads_current_runtime_state() -> None:
 def test_game_screen_board_targets_are_four_board_areas() -> None:
     assert GameScreenModel.board_target_options() == [
         AreaId.HOSPITAL.value,
-        AreaId.SCHOOL.value,
         AreaId.SHRINE.value,
         AreaId.CITY.value,
+        AreaId.SCHOOL.value,
     ]
 
 
