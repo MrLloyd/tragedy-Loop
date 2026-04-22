@@ -40,3 +40,62 @@ def test_start_new_game_click_flow_keeps_main_window_open() -> None:
 
     window.close()
     app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_new_game_screen_rule_dropdowns_show_full_btx_options_and_allow_reselect() -> None:
+    app = QApplication.instance() or QApplication([])
+    screen = NewGameScreen()
+    screen.show()
+
+    screen.module_input.setCurrentIndex(screen.module_input.findData("basic_tragedy_x"))
+    app.processEvents()
+
+    rule_y_values = [
+        screen.rule_y_input.itemData(index)
+        for index in range(screen.rule_y_input.count())
+    ]
+    assert rule_y_values == [
+        "btx_murder_plan",
+        "btx_cursed_contract",
+        "btx_sealed_evil",
+        "btx_change_future",
+        "btx_giant_time_bomb_x",
+    ]
+
+    first_rule_x_values = [
+        screen._rule_x_inputs[0].itemData(index)
+        for index in range(screen._rule_x_inputs[0].count())
+    ]
+    assert first_rule_x_values == [
+        "btx_friends_circle",
+        "btx_love_scenic_line",
+        "btx_rumors",
+        "btx_latent_serial_killer",
+        "btx_causal_line",
+        "btx_delusion_spread_virus",
+        "btx_unknown_factor_chi",
+    ]
+
+    screen.rule_y_input.setCurrentIndex(screen.rule_y_input.findData("btx_change_future"))
+    app.processEvents()
+    assert screen.model.draft.rule_y_id == "btx_change_future"
+
+    screen.rule_y_input.setCurrentIndex(screen.rule_y_input.findData("btx_murder_plan"))
+    app.processEvents()
+    assert screen.model.draft.rule_y_id == "btx_murder_plan"
+
+    screen._rule_x_inputs[0].setCurrentIndex(screen._rule_x_inputs[0].findData("btx_unknown_factor_chi"))
+    screen._rule_x_inputs[1].setCurrentIndex(screen._rule_x_inputs[1].findData("btx_love_scenic_line"))
+    app.processEvents()
+    assert screen.model.draft.rule_x_ids == [
+        "btx_unknown_factor_chi",
+        "btx_love_scenic_line",
+    ]
+
+    screen._rule_x_inputs[0].setCurrentIndex(screen._rule_x_inputs[0].findData("btx_friends_circle"))
+    app.processEvents()
+    assert screen.model.draft.rule_x_ids[0] == "btx_friends_circle"
+
+    screen.close()
+    app.processEvents()

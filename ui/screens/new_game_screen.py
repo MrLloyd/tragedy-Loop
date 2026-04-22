@@ -283,6 +283,7 @@ else:
             layout.addWidget(self.start_button)
 
             self.module_input.currentIndexChanged.connect(self._on_module_changed)
+            self.rule_y_input.currentIndexChanged.connect(self._on_rule_y_changed)
             self.day_input.valueChanged.connect(self._on_days_changed)
             self.add_character_button.clicked.connect(self._on_add_character)
             self.remove_character_button.clicked.connect(self._on_remove_character)
@@ -324,7 +325,6 @@ else:
             self.refresh_errors()
 
         def _on_module_changed(self) -> None:
-            self.sync_model_from_inputs()
             module_id = self._combo_value(self.module_input)
             if not module_id:
                 return
@@ -332,6 +332,8 @@ else:
                 module_id=module_id,
                 loop_count=self.loop_input.value(),
                 days_per_loop=self.day_input.value(),
+                rule_y_id="",
+                rule_x_ids=[],
             )
             self.model.refresh_available_options(
                 module_id=module_id,
@@ -339,6 +341,10 @@ else:
                 days_per_loop=self.day_input.value(),
             )
             self._refresh_select_options()
+            self._sync_rule_selection_to_model()
+
+        def _on_rule_y_changed(self) -> None:
+            self.model.set_basic(rule_y_id=self._combo_value(self.rule_y_input))
 
         def _on_days_changed(self) -> None:
             self.sync_model_from_inputs()
@@ -462,13 +468,7 @@ else:
                 self._set_combo_items(combo, options, current)
 
         def _on_rule_x_changed(self) -> None:
-            self.model.set_basic(
-                rule_x_ids=[
-                    self._combo_value(combo)
-                    for combo in self._rule_x_inputs
-                    if self._combo_value(combo)
-                ],
-            )
+            self._sync_rule_selection_to_model()
 
         def _rebuild_incident_inputs(self) -> None:
             while self.incidents_grid.count():
@@ -544,3 +544,13 @@ else:
                 self.error_label.setText("")
                 return
             self.error_label.setText("校验问题：\n- " + "\n- ".join(issues))
+
+        def _sync_rule_selection_to_model(self) -> None:
+            self.model.set_basic(
+                rule_y_id=self._combo_value(self.rule_y_input),
+                rule_x_ids=[
+                    self._combo_value(combo)
+                    for combo in self._rule_x_inputs
+                    if self._combo_value(combo)
+                ],
+            )
