@@ -5,6 +5,7 @@ from typing import Optional
 
 from engine.game_controller import GameController
 from ui.controllers.game_session_controller import GameSessionController
+from ui.debug_snapshot_server import ReadOnlyDebugSnapshotServer
 from ui.screens.game_screen import GameScreen
 from ui.screens.new_game_screen import NewGameScreen, NewGameScreenModel
 from ui.screens.result_screen import ResultScreen
@@ -43,12 +44,22 @@ else:
             self.new_game_model: Optional[NewGameScreenModel] = None
             self.session: Optional[GameSessionController] = None
             self.game_controller: Optional[GameController] = None
+            self._debug_snapshot_server = ReadOnlyDebugSnapshotServer(self._read_local_debug_snapshot)
+            self._debug_snapshot_server.start()
 
             self.title_screen.new_game_button.clicked.connect(self._start_new_game_flow)
             self.title_screen.quit_button.clicked.connect(self.close)
             self.result_screen.back_button.clicked.connect(self._show_title)
             self.game_screen.set_after_submit(self._handle_session_update)
 
+            if self._debug_snapshot_server.is_running:
+                self.statusBar().showMessage(
+                    f"本地只读调试快照：{self._debug_snapshot_server.snapshot_url}"
+                )
+            else:
+                self.statusBar().showMessage(
+                    f"本地只读调试快照未启动：{self._debug_snapshot_server.start_error}"
+                )
             self._show_title()
 
         def _show_title(self) -> None:
@@ -95,10 +106,6 @@ else:
                     return
 
                 self.new_game_screen.sync_model_from_inputs()
-                issues = self.new_game_model.validate()
-                if issues:
-                    self.new_game_screen.refresh_errors(issues)
-                    return
 
                 try:
                     self.session.submit_script_setup(self.new_game_model.build_payload())
@@ -132,6 +139,15 @@ else:
             if self.new_game_screen is None:
                 return
             self.new_game_screen.refresh_errors()
+
+        def _read_local_debug_snapshot(self) -> dict[str, object]:
+            if self.session is None:
+                return {"status": "idle"}
+            return self.session.read_debug_snapshot()
+
+        def closeEvent(self, event) -> None:  # type: ignore[override]
+            self._debug_snapshot_server.close()
+            super().closeEvent(event)
 
         def _show_unexpected_error(self, title: str, exc: Exception) -> None:
             traceback.print_exception(type(exc), exc, exc.__traceback__)

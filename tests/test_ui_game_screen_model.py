@@ -85,6 +85,8 @@ def test_session_read_debug_snapshot_reads_current_runtime_state() -> None:
     assert snapshot["current_phase"] == GamePhase.MASTERMIND_ACTION.value
     assert snapshot["current_loop"] == 1
     assert "male_student" in snapshot["characters"]
+    assert snapshot["script"]["rule_y_id"] == "fs_murder_plan"
+    assert snapshot["current_wait"]["input_type"] == "place_action_card"
 
 
 def test_game_screen_board_targets_are_four_board_areas() -> None:

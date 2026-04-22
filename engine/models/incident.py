@@ -54,9 +54,9 @@ class IncidentSchedule:
     day: int                     # 发生在第几天
     perpetrator_id: str          # 当事人角色 ID（非公开）
     perpetrator_area: Optional[str] = None  # 群众事件指定版图
-    target_character_ids: list[str] = field(default_factory=list)  # 非公开预设角色目标
-    target_area_ids: list[str] = field(default_factory=list)       # 非公开预设版图目标
-    chosen_token_types: list[str] = field(default_factory=list)    # 非公开预设指示物类型
+    target_character_ids: list[str] = field(default_factory=list)  # 发动时已选择/调试注入的角色目标
+    target_area_ids: list[str] = field(default_factory=list)       # 发动时已选择/调试注入的版图目标
+    chosen_token_types: list[str] = field(default_factory=list)    # 发动时已选择/调试注入的指示物类型
 
     # 运行时状态
     occurred: bool = False       # 本轮回是否已发生

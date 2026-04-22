@@ -99,3 +99,53 @@ def test_new_game_screen_rule_dropdowns_show_full_btx_options_and_allow_reselect
 
     screen.close()
     app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_new_game_screen_character_buttons_update_visible_state() -> None:
+    app = QApplication.instance() or QApplication([])
+    screen = NewGameScreen()
+    screen.show()
+
+    assert len(screen._character_inputs) == 5
+    assert screen.character_count_label.text() == "当前 5 名角色"
+
+    screen.add_character_button.click()
+    app.processEvents()
+
+    assert len(screen._character_inputs) == 6
+    assert screen.character_count_label.text() == "当前 6 名角色"
+
+    screen.remove_character_button.click()
+    app.processEvents()
+
+    assert len(screen._character_inputs) == 5
+    assert screen.character_count_label.text() == "当前 5 名角色"
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_new_game_screen_day_count_changes_rebuild_incident_rows() -> None:
+    app = QApplication.instance() or QApplication([])
+    screen = NewGameScreen()
+    screen.show()
+
+    assert len(screen._incident_inputs) == 3
+
+    screen.day_input.setValue(1)
+    app.processEvents()
+
+    assert len(screen._incident_inputs) == 1
+    assert screen.model.draft.days_per_loop == 1
+
+    screen.day_input.setValue(3)
+    app.processEvents()
+
+    assert len(screen._incident_inputs) == 3
+    assert screen.model.draft.days_per_loop == 3
+
+    screen.close()
+    app.processEvents()
+

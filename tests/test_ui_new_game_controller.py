@@ -39,33 +39,34 @@ def test_new_game_screen_model_starts_with_phase5_default() -> None:
     assert model.rule_x_count() == 1
 
 
-def test_new_game_screen_model_validates_phase5_default() -> None:
-    model = NewGameScreenModel()
-
-    assert model.validate() == []
-
-
-def test_new_game_screen_model_rejects_invalid_incident_perpetrator() -> None:
+def test_game_prepare_rejects_invalid_incident_perpetrator() -> None:
     model = NewGameScreenModel()
     model.update_incident(2, perpetrator_id="ghost")
 
-    assert "事件 suicide 的当事人不在角色列表中" in model.validate()
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(model.draft)
+    )
+
+    assert any("unknown incident perpetrator: 'ghost'" in error for error in errors)
 
 
-def test_new_game_screen_model_rejects_duplicate_rule_x_and_perpetrators() -> None:
+def test_game_prepare_rejects_duplicate_rule_x_and_perpetrators() -> None:
     model = NewGameScreenModel()
     model.set_basic(
         module_id="basic_tragedy_x",
+        rule_y_id="btx_murder_plan",
         rule_x_ids=["btx_causal_line", "btx_causal_line"],
     )
     model.refresh_available_options(module_id="basic_tragedy_x")
     model.update_incident(0, incident_id="murder", perpetrator_id="female_student")
     model.update_incident(1, incident_id="suicide", perpetrator_id="female_student")
 
-    issues = model.validate()
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(model.draft)
+    )
 
-    assert "规则 X 不能重复" in issues
-    assert "不同天的事件当事人不能重复" in issues
+    assert any("duplicated rule_x" in error for error in errors)
+    assert any("duplicated incident perpetrator" in error for error in errors)
 
 
 def test_new_game_controller_builds_engine_input_payload() -> None:
@@ -114,3 +115,19 @@ def test_game_session_controller_receives_wait_and_submits_input() -> None:
 
     assert session.view_state.current_phase == GamePhase.PROTAGONIST_ACTION
     assert session.view_state.current_wait is not None
+
+
+def _submit_script_setup_and_collect_errors(payload: dict[str, object]) -> list[str]:
+    session = GameSessionController()
+    controller = GameController(ui_callback=session)
+    session.bind(controller)
+    controller.start_game("first_steps", loop_count=1, days_per_loop=1)
+
+    session.submit_script_setup(payload)
+
+    assert session.view_state.current_phase == GamePhase.GAME_PREPARE
+    assert session.view_state.current_wait is not None
+    assert session.view_state.current_wait.input_type == "script_setup"
+    errors = session.view_state.current_wait.context["errors"]
+    assert isinstance(errors, list)
+    return [str(error) for error in errors]

@@ -8,7 +8,7 @@ from engine.models.character import CharacterState
 from engine.models.enums import AreaId, EffectType
 from engine.models.effects import Condition, Effect
 from engine.models.incident import IncidentDef, IncidentSchedule
-from engine.phases.phase_base import ForceLoopEnd, IncidentHandler, PhaseComplete
+from engine.phases.phase_base import ForceLoopEnd, IncidentHandler, PhaseComplete, WaitForInput
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
 from engine.resolvers.incident_resolver import IncidentResolver
@@ -396,7 +396,7 @@ def test_unease_spread_and_spread_use_hidden_targets_in_order() -> None:
     assert state.characters["b"].tokens.goodwill == 2
 
 
-def test_disappearance_and_butterfly_effect_use_hidden_area_and_token_choice() -> None:
+def test_incident_resolver_can_use_supplied_area_and_token_choices() -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
     state = GameState.create_minimal_test_state(days_per_loop=3)
@@ -448,3 +448,37 @@ def test_disappearance_and_butterfly_effect_use_hidden_area_and_token_choice() -
     )
     assert butterfly.has_phenomenon is True
     assert state.characters["target"].tokens.intrigue == 1
+
+
+def test_disappearance_requests_runtime_area_choice_from_mastermind() -> None:
+    handler, _ = _make_handler()
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.current_day = 1
+    state.characters["perp"] = CharacterState(
+        character_id="perp",
+        name="当事人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=2,
+    )
+    state.characters["perp"].tokens.paranoia = 2
+    state.script.incidents = [
+        IncidentSchedule("disappearance", day=1, perpetrator_id="perp")
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_incident_area"
+    assert signal.player == "mastermind"
+    assert "school" in signal.options
+    assert state.characters["perp"].area == AreaId.CITY
+
+    follow_up = signal.callback("school")
+
+    assert isinstance(follow_up, PhaseComplete)
+    assert state.characters["perp"].area == AreaId.SCHOOL
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1

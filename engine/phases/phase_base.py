@@ -794,11 +794,67 @@ class IncidentHandler(PhaseHandler):
         schedules = state.get_incidents_for_day(state.current_day)
 
         for schedule in schedules:
+            runtime_choice_wait = self._request_runtime_area_choice(state, schedule)
+            if runtime_choice_wait is not None:
+                return runtime_choice_wait
             result = self.incident_resolver.resolve_schedule(state, schedule)
             if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
                 return ForceLoopEnd(reason=schedule.incident_id)
 
         return PhaseComplete()
+
+    def _request_runtime_area_choice(
+        self,
+        state: GameState,
+        schedule: Any,
+        *,
+        errors: list[str] | None = None,
+    ) -> WaitForInput | None:
+        incident_def = state.incident_defs.get(schedule.incident_id)
+        if incident_def is None:
+            return None
+        if not self.incident_resolver.can_occur(state, schedule, incident_def):
+            return None
+
+        missing_area_choices = sum(
+            1
+            for effect in incident_def.effects
+            if effect.effect_type == EffectType.MOVE_CHARACTER and effect.value == "any_board"
+        ) - len(schedule.target_area_ids)
+        if missing_area_choices <= 0:
+            return None
+
+        candidates = self.incident_resolver.condition_resolver.resolve_targets(
+            state,
+            owner_id=schedule.perpetrator_id,
+            selector="any_board",
+            alive_only=False,
+        )
+
+        def _on_choose(choice: Any) -> PhaseSignal:
+            selected_area = str(choice)
+            if selected_area not in candidates:
+                return self._request_runtime_area_choice(
+                    state,
+                    schedule,
+                    errors=[f"无效目标版图：{selected_area}"],
+                ) or PhaseComplete()
+            schedule.target_area_ids.append(selected_area)
+            return self.execute(state)
+
+        context = {
+            "incident_id": schedule.incident_id,
+            "perpetrator_id": schedule.perpetrator_id,
+            "errors": list(errors or []),
+        }
+        return WaitForInput(
+            input_type="choose_incident_area",
+            prompt=f"事件 {incident_def.name} 发动：请选择目标版图",
+            options=list(candidates),
+            context=context,
+            player="mastermind",
+            callback=_on_choose,
+        )
 
 
 class LeaderRotateHandler(PhaseHandler):

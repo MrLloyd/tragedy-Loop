@@ -107,49 +107,6 @@ class NewGameScreenModel:
         )
         self._draft = replace(self._draft, incidents=incidents)
 
-    def validate(self) -> list[str]:
-        issues: list[str] = []
-        draft = self._draft
-        if not draft.module_id:
-            issues.append("模组不能为空")
-        if draft.loop_count <= 0:
-            issues.append("轮回数必须大于 0")
-        if draft.days_per_loop <= 0:
-            issues.append("每轮天数必须大于 0")
-        if not draft.rule_y_id:
-            issues.append("规则 Y 不能为空")
-        required_rule_x_count = self.rule_x_count()
-        if len(draft.rule_x_ids) != required_rule_x_count:
-            issues.append(f"规则 X 数量必须为 {required_rule_x_count}")
-        if any(not rule_x_id for rule_x_id in draft.rule_x_ids):
-            issues.append("规则 X 不能为空")
-        if len(set(draft.rule_x_ids)) != len(draft.rule_x_ids):
-            issues.append("规则 X 不能重复")
-
-        character_ids = [item.character_id for item in draft.characters]
-        if any(not item.character_id or not item.identity_id for item in draft.characters):
-            issues.append("角色与身份不能为空")
-        if len(character_ids) != len(set(character_ids)):
-            issues.append("角色列表中存在重复角色")
-
-        valid_character_ids = set(character_ids)
-        seen_perpetrators: set[str] = set()
-        for item in draft.incidents:
-            if not item.incident_id:
-                continue
-            if item.day <= 0 or item.day > draft.days_per_loop:
-                issues.append(f"事件 {item.incident_id or '?'} 的天数超出范围")
-            if not item.perpetrator_id:
-                issues.append(f"第 {item.day} 天事件的当事人不能为空")
-            if item.perpetrator_id not in valid_character_ids:
-                issues.append(f"事件 {item.incident_id or '?'} 的当事人不在角色列表中")
-            if item.perpetrator_id in seen_perpetrators:
-                issues.append("不同天的事件当事人不能重复")
-            if item.perpetrator_id:
-                seen_perpetrators.add(item.perpetrator_id)
-
-        return issues
-
     def apply_wait_context(self, context: dict[str, object] | None) -> None:
         self._wait_context = dict(context or {})
         raw_errors = self._wait_context.get("errors", [])
@@ -231,13 +188,13 @@ else:
             self._rule_x_inputs: list[QComboBox] = []
 
             outer = QVBoxLayout(self)
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setMinimumSize(0, 0)
-            content = QWidget()
-            layout = QVBoxLayout(content)
-            scroll.setWidget(content)
-            outer.addWidget(scroll)
+            self._scroll = QScrollArea()
+            self._scroll.setWidgetResizable(True)
+            self._scroll.setMinimumSize(0, 0)
+            self._content = QWidget()
+            layout = QVBoxLayout(self._content)
+            self._scroll.setWidget(self._content)
+            outer.addWidget(self._scroll)
             layout.addWidget(QLabel("新游戏 / 非公开信息表"))
 
             form = QFormLayout()
@@ -263,8 +220,10 @@ else:
             character_actions = QHBoxLayout()
             self.add_character_button = QPushButton("增加角色")
             self.remove_character_button = QPushButton("减少角色")
+            self.character_count_label = QLabel("")
             character_actions.addWidget(self.add_character_button)
             character_actions.addWidget(self.remove_character_button)
+            character_actions.addWidget(self.character_count_label)
             character_actions.addStretch(1)
             layout.addLayout(character_actions)
 
@@ -310,7 +269,8 @@ else:
                     character_id=self._combo_value(character_input),
                     identity_id=self._combo_value(identity_input),
                 )
-            for index, (_, incident_input, perpetrator_input) in enumerate(self._incident_inputs):
+            active_incident_inputs = self._incident_inputs[:self.model.draft.days_per_loop]
+            for index, (_, incident_input, perpetrator_input) in enumerate(active_incident_inputs):
                 self.model.update_incident(
                     index,
                     incident_id=self._combo_value(incident_input),
@@ -357,12 +317,14 @@ else:
             self.model.add_character()
             self._rebuild_character_inputs()
             self._refresh_select_options()
+            self._focus_character_row(len(self._character_inputs) - 1)
 
         def _on_remove_character(self) -> None:
             self.sync_model_from_inputs()
             self.model.remove_character()
             self._rebuild_character_inputs()
             self._refresh_select_options()
+            self._focus_character_row(len(self._character_inputs) - 1)
 
         def _refresh_select_options(self) -> None:
             draft = self.model.draft
@@ -420,7 +382,9 @@ else:
                 self._set_combo_items(incident_input, incident_options, current_incident)
 
             self._refresh_perpetrator_options()
+            self.character_count_label.setText(f"当前 {len(draft.characters)} 名角色")
             self.remove_character_button.setEnabled(len(draft.characters) > 1)
+            self._refresh_dynamic_layout()
 
         def _rebuild_character_inputs(self) -> None:
             while self.characters_grid.count():
@@ -439,6 +403,20 @@ else:
                 self.characters_grid.addWidget(character_input, index, 0)
                 self.characters_grid.addWidget(identity_input, index, 1)
                 self._character_inputs.append((character_input, identity_input))
+
+        def _focus_character_row(self, index: int) -> None:
+            if not self._character_inputs:
+                return
+            target_index = max(0, min(index, len(self._character_inputs) - 1))
+            target_widget = self._character_inputs[target_index][0]
+            target_widget.setFocus()
+            self._scroll.ensureWidgetVisible(target_widget)
+
+        def _refresh_dynamic_layout(self) -> None:
+            self.characters_grid.invalidate()
+            self.incidents_grid.invalidate()
+            self._content.adjustSize()
+            self._content.updateGeometry()
 
         def _ensure_rule_x_inputs(self) -> None:
             while len(self._rule_x_inputs) > self.model.rule_x_count():

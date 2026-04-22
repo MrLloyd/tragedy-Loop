@@ -205,7 +205,33 @@ class GameSessionController(UICallback):
             ),
             debug_log=[],
         )
-        return get_debug_snapshot(debug_session)
+        snapshot = get_debug_snapshot(debug_session)
+        wait = self.view_state.current_wait
+        snapshot["current_wait"] = {
+            "input_type": wait.input_type,
+            "prompt": wait.prompt,
+            "player": wait.player,
+            "options": [self._format_wait_option(option) for option in wait.options],
+        } if wait is not None else None
+        snapshot["script"] = {
+            "module_id": controller.state.script.module_id,
+            "loop_count": controller.state.script.loop_count,
+            "days_per_loop": controller.state.script.days_per_loop,
+            "rule_y_id": controller.state.script.rule_y.rule_id if controller.state.script.rule_y is not None else "",
+            "rule_x_ids": [rule.rule_id for rule in controller.state.script.rules_x],
+            "incidents": [
+                {
+                    "incident_id": incident.incident_id,
+                    "day": incident.day,
+                    "perpetrator_id": incident.perpetrator_id,
+                    "target_character_ids": list(incident.target_character_ids),
+                    "target_area_ids": list(incident.target_area_ids),
+                    "chosen_token_types": list(incident.chosen_token_types),
+                }
+                for incident in controller.state.script.incidents
+            ],
+        }
+        return snapshot
 
     def _require_wait(self, input_type: str) -> WaitForInput:
         wait = self.view_state.current_wait
