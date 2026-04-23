@@ -24,7 +24,6 @@ _PHASE_NAMES = {
     "leader_rotate": "队长轮换阶段",
     "turn_end": "回合结束阶段",
     "loop_end": "轮回结束阶段",
-    "loop_end_check": "轮回结束判定",
     "next_loop": "进入下一轮回",
     "final_guess": "最终决战",
     "game_end": "对局结束",

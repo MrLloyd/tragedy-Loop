@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from engine.event_bus import EventBus, GameEvent, GameEventType
@@ -23,6 +25,7 @@ from engine.phases.phase_base import (
 )
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
+from engine.rules.persistent_effects import settle_persistent_effects
 from engine.state_machine import StateMachine
 from engine.visibility import Visibility, VisibleGameState
 
@@ -58,6 +61,17 @@ class UICallback:
         pass
 
 
+@dataclass
+class RuntimeDebugState:
+    current_signal: str = ""
+    input_in_progress: bool = False
+    has_pending_callback: bool = False
+    pending_wait_id: int = 0
+    last_input_summary: str = ""
+    last_error: str = ""
+    trace_tail: deque[str] = field(default_factory=lambda: deque(maxlen=50))
+
+
 # ---------------------------------------------------------------------------
 # GameController — 游戏控制器
 # ---------------------------------------------------------------------------
@@ -82,6 +96,8 @@ class GameController:
 
         # 当前挂起的回调
         self._pending_callback: Optional[Callable] = None
+        self._wait_sequence = 0
+        self.runtime_debug = RuntimeDebugState()
         self._wire_ui_announcements()
 
     # ==================================================================
@@ -128,11 +144,26 @@ class GameController:
         由 UI 层调用，将玩家选择传回引擎继续执行。
         """
         if self._pending_callback is None:
+            self._record_runtime_error("provide_input without pending callback")
             raise RuntimeError("No pending input callback; engine is not waiting for input")
 
         callback = self._pending_callback
         self._pending_callback = None
-        result = callback(choice)
+        self.runtime_debug.input_in_progress = True
+        self.runtime_debug.has_pending_callback = False
+        self.runtime_debug.last_input_summary = self._summarize_input(choice)
+        self._append_trace(
+            f"provide_input wait#{self.runtime_debug.pending_wait_id} {self.runtime_debug.last_input_summary}"
+        )
+        try:
+            result = callback(choice)
+        except Exception:
+            self._pending_callback = callback
+            self.runtime_debug.has_pending_callback = True
+            self._record_runtime_error("callback raised; restored pending callback")
+            raise
+        finally:
+            self.runtime_debug.input_in_progress = False
         if result is not None:
             self._handle_signal(result)
 
@@ -144,6 +175,8 @@ class GameController:
         """执行当前阶段并处理返回信号"""
         phase = self.state_machine.current_phase
         self.state.current_phase = phase
+        self._append_trace(f"run_phase {phase.value}")
+        settle_persistent_effects(self.state)
 
         # 通知 UI
         self._notify_phase_change()
@@ -176,25 +209,82 @@ class GameController:
 
     def _handle_signal(self, signal: PhaseSignal) -> None:
         """处理阶段返回信号"""
+        self.runtime_debug.current_signal = type(signal).__name__
+        self._append_trace(f"handle_signal {self.runtime_debug.current_signal}")
         match signal:
             case PhaseComplete():
+                self.runtime_debug.last_error = ""
+                self.runtime_debug.has_pending_callback = False
+                self.runtime_debug.pending_wait_id = 0
                 self._advance_and_run()
 
             case WaitForInput() as wait:
                 if wait.callback is None:
+                    self._record_runtime_error(f"WaitForInput({wait.input_type}) missing callback")
                     raise RuntimeError(
                         f"WaitForInput({wait.input_type}) missing callback"
                     )
+                self._wait_sequence += 1
+                wait.wait_id = self._wait_sequence
                 self._pending_callback = wait.callback
+                self.runtime_debug.has_pending_callback = True
+                self.runtime_debug.pending_wait_id = wait.wait_id
+                self.runtime_debug.last_error = ""
+                self._append_trace(
+                    f"wait #{wait.wait_id} {wait.input_type} player={wait.player}"
+                )
                 self.ui_callback.on_wait_for_input(wait)
 
             case ForceLoopEnd() as fle:
+                self.runtime_debug.last_error = ""
+                self.runtime_debug.has_pending_callback = False
+                self.runtime_debug.pending_wait_id = 0
+                self._append_trace(f"force_loop_end {fle.reason}")
                 self.event_bus.emit(GameEvent(
                     GameEventType.LOOP_END_FORCED,
                     {"reason": fle.reason},
                 ))
                 self.state_machine.force_loop_end()
                 self._advance_and_run()
+
+    def get_runtime_debug_snapshot(self) -> dict[str, Any]:
+        return {
+            "engine_phase": self.state_machine.current_phase.value,
+            "state_current_phase": self.state.current_phase.value,
+            "current_signal": self.runtime_debug.current_signal,
+            "input_in_progress": self.runtime_debug.input_in_progress,
+            "has_pending_callback": self.runtime_debug.has_pending_callback,
+            "pending_wait_id": self.runtime_debug.pending_wait_id,
+            "last_input_summary": self.runtime_debug.last_input_summary,
+            "last_error": self.runtime_debug.last_error,
+            "trace_tail": list(self.runtime_debug.trace_tail),
+        }
+
+    def _append_trace(self, message: str) -> None:
+        self.runtime_debug.trace_tail.append(message)
+
+    def _record_runtime_error(self, message: str) -> None:
+        self.runtime_debug.last_error = message
+        self._append_trace(f"error {message}")
+
+    @staticmethod
+    def _summarize_input(choice: Any) -> str:
+        if choice is None:
+            return "None"
+        if isinstance(choice, str):
+            return choice
+        target_type = getattr(choice, "target_type", None)
+        target_id = getattr(choice, "target_id", None)
+        if target_type is not None and target_id is not None:
+            card = getattr(choice, "card", None)
+            card_type = getattr(card, "card_type", None)
+            card_name = getattr(card_type, "value", str(card_type)) if card_type is not None else "unknown_card"
+            return f"{card_name}:{target_type}:{target_id}"
+        if isinstance(choice, dict):
+            return f"dict(keys={sorted(choice.keys())})"
+        if isinstance(choice, list):
+            return f"list(len={len(choice)})"
+        return type(choice).__name__
 
     def _advance_and_run(self) -> None:
         """推进状态机并执行下一阶段"""
@@ -220,7 +310,11 @@ class GameController:
 
     def _handle_game_end(self) -> None:
         """判定最终胜负"""
-        if self.state.protagonist_dead:
+        if self.state.final_guess_correct is True:
+            outcome = Outcome.PROTAGONIST_WIN
+        elif self.state.final_guess_correct is False:
+            outcome = Outcome.MASTERMIND_WIN
+        elif self.state.protagonist_dead:
             outcome = Outcome.MASTERMIND_WIN
         elif self.state.failure_flags:
             outcome = Outcome.MASTERMIND_WIN

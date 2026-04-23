@@ -6,12 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from engine.models.enums import AreaId, Attribute, CardType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CardType, EffectType, TokenType
 from engine.validation.common import ValidationIssue, enum_values
 
 _AREA_VALUES = enum_values(AreaId)
 _CARD_VALUES = enum_values(CardType)
 _ATTR_VALUES = enum_values(Attribute)
+_ABILITY_TIMING_VALUES = enum_values(AbilityTiming)
+_ABILITY_TYPE_VALUES = enum_values(AbilityType)
+_EFFECT_VALUES = enum_values(EffectType)
+_TOKEN_VALUES = enum_values(TokenType)
 # 2x2 版图格，不含远方
 _BOARD_CELL_AREAS = _AREA_VALUES - {AreaId.FARAWAY.value}
 
@@ -274,7 +278,72 @@ def validate_characters(
                             )
                         )
 
+        gabilities = ch.get("goodwill_abilities")
+        if gabilities is not None:
+            if not isinstance(gabilities, list):
+                issues.append(ValidationIssue(f"{p}.goodwill_abilities", "must be an array"))
+            else:
+                for j, ability in enumerate(gabilities):
+                    _validate_goodwill_ability(ability, f"{p}.goodwill_abilities[{j}]", issues)
+
     return issues
+
+
+def _validate_goodwill_ability(
+    ability: Any,
+    path_prefix: str,
+    issues: list[ValidationIssue],
+) -> None:
+    if not isinstance(ability, dict):
+        issues.append(ValidationIssue(path_prefix, "ability must be an object"))
+        return
+
+    ability_id = ability.get("ability_id")
+    if not isinstance(ability_id, str) or not ability_id.strip():
+        issues.append(ValidationIssue(f"{path_prefix}.ability_id", "must be non-empty string"))
+
+    ability_type = ability.get("ability_type", AbilityType.OPTIONAL.value)
+    if ability_type not in _ABILITY_TYPE_VALUES:
+        issues.append(ValidationIssue(f"{path_prefix}.ability_type", f"invalid AbilityType: {ability_type!r}"))
+
+    timing = ability.get("timing", AbilityTiming.PROTAGONIST_ABILITY.value)
+    if timing not in _ABILITY_TIMING_VALUES:
+        issues.append(ValidationIssue(f"{path_prefix}.timing", f"invalid AbilityTiming: {timing!r}"))
+
+    requirement = ability.get("goodwill_requirement", 0)
+    if not isinstance(requirement, int) or requirement < 0:
+        issues.append(ValidationIssue(f"{path_prefix}.goodwill_requirement", "expected int >= 0"))
+
+    for key in ("sequential", "once_per_loop", "once_per_day", "can_be_refused"):
+        value = ability.get(key)
+        if value is not None and not isinstance(value, bool):
+            issues.append(ValidationIssue(f"{path_prefix}.{key}", f"expected bool, got {value!r}"))
+
+    effects = ability.get("effects", [])
+    if not isinstance(effects, list):
+        issues.append(ValidationIssue(f"{path_prefix}.effects", "must be an array"))
+        return
+    for k, effect in enumerate(effects):
+        _validate_goodwill_effect(effect, f"{path_prefix}.effects[{k}]", issues)
+
+
+def _validate_goodwill_effect(
+    effect: Any,
+    path_prefix: str,
+    issues: list[ValidationIssue],
+) -> None:
+    if not isinstance(effect, dict):
+        issues.append(ValidationIssue(path_prefix, "effect must be an object"))
+        return
+    effect_type = effect.get("effect_type")
+    if effect_type not in _EFFECT_VALUES:
+        issues.append(ValidationIssue(f"{path_prefix}.effect_type", f"invalid EffectType: {effect_type!r}"))
+    token_type = effect.get("token_type")
+    if token_type is not None and token_type not in _TOKEN_VALUES:
+        issues.append(ValidationIssue(f"{path_prefix}.token_type", f"invalid TokenType: {token_type!r}"))
+    amount = effect.get("amount", 0)
+    if not isinstance(amount, int):
+        issues.append(ValidationIssue(f"{path_prefix}.amount", f"expected int, got {amount!r}"))
 
 
 def load_board_layout_keys(path: Path) -> frozenset[str] | None:

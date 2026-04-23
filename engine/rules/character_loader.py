@@ -11,8 +11,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from engine.models.ability import Ability
+from engine.models.effects import Condition, Effect
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, Attribute, Trait
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
 from engine.models.script import CharacterSetup
 
 _CHARACTER_DATA_FILE = Path(__file__).parent.parent.parent / "data" / "characters.json"
@@ -32,6 +34,7 @@ class CharacterDef:
     base_traits: set[Trait] = field(default_factory=set)
     trait_rule: str = ""
     script_constraints: list[str] = field(default_factory=list)
+    goodwill_abilities: list[Ability] = field(default_factory=list)
     goodwill_ability_texts: list[str] = field(default_factory=list)
     goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)
@@ -100,6 +103,7 @@ def instantiate_character_state(
         attributes=set(char_def.attributes),
         paranoia_limit=char_def.paranoia_limit,
         forbidden_areas=list(char_def.forbidden_areas),
+        goodwill_abilities=list(char_def.goodwill_abilities),
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
         goodwill_ability_goodwill_requirements=list(char_def.goodwill_ability_goodwill_requirements),
         goodwill_ability_once_per_loop=list(char_def.goodwill_ability_once_per_loop),
@@ -132,6 +136,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
     trait_rule = str(data.get("trait_rule", ""))
     script_constraints = [str(v) for v in data.get("script_constraints", [])]
 
+    goodwill_abilities = _parse_goodwill_abilities(data, character_id)
     goodwill_texts = [str(v) for v in data.get("goodwill_ability_texts", [])]
     raw_goodwill_requirements = data.get("goodwill_ability_goodwill_requirements", [])
     goodwill_requirements = [int(v) for v in raw_goodwill_requirements]
@@ -147,8 +152,147 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
         base_traits=base_traits,
         trait_rule=trait_rule,
         script_constraints=script_constraints,
+        goodwill_abilities=goodwill_abilities,
         goodwill_ability_texts=goodwill_texts,
         goodwill_ability_goodwill_requirements=goodwill_requirements,
         goodwill_ability_once_per_loop=goodwill_once,
         initial_area_candidates=initial_area_candidates,
     )
+
+
+def _parse_goodwill_abilities(data: dict[str, object], character_id: str) -> list[Ability]:
+    raw_structured = data.get("goodwill_abilities")
+    if isinstance(raw_structured, list):
+        return [_parse_goodwill_ability(item, character_id) for item in raw_structured if isinstance(item, dict)]
+    return _build_legacy_goodwill_abilities(data, character_id)
+
+
+def _build_legacy_goodwill_abilities(data: dict[str, object], character_id: str) -> list[Ability]:
+    texts = [str(v) for v in data.get("goodwill_ability_texts", [])]
+    requirements = [int(v) for v in data.get("goodwill_ability_goodwill_requirements", [])]
+    once_per_loop = [bool(v) for v in data.get("goodwill_ability_once_per_loop", [])]
+
+    abilities: list[Ability] = []
+    for slot in range(min(len(texts), len(requirements))):
+        text = texts[slot].strip()
+        if not text:
+            continue
+        abilities.append(
+            Ability(
+                ability_id=f"goodwill:{character_id}:{slot + 1}",
+                name=f"{character_id} 友好能力{slot + 1}",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                description=text,
+                condition=_legacy_goodwill_condition(character_id, slot),
+                effects=_legacy_goodwill_effects(character_id, slot),
+                goodwill_requirement=requirements[slot],
+                once_per_loop=once_per_loop[slot] if slot < len(once_per_loop) else False,
+                can_be_refused=True,
+            )
+        )
+    return abilities
+
+
+def _parse_goodwill_ability(data: dict[str, object], character_id: str) -> Ability:
+    return Ability(
+        ability_id=str(data.get("ability_id", "")) or f"goodwill:{character_id}:structured",
+        name=str(data.get("name", f"{character_id} 友好能力")),
+        ability_type=AbilityType(str(data.get("ability_type", AbilityType.OPTIONAL.value))),
+        timing=AbilityTiming(str(data.get("timing", AbilityTiming.PROTAGONIST_ABILITY.value))),
+        description=str(data.get("description", "")),
+        condition=_parse_condition(data["condition"]) if data.get("condition") else None,
+        effects=[_parse_effect(item) for item in data.get("effects", []) if isinstance(item, dict)],
+        sequential=bool(data.get("sequential", False)),
+        goodwill_requirement=int(data.get("goodwill_requirement", 0)),
+        once_per_loop=bool(data.get("once_per_loop", False)),
+        once_per_day=bool(data.get("once_per_day", False)),
+        can_be_refused=bool(data.get("can_be_refused", True)),
+    )
+
+
+def _parse_condition(data: dict[str, object]) -> Condition:
+    return Condition(
+        condition_type=str(data["condition_type"]),
+        params=dict(data.get("params", {})),
+    )
+
+
+def _parse_effect(data: dict[str, object]) -> Effect:
+    token_type = TokenType(str(data["token_type"])) if data.get("token_type") else None
+    condition = _parse_condition(data["condition"]) if data.get("condition") else None
+    return Effect(
+        effect_type=EffectType(str(data["effect_type"])),
+        target=str(data.get("target", "self")),
+        token_type=token_type,
+        amount=int(data.get("amount", 0)),
+        value=data.get("value"),
+        condition=condition,
+    )
+
+
+def _legacy_goodwill_condition(character_id: str, slot: int) -> Condition | None:
+    if character_id == "shrine_maiden" and slot == 0:
+        return Condition(
+            condition_type="area_is",
+            params={"target": "self", "value": AreaId.SHRINE.value},
+        )
+    return None
+
+
+def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
+    goodwill_map: dict[tuple[str, int], list[Effect]] = {
+        ("female_student", 0): [
+            Effect(
+                effect_type=EffectType.REMOVE_TOKEN,
+                target="same_area_other",
+                token_type=TokenType.PARANOIA,
+                amount=1,
+            )
+        ],
+        ("male_student", 0): [
+            Effect(
+                effect_type=EffectType.REMOVE_TOKEN,
+                target="same_area_other",
+                token_type=TokenType.PARANOIA,
+                amount=1,
+            )
+        ],
+        ("idol", 0): [
+            Effect(
+                effect_type=EffectType.REMOVE_TOKEN,
+                target="same_area_other",
+                token_type=TokenType.PARANOIA,
+                amount=1,
+            )
+        ],
+        ("idol", 1): [
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target="same_area_other",
+                token_type=TokenType.GOODWILL,
+                amount=1,
+            )
+        ],
+        ("office_worker", 0): [
+            Effect(
+                effect_type=EffectType.REVEAL_IDENTITY,
+                target="self",
+            )
+        ],
+        ("shrine_maiden", 0): [
+            Effect(
+                effect_type=EffectType.REMOVE_TOKEN,
+                target="same_area_board",
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            )
+        ],
+        ("shrine_maiden", 1): [
+            Effect(
+                effect_type=EffectType.REVEAL_IDENTITY,
+                target="same_area_any",
+            )
+        ],
+    }
+    return list(goodwill_map.get((character_id, slot), []))

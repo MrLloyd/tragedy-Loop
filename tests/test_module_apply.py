@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from engine.game_controller import GameController
+from engine.game_controller import GameController, UICallback
 from engine.game_state import GameState
-from engine.models.enums import GamePhase
+from engine.models.enums import GamePhase, Outcome
+from engine.models.script import CharacterSetup
+from engine.phases.phase_base import WaitForInput
 from engine.rules.module_loader import (
     apply_loaded_module,
     build_game_state_from_module,
@@ -79,3 +81,56 @@ def test_start_game_reaches_playable_phase_with_prepared_script() -> None:
 
     assert controller.state.module_def is not None
     assert controller.state_machine.current_phase == GamePhase.MASTERMIND_ACTION
+
+
+class _FinalGuessUI(UICallback):
+    def __init__(self) -> None:
+        self.waits: list[WaitForInput] = []
+        self.outcomes: list[Outcome] = []
+
+    def on_wait_for_input(self, wait: WaitForInput) -> None:
+        self.waits.append(wait)
+
+    def on_game_over(self, outcome: Outcome) -> None:
+        self.outcomes.append(outcome)
+
+
+def test_final_guess_correct_guess_leads_to_protagonist_win() -> None:
+    ui = _FinalGuessUI()
+    controller = GameController(ui_callback=ui)
+    controller.state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("idol", "rumormonger"),
+            CharacterSetup("office_worker", "killer"),
+            CharacterSetup("shrine_maiden", "serial_killer"),
+            CharacterSetup("doctor", "friend"),
+        ],
+        incidents=[],
+    )
+    controller.state.failure_flags.add("loop_failed")
+    controller.state_machine.current_phase = GamePhase.FINAL_GUESS
+
+    controller._run_phase()
+
+    wait = ui.waits[-1]
+    controller.provide_input(
+        {
+            "rule_y_id": "btx_murder_plan",
+            "rule_x_ids": ["btx_rumors", "btx_latent_serial_killer"],
+            "character_identities": {
+                character.character_id: character.identity_id
+                for character in controller.state.characters.values()
+            },
+        }
+    )
+
+    assert wait.input_type == "final_guess"
+    assert controller.state.final_guess_correct is True
+    assert ui.outcomes[-1] == Outcome.PROTAGONIST_WIN

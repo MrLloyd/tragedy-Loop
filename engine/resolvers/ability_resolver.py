@@ -17,7 +17,7 @@ from engine.models.ability import Ability
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
 from engine.models.identity import IdentityDef
-from engine.rules.runtime_identities import sync_dynamic_identities
+from engine.rules.persistent_effects import settle_persistent_effects
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,26 @@ class AbilityResolver:
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
             if alive_only and (not ch.is_alive or ch.is_removed):
+                continue
+
+            if ch.goodwill_abilities:
+                for ability in ch.goodwill_abilities:
+                    if ability.timing != timing:
+                        continue
+                    if ability_type is not None and ability.ability_type != ability_type:
+                        continue
+                    if ch.tokens.goodwill < ability.goodwill_requirement:
+                        continue
+                    candidate = AbilityCandidate(
+                        source_kind="goodwill",
+                        source_id=ch.character_id,
+                        ability=ability,
+                    )
+                    if not self.evaluate_condition(state, candidate.ability.condition, owner_id=ch.character_id):
+                        continue
+                    if not self.is_ability_available(state, candidate):
+                        continue
+                    result.append(candidate)
                 continue
 
             texts = ch.goodwill_ability_texts
@@ -103,7 +123,7 @@ class AbilityResolver:
         ability_type: AbilityType | None = None,
         alive_only: bool = True,
     ) -> list[AbilityCandidate]:
-        sync_dynamic_identities(state)
+        settle_persistent_effects(state)
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
             if alive_only and (not ch.is_alive or ch.is_removed):
@@ -189,56 +209,28 @@ class AbilityResolver:
         alive_only: bool = True,
     ) -> list[AbilityCandidate]:
         """常驻派生能力入口（P4-3）。"""
-        sync_dynamic_identities(state)
+        settle_persistent_effects(state)
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
             if alive_only and (not ch.is_alive or ch.is_removed):
                 continue
 
-            if ch.identity_id != "unstable_factor":
+            identity_def = state.identity_defs.get(ch.identity_id)
+            if identity_def is None:
                 continue
 
-            if self.evaluate_condition(
-                state,
-                Condition(
-                    condition_type="token_check",
-                    params={
-                        "target": AreaId.SCHOOL.value,
-                        "token": TokenType.INTRIGUE.value,
-                        "operator": ">=",
-                        "value": 2,
-                    },
-                ),
-                owner_id=ch.character_id,
-            ):
+            for derived_rule in identity_def.derived_identities:
+                if not self.evaluate_condition(
+                    state,
+                    derived_rule.condition,
+                    owner_id=ch.character_id,
+                ):
+                    continue
                 result.extend(
                     self._collect_identity_as_derived(
                         state,
                         owner_id=ch.character_id,
-                        derived_identity_id="rumormonger",
-                        timing=timing,
-                        ability_type=ability_type,
-                    )
-                )
-
-            if self.evaluate_condition(
-                state,
-                Condition(
-                    condition_type="token_check",
-                    params={
-                        "target": AreaId.CITY.value,
-                        "token": TokenType.INTRIGUE.value,
-                        "operator": ">=",
-                        "value": 2,
-                    },
-                ),
-                owner_id=ch.character_id,
-            ):
-                result.extend(
-                    self._collect_identity_as_derived(
-                        state,
-                        owner_id=ch.character_id,
-                        derived_identity_id="key_person",
+                        derived_identity_id=derived_rule.derived_identity_id,
                         timing=timing,
                         ability_type=ability_type,
                     )
@@ -349,7 +341,7 @@ class AbilityResolver:
 
     def active_traits(self, state: GameState, character_id: str) -> set[Trait]:
         """角色当前生效特性：基础特性 + 当前身份特性 + 常驻派生特性。"""
-        sync_dynamic_identities(state)
+        settle_persistent_effects(state)
         ch = state.characters.get(character_id)
         if ch is None:
             return set()
@@ -416,6 +408,12 @@ class AbilityResolver:
             target = state.characters.get(target_id)
             return bool(target is not None and target.identity_id == expected)
 
+        if cond_type == "original_identity_is":
+            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            expected = str(params.get("value", ""))
+            target = state.characters.get(target_id)
+            return bool(target is not None and target.original_identity_id == expected)
+
         if cond_type == "other_identity_is":
             expected = str(params.get("value", ""))
             target = state.characters.get(other_id)
@@ -458,10 +456,13 @@ class AbilityResolver:
             return bool(target is not None and target.area.value == expected_area)
 
         if cond_type == "token_check":
-            return self._evaluate_token_check(state, params, owner_id=owner_id)
+            return self._evaluate_token_check(state, params, owner_id=owner_id, other_id=other_id)
 
         if cond_type == "identity_token_check":
             return self._evaluate_identity_token_check(state, params)
+
+        if cond_type == "identity_initial_area_board_token_check":
+            return self._evaluate_identity_initial_area_board_token_check(state, params)
 
         if cond_type == "same_area_identity_token_check":
             return self._evaluate_same_area_identity_token_check(state, params, owner_id=owner_id)
@@ -633,8 +634,9 @@ class AbilityResolver:
         params: dict[str, object],
         *,
         owner_id: str,
+        other_id: str = "",
     ) -> bool:
-        target = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id)
+        target = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
         token_name = params.get("token")
         if not isinstance(token_name, str):
             return False
@@ -683,6 +685,34 @@ class AbilityResolver:
             if ch.identity_id != identity_id:
                 continue
             if _compare_number(ch.tokens.get(token_type), operator, value):
+                return True
+        return False
+
+    def _evaluate_identity_initial_area_board_token_check(
+        self,
+        state: GameState,
+        params: dict[str, object],
+    ) -> bool:
+        identity_id = str(params.get("identity_id", ""))
+        token_name = params.get("token")
+        if not isinstance(token_name, str):
+            return False
+        try:
+            token_type = TokenType(token_name)
+        except ValueError:
+            return False
+        operator = str(params.get("operator", "=="))
+        value = int(params.get("value", 0))
+
+        for ch in state.characters.values():
+            if ch.is_removed:
+                continue
+            if ch.identity_id != identity_id:
+                continue
+            board_area = state.board.areas.get(ch.initial_area)
+            if board_area is None:
+                continue
+            if _compare_number(board_area.tokens.get(token_type), operator, value):
                 return True
         return False
 

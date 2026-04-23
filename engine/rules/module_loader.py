@@ -17,7 +17,7 @@ from engine.game_state import GameState
 from engine.models.character import CharacterState
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, EffectType, TokenType, Trait
-from engine.models.identity import IdentityDef
+from engine.models.identity import DerivedIdentityRule, IdentityDef
 from engine.models.incident import IncidentDef, IncidentSchedule
 from engine.models.script import CharacterSetup, ModuleDef, RuleDef
 from engine.rules.character_loader import (
@@ -334,6 +334,18 @@ def _parse_identity_def(data: dict[str, Any]) -> IdentityDef:
         traits=traits,
         max_count=data.get("max_count"),
         abilities=[_parse_ability(a) for a in data.get("abilities", [])],
+        derived_identities=[
+            _parse_derived_identity_rule(item)
+            for item in data.get("derived_identities", [])
+        ],
+        description=data.get("description", ""),
+    )
+
+
+def _parse_derived_identity_rule(data: dict[str, Any]) -> DerivedIdentityRule:
+    return DerivedIdentityRule(
+        derived_identity_id=data["derived_identity_id"],
+        condition=_parse_condition(data["condition"]),
         description=data.get("description", ""),
     )
 
@@ -357,6 +369,7 @@ def _parse_rule_def(data: dict[str, Any]) -> RuleDef:
         rule_type=data["rule_type"],
         module=data["module"],
         identity_slots=data.get("identity_slots", {}),
+        identity_slot_ranges=data.get("identity_slot_ranges", {}),
         abilities=[_parse_ability(a) for a in data.get("abilities", [])],
         description=data.get("description", ""),
     )

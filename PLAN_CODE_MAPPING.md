@@ -5,6 +5,17 @@
 
 ---
 
+## 相关计划文档索引
+
+| 文档 | 用途 |
+|------|------|
+| `PLAN.md` | 主计划与阶段状态，作为里程碑单一事实源 |
+| `PHASE7_GAP_CHECKLIST.md` | Phase 7 细化缺口：FS / BTX 规则、身份、事件、角色友好能力、特性 |
+| `PHASE6_GAME_PREPARE_UI_DRAFT.md` | Phase 6 新游戏 / 准备页 UI 草案 |
+| `WORK_PROGRESS.md` | 当前工作断点、验证命令与下次继续建议 |
+
+---
+
 ## 路径速查（代码 → `PLAN.md`）
 
 | 路径 / 区域 | 主要对应 `PLAN.md` |
@@ -39,6 +50,7 @@
 | `tests/test_registry_loader.py` | §2 Phase 2（registry + `load_module`） |
 | `tests/test_character_loader.py`, `tests/test_ability_resolver.py` | §2 Phase 4（数据层与能力层回归） |
 | `ui/widgets/`, `ui/controllers/`, `ui/screens/`（基础结构已有） | §2 Phase 5（UI 框架启动中） |
+| `PHASE7_GAP_CHECKLIST.md` | §2 Phase 7（端到端可玩前的 FS / BTX 细化缺口索引） |
 
 ---
 
@@ -136,6 +148,17 @@
 
 - 依赖 Phase 1–4 闭环 + Phase 5（若需要图形界面）；当前以引擎与测试为主要验证手段。
 
+### Phase 7：FS / BTX 细节补齐与端到端可玩收敛
+
+| PLAN 主题 | 代码 / 文档落点 |
+|-----------|-----------------|
+| Phase 7 缺口索引 | `PHASE7_GAP_CHECKLIST.md` |
+| FS / BTX 规则与身份细节 | `data/modules/first_steps.json`、`data/modules/basic_tragedy_x.json`、`engine/resolvers/ability_resolver.py`、`engine/phases/phase_base.py` |
+| FS / BTX 事件细节 | `data/modules/*.json`、`engine/resolvers/incident_resolver.py`、`engine/phases/phase_base.py` |
+| 所有角色友好能力结构化迁移 | `data/characters.json`、`engine/rules/character_loader.py`、`engine/models/character.py`、`engine/validation/static_data.py` |
+| 旧友好能力字段删除计划 | `PHASE7_GAP_CHECKLIST.md` 第 9 项 |
+| 对表测试矩阵 | `tests/test_phase5_first_steps_abilities.py`、`tests/test_phase4_handlers.py`、后续新增 Phase 7 回归测试 |
+
 ---
 
 ## 3) `PLAN.md` §3 规则边界案例 → 代码锚点
@@ -157,7 +180,8 @@
 3. **P4-2 统一能力层**：以 `ability_resolver` 为统一入口，按角色友好 / 身份 / 规则 / 派生来源分层。
 4. **P4-3 / P4-4**：先补 FS / BTX 身份与规则能力，再接 `Playwright` / `Protagonist` / `TurnEnd` / `LoopStart` handler。
 5. **Phase 5 UI**：数据与引擎稳定后再接 PySide6。
-6. **测试**：随功能扩展补充 `tests/`，与 `PLAN.md` Phase DoD 对齐。
+6. **Phase 7 收敛**：按 `PHASE7_GAP_CHECKLIST.md` 补齐 FS / BTX 规则、身份、事件、角色友好能力与特性。
+7. **测试**：随功能扩展补充 `tests/`，与 `PLAN.md` Phase DoD 对齐。
 
 ---
 

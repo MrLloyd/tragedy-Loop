@@ -42,6 +42,7 @@ class WaitForInput:
     options: list[Any] = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
     player: str = "mastermind"   # 谁需要输入
+    wait_id: int = 0
     callback: Optional[Callable] = None
 
 
@@ -368,7 +369,6 @@ class LoopStartHandler(PhaseHandler):
     phase = GamePhase.LOOP_START
 
     def execute(self, state: GameState) -> PhaseSignal:
-        self._apply_causal_line(state)
         mandatory = self.ability_resolver.collect_abilities(
             state,
             timing=AbilityTiming.LOOP_START,
@@ -380,28 +380,6 @@ class LoopStartHandler(PhaseHandler):
             mandatory,
             next_signal_factory=PhaseComplete,
         )
-
-    def _apply_causal_line(self, state: GameState) -> None:
-        """BTX 因果线：上轮结束时有友好的角色，本轮开始 +2 不安。"""
-        if not any(rule.rule_id == "btx_causal_line" for rule in state.script.rules_x):
-            return
-
-        last_snapshot = state.get_last_loop_snapshot()
-        if last_snapshot is None:
-            return
-
-        effects = [
-            Effect(
-                effect_type=EffectType.PLACE_TOKEN,
-                target=character_id,
-                token_type=TokenType.PARANOIA,
-                amount=2,
-            )
-            for character_id, character_snapshot in last_snapshot.character_snapshots.items()
-            if character_snapshot.tokens.goodwill > 0 and character_id in state.characters
-        ]
-        if effects:
-            self.atomic_resolver.resolve(state, effects)
 
 
 class TurnStartHandler(PhaseHandler):
@@ -977,30 +955,92 @@ class LoopEndHandler(PhaseHandler):
         return PhaseComplete()
 
 
-class LoopEndCheckHandler(PhaseHandler):
-    phase = GamePhase.LOOP_END_CHECK
-
-    def execute(self, state: GameState) -> PhaseSignal:
-        # 判定分流（由 StateMachine 处理，此处仅做失败条件收集）
-        # TODO: 检查规则 Y / 规则 X 的失败条件
-        return PhaseComplete()
-
-
 class FinalGuessHandler(PhaseHandler):
     phase = GamePhase.FINAL_GUESS
 
     def execute(self, state: GameState) -> PhaseSignal:
-        # 最终决战：主人公推理身份
-        def _on_choice(_: Any) -> PhaseSignal:
-            # Phase 1 最小闭环：接收输入即可继续推进，具体判定后续实现。
+        state.final_guess_correct = None
+        return self._build_wait(state)
+
+    def _build_wait(
+        self,
+        state: GameState,
+        *,
+        errors: list[str] | None = None,
+    ) -> WaitForInput:
+        context = {
+            "errors": list(errors or []),
+            "rule_y_id": state.script.rule_y.rule_id if state.script.rule_y is not None else None,
+            "rule_x_ids": [rule.rule_id for rule in state.script.rules_x],
+            "character_ids": [setup.character_id for setup in state.script.characters],
+            "identity_ids": sorted(state.identity_defs.keys()),
+        }
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            payload, error = self._normalize_final_guess_payload(state, choice)
+            if error is not None:
+                return self._build_wait(state, errors=[error])
+
+            state.final_guess_correct = self._is_final_guess_correct(state, payload)
             return PhaseComplete()
 
         return WaitForInput(
             input_type="final_guess",
             prompt="最终决战：请推理所有角色身份与规则",
+            context=context,
             player="protagonists",
             callback=_on_choice,
         )
+
+    def _normalize_final_guess_payload(
+        self,
+        state: GameState,
+        choice: Any,
+    ) -> tuple[dict[str, Any], str | None]:
+        if not isinstance(choice, dict):
+            return {}, "最终决战提交格式错误：需要字典 payload"
+
+        raw_rule_y_id = choice.get("rule_y_id")
+        raw_rule_x_ids = choice.get("rule_x_ids")
+        raw_character_identities = choice.get("character_identities")
+
+        if not isinstance(raw_rule_y_id, str) or not raw_rule_y_id:
+            return {}, "最终决战缺少 rule_y_id"
+        if not isinstance(raw_rule_x_ids, list) or not all(isinstance(item, str) for item in raw_rule_x_ids):
+            return {}, "最终决战缺少 rule_x_ids"
+        if not isinstance(raw_character_identities, dict):
+            return {}, "最终决战缺少 character_identities"
+
+        expected_character_ids = [setup.character_id for setup in state.script.characters]
+        guessed_character_ids = list(raw_character_identities.keys())
+        if set(guessed_character_ids) != set(expected_character_ids):
+            return {}, "最终决战需要为所有登场角色提交身份猜测"
+        if not all(isinstance(identity_id, str) and identity_id for identity_id in raw_character_identities.values()):
+            return {}, "最终决战身份猜测必须为非空字符串"
+
+        return {
+            "rule_y_id": raw_rule_y_id,
+            "rule_x_ids": list(raw_rule_x_ids),
+            "character_identities": {
+                str(character_id): str(identity_id)
+                for character_id, identity_id in raw_character_identities.items()
+            },
+        }, None
+
+    @staticmethod
+    def _is_final_guess_correct(state: GameState, payload: dict[str, Any]) -> bool:
+        actual_rule_y_id = state.script.rule_y.rule_id if state.script.rule_y is not None else None
+        if payload["rule_y_id"] != actual_rule_y_id:
+            return False
+
+        if set(payload["rule_x_ids"]) != {rule.rule_id for rule in state.script.rules_x}:
+            return False
+
+        actual_character_identities = {
+            setup.character_id: state.characters[setup.character_id].original_identity_id
+            for setup in state.script.characters
+        }
+        return payload["character_identities"] == actual_character_identities
 
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1063,6 @@ def create_phase_handlers(event_bus: EventBus,
         LeaderRotateHandler,
         TurnEndHandler,
         LoopEndHandler,
-        LoopEndCheckHandler,
         FinalGuessHandler,
     ]
     return {

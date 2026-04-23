@@ -14,9 +14,9 @@ from engine.rules.module_loader import apply_loaded_module, load_module
 from engine.state_machine import StateMachine
 
 
-def test_state_machine_loop_end_check_branches() -> None:
+def test_state_machine_loop_end_branches() -> None:
     sm = StateMachine()
-    sm.current_phase = GamePhase.LOOP_END_CHECK
+    sm.current_phase = GamePhase.LOOP_END
     assert sm.advance(
         failure_reached=False,
         protagonist_dead=False,
@@ -24,7 +24,7 @@ def test_state_machine_loop_end_check_branches() -> None:
         has_final_guess=True,
     ) == GamePhase.GAME_END
 
-    sm.current_phase = GamePhase.LOOP_END_CHECK
+    sm.current_phase = GamePhase.LOOP_END
     assert sm.advance(
         failure_reached=True,
         protagonist_dead=False,
@@ -32,7 +32,7 @@ def test_state_machine_loop_end_check_branches() -> None:
         has_final_guess=True,
     ) == GamePhase.NEXT_LOOP
 
-    sm.current_phase = GamePhase.LOOP_END_CHECK
+    sm.current_phase = GamePhase.LOOP_END
     assert sm.advance(
         failure_reached=True,
         protagonist_dead=False,
@@ -40,14 +40,13 @@ def test_state_machine_loop_end_check_branches() -> None:
         has_final_guess=True,
     ) == GamePhase.FINAL_GUESS
 
-    sm.current_phase = GamePhase.LOOP_END_CHECK
+    sm.current_phase = GamePhase.LOOP_END
     assert sm.advance(
         failure_reached=True,
         protagonist_dead=False,
         is_last_loop=True,
         has_final_guess=False,
     ) == GamePhase.GAME_END
-
 
 def test_state_machine_force_loop_end_jump() -> None:
     sm = StateMachine()

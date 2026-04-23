@@ -25,6 +25,8 @@ def test_load_character_defs_reads_character_templates() -> None:
     assert len(ai.goodwill_ability_texts) == 4
     assert len(ai.goodwill_ability_goodwill_requirements) == 4
     assert len(ai.goodwill_ability_once_per_loop) == 2
+    assert len(ai.goodwill_abilities) == 1
+    assert ai.goodwill_abilities[0].ability_id == "goodwill:ai:1"
 
 
 def test_instantiate_character_state_applies_template_and_identity_alias() -> None:
@@ -40,6 +42,8 @@ def test_instantiate_character_state_applies_template_and_identity_alias() -> No
     assert len(state.goodwill_ability_texts) == 4
     assert len(state.goodwill_ability_goodwill_requirements) == 4
     assert len(state.goodwill_ability_once_per_loop) == 2
+    assert len(state.goodwill_abilities) == 1
+    assert state.goodwill_abilities[0].goodwill_requirement == 3
 
 
 def test_build_game_state_from_module_supports_test_instance_import() -> None:

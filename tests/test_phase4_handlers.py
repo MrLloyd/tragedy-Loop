@@ -3,9 +3,11 @@ from __future__ import annotations
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.enums import AbilityTiming, AreaId, TokenType
+from engine.models.enums import AbilityTiming, AreaId, PlayerRole, TokenType
+from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
     ForceLoopEnd,
+    FinalGuessHandler,
     LoopEndHandler,
     LoopStartHandler,
     PhaseComplete,
@@ -16,7 +18,8 @@ from engine.phases.phase_base import (
 )
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
-from engine.rules.module_loader import apply_loaded_module, load_module
+from engine.rules.module_loader import apply_loaded_module, build_game_state_from_module, load_module
+from engine.visibility import Visibility
 
 
 def _resolver_bundle() -> tuple[EventBus, AtomicResolver]:
@@ -522,3 +525,117 @@ def test_loop_end_handler_resolves_loss_conditions_and_saves_snapshot() -> None:
     assert "friend_dead" in state.failure_flags
     assert state.characters["friend"].revealed is True
     assert len(state.loop_history) == 1
+    assert state.cross_loop_memory.revealed_identities_last_loop == {"friend": True}
+
+
+def test_friend_death_failure_reveals_identity_to_protagonist_view() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = LoopEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["friend"] = CharacterState(
+        character_id="friend",
+        name="亲友",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="friend",
+        original_identity_id="friend",
+        is_alive=False,
+    )
+
+    before = Visibility.filter_for_role(state, PlayerRole.PROTAGONIST_0)
+    before_friend = next(ch for ch in before.characters if ch.character_id == "friend")
+
+    signal = handler.execute(state)
+
+    after = Visibility.filter_for_role(state, PlayerRole.PROTAGONIST_0)
+    after_friend = next(ch for ch in after.characters if ch.character_id == "friend")
+
+    assert isinstance(signal, PhaseComplete)
+    assert before_friend.identity == "???"
+    assert after_friend.identity == "friend"
+    assert "friend_dead" in state.failure_flags
+
+
+def test_final_guess_handler_accepts_correct_guess() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = FinalGuessHandler(bus, resolver)
+    loaded = load_module("basic_tragedy_x")
+    state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("idol", "rumormonger"),
+            CharacterSetup("office_worker", "killer"),
+            CharacterSetup("shrine_maiden", "serial_killer"),
+            CharacterSetup("doctor", "friend"),
+        ],
+        incidents=[],
+    )
+    state.module_def = loaded.module_def
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "final_guess"
+    assert signal.context["rule_y_id"] == "btx_murder_plan"
+    assert signal.context["rule_x_ids"] == ["btx_rumors", "btx_latent_serial_killer"]
+
+    result = signal.callback(
+        {
+            "rule_y_id": "btx_murder_plan",
+            "rule_x_ids": ["btx_latent_serial_killer", "btx_rumors"],
+            "character_identities": {
+                "male_student": "mastermind",
+                "female_student": "key_person",
+                "idol": "rumormonger",
+                "office_worker": "killer",
+                "shrine_maiden": "serial_killer",
+                "doctor": "friend",
+            },
+        }
+    )
+
+    assert isinstance(result, PhaseComplete)
+    assert state.final_guess_correct is True
+
+
+def test_final_guess_handler_reprompts_on_invalid_payload() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = FinalGuessHandler(bus, resolver)
+    state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+        ],
+        incidents=[],
+        skip_script_validation=True,
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    retry = signal.callback(
+        {
+            "rule_y_id": "btx_murder_plan",
+            "rule_x_ids": ["btx_rumors", "btx_latent_serial_killer"],
+            "character_identities": {
+                "male_student": "mastermind",
+            },
+        }
+    )
+
+    assert isinstance(retry, WaitForInput)
+    assert retry.input_type == "final_guess"
+    assert retry.context["errors"]
+    assert state.final_guess_correct is None

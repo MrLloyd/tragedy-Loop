@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from engine.models.enums import AbilityTiming, AreaId, DeathResult, EffectType, Outcome, TokenType, Trait
 from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.resolvers.ability_resolver import AbilityResolver
-from engine.rules.runtime_identities import apply_identity_change, sync_dynamic_identities
+from engine.rules.persistent_effects import settle_persistent_effects
+from engine.rules.runtime_identities import apply_identity_change
 
 if TYPE_CHECKING:
     from engine.game_state import GameState
@@ -98,7 +99,7 @@ class AtomicResolver:
     def _resolve_simultaneous(self, state: GameState,
                               effects: list[Effect],
                               perpetrator_id: str = "") -> ResolutionResult:
-        sync_dynamic_identities(state)
+        settle_persistent_effects(state)
         # ① 读：在快照上规划
         snapshot = state.snapshot()
         planned_mutations = []
@@ -109,6 +110,7 @@ class AtomicResolver:
         # ② 写：批量应用到真实状态
         for mutation in planned_mutations:
             self._apply_mutation(state, mutation)
+        settle_persistent_effects(state)
 
         # ③ 触发：收集并处理链式效果
         return self._process_triggers(state, planned_mutations)
@@ -188,6 +190,15 @@ class AtomicResolver:
             return [cid for cid, ch in snapshot.characters.items() if ch.is_alive and not ch.is_removed]
         if target == "any_board":
             return [area_id.value for area_id in snapshot.board.areas]
+        if target == "last_loop_goodwill_characters":
+            last_snapshot = snapshot.get_last_loop_snapshot()
+            if last_snapshot is None:
+                return []
+            return [
+                character_id
+                for character_id, character_snapshot in last_snapshot.character_snapshots.items()
+                if character_snapshot.tokens.goodwill > 0 and character_id in snapshot.characters
+            ]
         return [target]
 
     def _plan_effect(self, snapshot: GameState, effect: Effect,
@@ -431,6 +442,7 @@ class AtomicResolver:
 
         # 统一裁定终局
         outcome = self._adjudicate(terminal_effects, state)
+        settle_persistent_effects(state)
 
         # 裁定后发布终局事件
         if outcome == Outcome.PROTAGONIST_DEATH:
@@ -516,7 +528,7 @@ class AtomicResolver:
                         ))
 
         if mutation.mutation_type == "identity_change":
-            sync_dynamic_identities(state)
+            settle_persistent_effects(state)
 
         if mutation.mutation_type == "protagonist_death":
             if state.protagonist_dead:

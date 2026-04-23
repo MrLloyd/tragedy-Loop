@@ -350,6 +350,42 @@ def test_incident_without_legal_target_still_occurs_but_has_no_phenomenon() -> N
     assert state.incident_results_this_loop[-1].has_phenomenon is False
 
 
+def test_long_range_murder_can_only_target_character_with_two_intrigue() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("first_steps"))
+    state.current_day = 1
+    for cid in ("perp", "safe", "victim"):
+        state.characters[cid] = CharacterState(
+            character_id=cid,
+            name=cid,
+            area=AreaId.CITY,
+            initial_area=AreaId.CITY,
+            identity_id="平民",
+            original_identity_id="平民",
+            paranoia_limit=2,
+        )
+    state.characters["perp"].tokens.paranoia = 2
+    state.characters["safe"].tokens.intrigue = 1
+    state.characters["victim"].tokens.intrigue = 2
+
+    result = resolver.resolve_schedule(
+        state,
+        IncidentSchedule(
+            "long_range_murder",
+            day=1,
+            perpetrator_id="perp",
+            target_character_ids=["safe", "victim"],
+        ),
+    )
+
+    assert result.occurred is True
+    assert result.has_phenomenon is True
+    assert state.characters["safe"].is_alive is True
+    assert state.characters["victim"].is_alive is False
+
+
 def test_unease_spread_and_spread_use_hidden_targets_in_order() -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))

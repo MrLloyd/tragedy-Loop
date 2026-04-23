@@ -21,7 +21,6 @@ class GamePhase(Enum):
     LEADER_ROTATE = "leader_rotate"
     TURN_END = "turn_end"
     LOOP_END = "loop_end"
-    LOOP_END_CHECK = "loop_end_check"
     NEXT_LOOP = "next_loop"
     FINAL_GUESS = "final_guess"
     GAME_END = "game_end"

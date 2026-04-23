@@ -5,7 +5,9 @@ import pytest
 from engine.game_controller import GameController, UICallback
 from engine.models.cards import PlacementIntent
 from engine.models.enums import AreaId, GamePhase, PlayerRole
-from engine.phases.phase_base import WaitForInput
+from engine.models.script import CharacterSetup
+from engine.phases.phase_base import ForceLoopEnd, WaitForInput
+from engine.rules.module_loader import build_game_state_from_module
 from ui.controllers.new_game_controller import NewGameController, default_phase5_draft
 
 
@@ -68,12 +70,12 @@ def test_wait_for_input_without_callback_raises() -> None:
         controller._handle_signal(WaitForInput(input_type="broken"))
 
 
-def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
+def test_game_loop_completes_game_prepare_through_loop_end() -> None:
     """
     验证完整游戏循环：
     1. 从 GAME_PREPARE 开始
     2. 自动回填所有 WaitForInput
-    3. 推进到 LOOP_END_CHECK
+    3. 推进到 LOOP_END 并完成末尾分流
 
     流程：
       GAME_PREPARE
@@ -83,7 +85,7 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
       → INCIDENT → LEADER_ROTATE → TURN_END
       → (如非最终日则重复，否则进入 LOOP_END)
       → LOOP_END
-      → LOOP_END_CHECK ✓
+      → GAME_END / NEXT_LOOP / FINAL_GUESS ✓
     """
     ui = _StubUI()
     controller = GameController(ui_callback=ui)
@@ -93,12 +95,11 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
         days_per_loop=1,   # 1 天（直接到最终日）
     )
 
-    # 循环回填所有 WaitForInput 直到游戏到达目标阶段或结束
+    # 循环回填所有 WaitForInput 直到游戏结束
     max_iterations = 200  # 防止无限循环；剧作家逐张放牌会产生更多等待
     iteration = 0
 
-    while (controller.state_machine.current_phase != GamePhase.LOOP_END_CHECK
-           and controller.state_machine.current_phase != GamePhase.GAME_END
+    while (controller.state_machine.current_phase != GamePhase.GAME_END
            and iteration < max_iterations):
 
         # 如果有待处理的等待，回填输入
@@ -117,21 +118,46 @@ def test_game_loop_completes_game_prepare_to_loop_end_check() -> None:
 
         iteration += 1
 
-    # LOOP_END_CHECK 可能在一次 provide_input 的同步递归里立即推进到 GAME_END，
-    # 因此 current_phase 常为 GAME_END；以 phase 通知历史为准。
+    # LOOP_END 末尾直接分流；以 phase 通知历史验证结算入口。
     phases_visited = ui.phases
-    assert GamePhase.LOOP_END_CHECK in phases_visited, (
-        f"Expected LOOP_END_CHECK in phase history, got phases={phases_visited}, "
+    assert GamePhase.LOOP_END in phases_visited, (
+        f"Expected LOOP_END in phase history, got phases={phases_visited}, "
         f"current_phase={controller.state_machine.current_phase} after {iteration} iterations"
     )
-    assert controller.state_machine.current_phase in (
-        GamePhase.LOOP_END_CHECK,
-        GamePhase.GAME_END,
-    )
+    assert controller.state_machine.current_phase == GamePhase.GAME_END
 
     # 额外验证：确保经过了 Stub 处理器
     assert GamePhase.ACTION_RESOLVE in phases_visited, "Should have visited ACTION_RESOLVE"
     assert GamePhase.INCIDENT in phases_visited, "Should have visited INCIDENT"
+
+
+def test_forced_loop_end_still_runs_loop_end_resolution() -> None:
+    ui = _StubUI()
+    controller = GameController(ui_callback=ui)
+    controller.state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=2,
+        days_per_loop=3,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("doctor", "friend"),
+        ],
+        incidents=[],
+        skip_script_validation=True,
+    )
+    controller.state.characters["doctor"].is_alive = False
+    controller.state.failure_flags.add("key_person_dead")
+    controller.state_machine.current_phase = GamePhase.INCIDENT
+
+    controller._handle_signal(ForceLoopEnd(reason="key_person_dead"))
+
+    phases_visited = ui.phases
+    assert GamePhase.LOOP_END in phases_visited
+    assert controller.state.characters["doctor"].revealed is True
+    assert controller.state.cross_loop_memory.revealed_identities_last_loop["doctor"] is True
+    assert controller.state.current_loop == 2
 
 
 def _placement_for_wait(controller: GameController, wait: WaitForInput) -> PlacementIntent:

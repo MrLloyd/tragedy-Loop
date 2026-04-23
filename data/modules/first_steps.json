@@ -32,8 +32,32 @@
       "identity_slots": {
         "mastermind": 1
       },
-      "abilities": [],
-      "description": "First Steps 附录规则Y：复仇的火种"
+      "abilities": [
+        {
+          "ability_id": "fs_fail_mastermind_initial_area_intrigue_2_revenge",
+          "name": "复仇的火种失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "description": "轮回结束时，主谋的初始区域有2枚或以上密谋时主人公失败",
+          "condition": {
+            "condition_type": "identity_initial_area_board_token_check",
+            "params": {
+              "identity_id": "mastermind",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "mastermind_initial_area_intrigue_2"
+            }
+          ]
+        }
+      ],
+      "description": "失败条件：轮回结束时，主谋的初始区域有2枚或以上密谋"
     },
     {
       "rule_id": "fs_protect_this_place",
@@ -44,8 +68,32 @@
         "key_person": 1,
         "cultist": 1
       },
-      "abilities": [],
-      "description": "失败条件：轮回结束时，主谋的初始区域有2枚或以上密谋"
+      "abilities": [
+        {
+          "ability_id": "fs_fail_mastermind_initial_area_intrigue_2_protect",
+          "name": "守护此地失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "description": "轮回结束时，学校有2枚或以上密谋时主人公失败",
+          "condition": {
+            "condition_type": "token_check",
+            "params": {
+              "target": "school",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "mastermind_initial_area_intrigue_2"
+            }
+          ]
+        }
+      ],
+      "description": "失败条件：轮回结束时，学校有2枚或以上密谋"
     }
   ],
   "rules_x": [
@@ -117,8 +165,13 @@
       "module": "first_steps",
       "identity_slots": {
         "rumormonger": 1,
-        "friend": 1,
-        "thug": 2
+        "friend": 1
+      },
+      "identity_slot_ranges": {
+        "thug": {
+          "min": 0,
+          "max": 2
+        }
       },
       "abilities": [],
       "description": "剧本制作时，暴徒的人数可以为0-2人"

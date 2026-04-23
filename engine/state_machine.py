@@ -2,7 +2,7 @@
 
 纯流程控制，不含业务逻辑。负责：
 1. 线性阶段推进（15 个节点）
-2. 条件分支（TURN_END / LOOP_END_CHECK）
+2. 条件分支（TURN_END / LOOP_END）
 3. 虚线跳转（force_loop_end）
 """
 
@@ -25,9 +25,7 @@ _LINEAR_TRANSITIONS: dict[GamePhase, GamePhase] = {
     GamePhase.PROTAGONIST_ABILITY:GamePhase.INCIDENT,
     GamePhase.INCIDENT:           GamePhase.LEADER_ROTATE,
     GamePhase.LEADER_ROTATE:      GamePhase.TURN_END,
-    # TURN_END → 条件分支，不在此表
-    GamePhase.LOOP_END:           GamePhase.LOOP_END_CHECK,
-    # LOOP_END_CHECK → 条件分支，不在此表
+    # TURN_END / LOOP_END → 条件分支，不在此表
     GamePhase.NEXT_LOOP:          GamePhase.LOOP_START,
     GamePhase.FINAL_GUESS:        GamePhase.GAME_END,
 }
@@ -56,8 +54,8 @@ class StateMachine:
 
         参数仅在条件分支节点使用：
           - is_final_day: TURN_END 分支用
-          - failure_reached / protagonist_dead: LOOP_END_CHECK 分支用
-          - is_last_loop: LOOP_END_CHECK 分支用
+          - failure_reached / protagonist_dead: LOOP_END 分支用
+          - is_last_loop: LOOP_END 分支用
           - has_final_guess: 模组是否有最终决战（First Steps 无）
         """
         # ① 虚线跳转优先：任何阶段 → LOOP_END
@@ -71,8 +69,8 @@ class StateMachine:
             self.current_phase = self._branch_turn_end(is_final_day)
             return self.current_phase
 
-        if self.current_phase == GamePhase.LOOP_END_CHECK:
-            self.current_phase = self._branch_loop_end_check(
+        if self.current_phase == GamePhase.LOOP_END:
+            self.current_phase = self._branch_after_loop_end(
                 failure_reached=failure_reached,
                 protagonist_dead=protagonist_dead,
                 is_last_loop=is_last_loop,
@@ -120,7 +118,7 @@ class StateMachine:
         return GamePhase.TURN_START
 
     @staticmethod
-    def _branch_loop_end_check(
+    def _branch_after_loop_end(
         *,
         failure_reached: bool,
         protagonist_dead: bool,
@@ -128,7 +126,7 @@ class StateMachine:
         has_final_guess: bool,
     ) -> GamePhase:
         """
-        LOOP_END_CHECK 三路分支：
+        LOOP_END 末尾三路分支：
           1. 未达失败条件且主人公未死 → GAME_END（主人公胜利条件A）
           2. 达失败条件且非最后轮回   → NEXT_LOOP
           3. 达失败条件且最后轮回     → FINAL_GUESS（若模组有）/ GAME_END

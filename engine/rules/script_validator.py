@@ -206,9 +206,21 @@ def _validate_identity_slots(
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     required: dict[str, int] = {}
+    ranges: dict[str, tuple[int, int]] = {}
     for rule in rules:
         for identity_id, count in rule.identity_slots.items():
             required[identity_id] = required.get(identity_id, 0) + count
+        for identity_id, range_def in rule.identity_slot_ranges.items():
+            min_count = int(range_def.get("min", 0))
+            max_count = int(range_def.get("max", min_count))
+            previous = ranges.get(identity_id)
+            if previous is None:
+                ranges[identity_id] = (min_count, max_count)
+            else:
+                ranges[identity_id] = (
+                    previous[0] + min_count,
+                    previous[1] + max_count,
+                )
 
     actual: dict[str, int] = {}
     for setup in script.characters:
@@ -227,8 +239,18 @@ def _validate_identity_slots(
                 )
             )
 
+    for identity_id, (min_count, max_count) in ranges.items():
+        got = actual.get(identity_id, 0)
+        if got < min_count or got > max_count:
+            issues.append(
+                ValidationIssue(
+                    f"script.identity_slots.{identity_id}",
+                    f"expected {min_count}..{max_count}, got {got}",
+                )
+            )
+
     for identity_id, got in actual.items():
-        if identity_id not in required:
+        if identity_id not in required and identity_id not in ranges:
             identity_def = context.identity_defs.get(identity_id)
             max_count = identity_def.max_count if identity_def else None
             if max_count is None:

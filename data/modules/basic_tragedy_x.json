@@ -129,7 +129,30 @@
       "identity_slots": {
         "witch": 1
       },
-      "abilities": [],
+      "abilities": [
+        {
+          "ability_id": "btx_fail_witch_initial_area_intrigue_2",
+          "name": "魔女初始区域密谋失败条件",
+          "ability_type": "loss_condition",
+          "timing": "loop_end",
+          "condition": {
+            "condition_type": "identity_initial_area_board_token_check",
+            "params": {
+              "identity_id": "witch",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "protagonist_failure",
+              "target": "self",
+              "value": "witch_initial_area_intrigue_2"
+            }
+          ]
+        }
+      ],
       "description": "失败条件：轮回结束时，魔女的初始区域有2枚或以上密谋"
     }
   ],
@@ -199,7 +222,23 @@
       "rule_type": "X",
       "module": "basic_tragedy_x",
       "identity_slots": {},
-      "abilities": [],
+      "abilities": [
+        {
+          "ability_id": "btx_causal_line_loop_start_place_paranoia",
+          "name": "因果线轮回开始放置不安",
+          "ability_type": "mandatory",
+          "timing": "loop_start",
+          "description": "轮回开始时，上轮轮回结束时所有带有友好的角色全部放置2枚不安",
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": "last_loop_goodwill_characters",
+              "token_type": "paranoia",
+              "amount": 2
+            }
+          ]
+        }
+      ],
       "description": "轮回开始时，上轮轮回结束时所有带有友好的角色（包括尸体和被移除对象）全部放置2枚不安"
     },
     {
@@ -210,7 +249,99 @@
       "identity_slots": {
         "rumormonger": 1
       },
-      "abilities": [],
+      "abilities": [
+        {
+          "ability_id": "btx_delusion_spread_virus_persistent",
+          "name": "妄想扩大病毒",
+          "ability_type": "mandatory",
+          "timing": "always",
+          "description": "常驻：原始身份为平民的存活角色有3枚或以上不安时，当前身份变为杀人狂；低于3枚时恢复平民",
+          "effects": [
+            {
+              "effect_type": "change_identity",
+              "target": "any_character",
+              "value": "serial_killer",
+              "condition": {
+                "condition_type": "all_of",
+                "params": {
+                  "conditions": [
+                    {
+                      "condition_type": "character_alive",
+                      "params": {
+                        "target": "self"
+                      }
+                    },
+                    {
+                      "condition_type": "original_identity_is",
+                      "params": {
+                        "target": "self",
+                        "value": "平民"
+                      }
+                    },
+                    {
+                      "condition_type": "identity_is",
+                      "params": {
+                        "target": "self",
+                        "value": "平民"
+                      }
+                    },
+                    {
+                      "condition_type": "token_check",
+                      "params": {
+                        "target": "self",
+                        "token": "paranoia",
+                        "operator": ">=",
+                        "value": 3
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "effect_type": "change_identity",
+              "target": "any_character",
+              "value": "平民",
+              "condition": {
+                "condition_type": "all_of",
+                "params": {
+                  "conditions": [
+                    {
+                      "condition_type": "character_alive",
+                      "params": {
+                        "target": "self"
+                      }
+                    },
+                    {
+                      "condition_type": "original_identity_is",
+                      "params": {
+                        "target": "self",
+                        "value": "平民"
+                      }
+                    },
+                    {
+                      "condition_type": "identity_is",
+                      "params": {
+                        "target": "self",
+                        "value": "serial_killer"
+                      }
+                    },
+                    {
+                      "condition_type": "token_check",
+                      "params": {
+                        "target": "self",
+                        "token": "paranoia",
+                        "operator": "<",
+                        "value": 3
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ],
       "description": "常驻：某平民有3枚或以上不安时，该平民身份变为杀人狂；低于3枚时恢复平民"
     },
     {
@@ -650,6 +781,34 @@
       "module": "basic_tragedy_x",
       "traits": [
         "ignore_goodwill"
+      ],
+      "derived_identities": [
+        {
+          "derived_identity_id": "rumormonger",
+          "description": "学校有2枚或以上密谋时，获得传谣人的能力",
+          "condition": {
+            "condition_type": "token_check",
+            "params": {
+              "target": "school",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          }
+        },
+        {
+          "derived_identity_id": "key_person",
+          "description": "都市有2枚或以上密谋时，获得关键人物的能力",
+          "condition": {
+            "condition_type": "token_check",
+            "params": {
+              "target": "city",
+              "token": "intrigue",
+              "operator": ">=",
+              "value": 2
+            }
+          }
+        }
       ],
       "abilities": []
     }

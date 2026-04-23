@@ -5,8 +5,8 @@ from __future__ import annotations
 from engine.game_state import GameState
 from engine.models.character import CharacterState
 from engine.models.ability import Ability
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, TokenType, Trait
-from engine.models.effects import Condition
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
+from engine.models.effects import Condition, Effect
 from engine.models.identity import IdentityDef
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.rules.module_loader import apply_loaded_module, load_module
@@ -139,6 +139,48 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
     state.ability_runtime.usages_this_loop[resolver.ability_usage_key(abilities[0])] = 1
     abilities = resolver.collect_goodwill_abilities(state)
     assert len(abilities) == 0
+
+
+def test_collect_goodwill_abilities_prefers_structured_runtime_data() -> None:
+    state = _build_state_with_module()
+    state.characters["ai"] = CharacterState(
+        character_id="ai",
+        name="AI",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+        goodwill_abilities=[
+            Ability(
+                ability_id="goodwill:ai:structured",
+                name="AI 结构化友好能力",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                description="结构化能力",
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target="self",
+                        token_type=TokenType.GOODWILL,
+                        amount=1,
+                    )
+                ],
+                goodwill_requirement=2,
+                once_per_loop=True,
+                can_be_refused=True,
+            )
+        ],
+        goodwill_ability_texts=["旧能力", "", "", ""],
+        goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
+        goodwill_ability_once_per_loop=[False, False],
+    )
+    state.characters["ai"].tokens.add(TokenType.GOODWILL, 2)
+
+    resolver = AbilityResolver()
+    abilities = resolver.collect_goodwill_abilities(state)
+
+    assert [candidate.ability.ability_id for candidate in abilities] == ["goodwill:ai:structured"]
+    assert abilities[0].ability.effects[0].effect_type == EffectType.PLACE_TOKEN
 
 
 def test_evaluate_condition_for_attribute_and_paranoia_limit() -> None:
@@ -355,6 +397,106 @@ def test_btx_rule_identity_and_derived_abilities_are_collected() -> None:
     assert {c.ability.ability_id for c in friend_loop_start} == {"friend_loop_start_place_goodwill"}
     assert {c.ability.ability_id for c in derived_playwright} == {"rumormonger_playwright_place_paranoia"}
     assert {c.ability.ability_id for c in derived_on_death} == {"key_person_on_death"}
+
+
+def test_btx_causal_line_is_collected_as_rule_loop_start_ability() -> None:
+    state = GameState()
+    loaded = load_module("basic_tragedy_x")
+    apply_loaded_module(state, loaded)
+    state.script.rules_x = [
+        next(rule for rule in state.module_def.rules_x if rule.rule_id == "btx_causal_line")
+    ]
+
+    candidates = AbilityResolver().collect_rule_abilities(
+        state,
+        timing=AbilityTiming.LOOP_START,
+        ability_type=AbilityType.MANDATORY,
+    )
+
+    assert {candidate.ability.ability_id for candidate in candidates} == {
+        "btx_causal_line_loop_start_place_paranoia"
+    }
+    assert candidates[0].ability.effects[0].target == "last_loop_goodwill_characters"
+
+
+def test_unstable_factor_derived_identities_are_loaded_from_module_data() -> None:
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+
+    unstable = state.identity_defs["unstable_factor"]
+
+    assert [rule.derived_identity_id for rule in unstable.derived_identities] == [
+        "rumormonger",
+        "key_person",
+    ]
+    assert [rule.condition.params["target"] for rule in unstable.derived_identities] == [
+        "school",
+        "city",
+    ]
+
+
+def test_first_steps_initial_area_intrigue_rule_y_conditions_are_collected() -> None:
+    state = GameState()
+    loaded = load_module("first_steps")
+    apply_loaded_module(state, loaded)
+    state.characters["mastermind"] = CharacterState(
+        character_id="mastermind",
+        name="主谋角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="mastermind",
+        original_identity_id="mastermind",
+    )
+    state.board.areas[AreaId.HOSPITAL].tokens.add(TokenType.INTRIGUE, 2)
+    state.board.areas[AreaId.SCHOOL].tokens.add(TokenType.INTRIGUE, 2)
+    resolver = AbilityResolver()
+
+    collected: dict[str, set[str]] = {}
+    for rule_y_id in {"fs_revenge_kindling", "fs_protect_this_place"}:
+        state.script.rule_y = next(
+            rule for rule in state.module_def.rules_y
+            if rule.rule_id == rule_y_id
+        )
+        candidates = resolver.collect_rule_abilities(
+            state,
+            timing=AbilityTiming.LOOP_END,
+            ability_type=AbilityType.LOSS_CONDITION,
+        )
+        collected[rule_y_id] = {candidate.ability.ability_id for candidate in candidates}
+
+    assert collected == {
+        "fs_revenge_kindling": {"fs_fail_mastermind_initial_area_intrigue_2_revenge"},
+        "fs_protect_this_place": {"fs_fail_mastermind_initial_area_intrigue_2_protect"},
+    }
+
+
+def test_btx_giant_time_bomb_x_initial_area_intrigue_condition_is_collected() -> None:
+    state = GameState()
+    loaded = load_module("basic_tragedy_x")
+    apply_loaded_module(state, loaded)
+    state.script.rule_y = next(
+        rule for rule in state.module_def.rules_y
+        if rule.rule_id == "btx_giant_time_bomb_x"
+    )
+    state.characters["witch"] = CharacterState(
+        character_id="witch",
+        name="魔女角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.SHRINE,
+        identity_id="witch",
+        original_identity_id="witch",
+    )
+    state.board.areas[AreaId.SHRINE].tokens.add(TokenType.INTRIGUE, 2)
+
+    candidates = AbilityResolver().collect_rule_abilities(
+        state,
+        timing=AbilityTiming.LOOP_END,
+        ability_type=AbilityType.LOSS_CONDITION,
+    )
+
+    assert {candidate.ability.ability_id for candidate in candidates} == {
+        "btx_fail_witch_initial_area_intrigue_2"
+    }
 
 
 def test_resolve_targets_basic_selectors() -> None:

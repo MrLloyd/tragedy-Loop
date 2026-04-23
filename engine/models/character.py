@@ -6,6 +6,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Optional
 
+from engine.models.ability import Ability
 from engine.models.enums import AreaId, Attribute, TokenType, Trait
 
 
@@ -104,6 +105,7 @@ class CharacterState:
     entry_day: Optional[int] = None         # 第几天登场（转校生）
 
     # --- 运行时状态（不序列化到 JSON） ---
+    goodwill_abilities: list[Ability] = field(default_factory=list)
     goodwill_ability_texts: list[str] = field(default_factory=list)
     goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)

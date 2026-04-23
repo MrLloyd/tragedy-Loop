@@ -44,6 +44,13 @@ class AbilityRuntimeState:
     usages_this_day: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class CrossLoopMemory:
+    """跨轮回运行时记忆：仅保存后续轮回真正需要读取的数据。"""
+
+    revealed_identities_last_loop: dict[str, bool] = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # GameState — 聚合根
 # ---------------------------------------------------------------------------
@@ -82,6 +89,7 @@ class GameState:
     # ---- 失败 / 死亡 标记 ----
     failure_flags: set[str] = field(default_factory=set)
     protagonist_dead: bool = False
+    final_guess_correct: Optional[bool] = None
 
     # ---- 军人能力 ----
     soldier_protection_active: bool = False
@@ -115,6 +123,7 @@ class GameState:
 
     # ---- 跨轮回历史 ----
     loop_history: list[LoopSnapshot] = field(default_factory=list)
+    cross_loop_memory: CrossLoopMemory = field(default_factory=CrossLoopMemory)
 
     # ==================================================================
     # 初始化
@@ -249,6 +258,7 @@ class GameState:
     def save_loop_snapshot(self) -> None:
         """在 loop_end 阶段保存跨轮回快照"""
         char_snapshots = {}
+        revealed_identities_last_loop: dict[str, bool] = {}
         for cid, ch in self.characters.items():
             char_snapshots[cid] = CharacterEndState(
                 character_id=cid,
@@ -258,6 +268,7 @@ class GameState:
                 identity_revealed=ch.revealed,
                 area=ch.area,
             )
+            revealed_identities_last_loop[cid] = ch.revealed
         snap = LoopSnapshot(
             loop_number=self.current_loop,
             ex_gauge=self.ex_gauge,
@@ -265,6 +276,7 @@ class GameState:
             character_snapshots=char_snapshots,
         )
         self.loop_history.append(snap)
+        self.cross_loop_memory.revealed_identities_last_loop = revealed_identities_last_loop
 
     def get_last_loop_snapshot(self) -> Optional[LoopSnapshot]:
         if self.loop_history:

@@ -22,6 +22,9 @@ class RuleDef:
     # 该规则要求的身份及数量 {"关键人物": 1, "杀手": 1}
     identity_slots: dict[str, int] = field(default_factory=dict)
 
+    # 该规则允许的身份数量范围 {"暴徒": {"min": 0, "max": 2}}
+    identity_slot_ranges: dict[str, dict[str, int]] = field(default_factory=dict)
+
     # 追加规则带来的能力（失败条件、额外能力等）
     abilities: list[Ability] = field(default_factory=list)
 

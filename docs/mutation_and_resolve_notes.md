@@ -40,7 +40,7 @@
 | 类 | 作用简述 | 「执行」什么 / 注意 |
 |----|----------|---------------------|
 | **`GameController`** | **调度中枢**：状态机 + 阶段 + UI 回调 | `start_game`、`provide_input`、按阶段 `execute`、处理 `PhaseSignal`、轮回重置与游戏结束等 |
-| **`StateMachine`** | **纯流程**：当前阶段 → 下一阶段 | `advance` 的线性表与 `TURN_END` / `LOOP_END_CHECK` 分支、`force_loop_end` 虚线跳转；**不含**业务规则细节 |
+| **`StateMachine`** | **纯流程**：当前阶段 → 下一阶段 | `advance` 的线性表与 `TURN_END` / `LOOP_END` 末尾分支、`force_loop_end` 虚线跳转；**不含**业务规则细节 |
 | **`PhaseHandler`**（及各具体子类） | **每个 `GamePhase` 一段逻辑** | `execute(state)` 返回 `PhaseComplete` / `WaitForInput` / `ForceLoopEnd`；内部可逐步接入打牌、结算、事件等 |
 | **`PhaseComplete` / `WaitForInput` / `ForceLoopEnd`** | 阶段与控制器之间的**控制流信号** | 非持久状态，表达「推进 / 挂起 / 强制结束轮回」 |
 | **`AtomicResolver`** | **原子结算**：读快照 → 写状态 → 触发链 | `resolve(state, effects, ...)`：**传入的 `state` 为真实 `GameState`，会被原地修改**；`resolve` → `_plan_effect` / `_apply_mutation` / `_process_triggers`；消费 `Effect`，产出 `ResolutionResult` |

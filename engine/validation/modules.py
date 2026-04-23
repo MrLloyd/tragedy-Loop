@@ -68,7 +68,11 @@ def _validate_condition(
                     f"invalid TokenType: {tok!r}",
                 )
             )
-    if ct in {"identity_token_check", "same_area_identity_token_check"} and isinstance(params, dict):
+    if ct in {
+        "identity_token_check",
+        "identity_initial_area_board_token_check",
+        "same_area_identity_token_check",
+    } and isinstance(params, dict):
         identity_id = params.get("identity_id")
         if not isinstance(identity_id, str) or not identity_id.strip():
             issues.append(
@@ -146,6 +150,70 @@ def _validate_abilities(
         _validate_effects(ab.get("effects"), f"{ap}.effects", issues)
 
 
+def _validate_derived_identities(
+    derived: Any,
+    path: str,
+    identity_ids: frozenset[str],
+    issues: list[ValidationIssue],
+) -> None:
+    if derived is None:
+        return
+    if not isinstance(derived, list):
+        issues.append(ValidationIssue(path, "derived_identities must be an array"))
+        return
+    for idx, item in enumerate(derived):
+        ip = f"{path}[{idx}]"
+        if not isinstance(item, dict):
+            issues.append(ValidationIssue(ip, "derived identity rule must be an object"))
+            continue
+        derived_identity_id = item.get("derived_identity_id")
+        if derived_identity_id not in identity_ids:
+            issues.append(
+                ValidationIssue(
+                    f"{ip}.derived_identity_id",
+                    f"identity_id not defined in identities: {derived_identity_id!r}",
+                )
+            )
+        condition = item.get("condition")
+        if condition is None:
+            issues.append(ValidationIssue(f"{ip}.condition", "condition is required"))
+        else:
+            _validate_condition(condition, f"{ip}.condition", issues)
+
+
+def _validate_identity_slot_ranges(
+    ranges: Any,
+    path: str,
+    identity_ids: frozenset[str],
+    issues: list[ValidationIssue],
+) -> None:
+    if ranges is None:
+        return
+    if not isinstance(ranges, dict):
+        issues.append(ValidationIssue(path, "identity_slot_ranges must be an object"))
+        return
+    for slot_key, range_def in ranges.items():
+        rp = f"{path}.{slot_key}"
+        if slot_key not in identity_ids:
+            issues.append(
+                ValidationIssue(
+                    rp,
+                    f"identity_id not defined in identities: {slot_key!r}",
+                )
+            )
+        if not isinstance(range_def, dict):
+            issues.append(ValidationIssue(rp, "range must be an object"))
+            continue
+        min_count = range_def.get("min")
+        max_count = range_def.get("max")
+        if not isinstance(min_count, int) or min_count < 0:
+            issues.append(ValidationIssue(f"{rp}.min", "must be a non-negative integer"))
+        if not isinstance(max_count, int) or max_count < 0:
+            issues.append(ValidationIssue(f"{rp}.max", "must be a non-negative integer"))
+        if isinstance(min_count, int) and isinstance(max_count, int) and min_count > max_count:
+            issues.append(ValidationIssue(rp, "min must be <= max"))
+
+
 def _validate_rules(
     rules: Any,
     path_key: str,
@@ -203,6 +271,12 @@ def _validate_rules(
                             f"expected positive int, got {c!r}",
                         )
                     )
+        _validate_identity_slot_ranges(
+            rule.get("identity_slot_ranges"),
+            f"{rp}.identity_slot_ranges",
+            identity_ids,
+            issues,
+        )
         _validate_abilities(
             rule.get("abilities"),
             f"{rp}.abilities",
@@ -253,7 +327,16 @@ def _validate_identities(
             issues,
             seen_ability_ids,
         )
-    return frozenset(ids)
+    frozen_ids = frozenset(ids)
+    for i, idf in enumerate(identities):
+        if isinstance(idf, dict):
+            _validate_derived_identities(
+                idf.get("derived_identities"),
+                f"{file_rel}:identities[{i}].derived_identities",
+                frozen_ids,
+                issues,
+            )
+    return frozen_ids
 
 
 def _validate_incidents(

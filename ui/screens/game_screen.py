@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -52,8 +51,6 @@ class GameScreenSnapshot:
     wait_prompt: str = ""
     wait_player: str = ""
     wait_option_labels: list[str] = field(default_factory=list)
-    debug_snapshot: dict[str, object] = field(default_factory=dict)
-    debug_text: str = ""
     outcome: str = ""
 
     @property
@@ -70,8 +67,6 @@ class GameScreenModel:
     def sync_from_session(
         self,
         view_state: SessionViewState,
-        *,
-        debug_snapshot: dict[str, object] | None = None,
     ) -> None:
         snapshot = GameScreenSnapshot()
         visible = view_state.protagonist_visible_state
@@ -113,9 +108,6 @@ class GameScreenModel:
                 for option in wait.options
             ]
 
-        snapshot.debug_snapshot = dict(debug_snapshot or {})
-        snapshot.debug_text = self._format_debug_snapshot(snapshot.debug_snapshot)
-
         if view_state.outcome is not None:
             snapshot.outcome = outcome_name(view_state.outcome.value)
 
@@ -146,13 +138,6 @@ class GameScreenModel:
                 return f"{character_name(source_id)}：{ability.name}"
             return f"ability:{ability.name}"
         return str(option)
-
-    @staticmethod
-    def _format_debug_snapshot(debug_snapshot: dict[str, object]) -> str:
-        if not debug_snapshot:
-            return ""
-        return json.dumps(debug_snapshot, ensure_ascii=False, indent=2, sort_keys=True)
-
 
 try:  # pragma: no cover - widget rendering is not unit-tested
     from PySide6.QtCore import Qt
@@ -248,15 +233,6 @@ else:
             token_layout.addWidget(mastermind_box)
             root.addWidget(token_box)
 
-            debug_box = QGroupBox("调试快照（只读）")
-            debug_layout = QVBoxLayout(debug_box)
-            self.debug_text = QTextEdit()
-            self.debug_text.setReadOnly(True)
-            self.debug_refresh_button = QPushButton("刷新调试快照")
-            debug_layout.addWidget(self.debug_text)
-            debug_layout.addWidget(self.debug_refresh_button)
-            root.addWidget(debug_box)
-
             wait_box = QGroupBox("等待输入")
             wait_layout = QVBoxLayout(wait_box)
             self.wait_prompt = QLabel("-")
@@ -300,8 +276,6 @@ else:
             self.allow_button.clicked.connect(lambda: self._on_goodwill_response(True))
             self.refuse_button.clicked.connect(lambda: self._on_goodwill_response(False))
             self.target_type.currentIndexChanged.connect(self._refresh_target_ids)
-            self.debug_refresh_button.clicked.connect(self.refresh)
-
             self.refresh()
 
         def bind_session(self, session: GameSessionController) -> None:
@@ -316,10 +290,7 @@ else:
             if self._session is None:
                 return
 
-            self._model.sync_from_session(
-                self._session.view_state,
-                debug_snapshot=self._session.read_debug_snapshot(),
-            )
+            self._model.sync_from_session(self._session.view_state)
             snapshot = self._model.snapshot
             self.phase_value.setText(snapshot.phase or "-")
             self.loop_value.setText(snapshot.loop_text or "-")
@@ -334,7 +305,6 @@ else:
             self.mastermind_announce_text.setPlainText(
                 "\n".join(snapshot.mastermind_announcements)
             )
-            self.debug_text.setPlainText(snapshot.debug_text)
             self.wait_prompt.setText(
                 f"[{wait_type_name(snapshot.wait_input_type)}] {snapshot.wait_prompt}（{player_name(snapshot.wait_player)}）"
                 if snapshot.wait_input_type

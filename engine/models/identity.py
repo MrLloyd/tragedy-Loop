@@ -10,6 +10,15 @@ from engine.models.effects import Condition, Effect
 from engine.models.enums import Trait
 
 
+@dataclass
+class DerivedIdentityRule:
+    """身份在条件满足时临时获得另一个身份的能力。"""
+
+    derived_identity_id: str
+    condition: Condition
+    description: str = ""
+
+
 # ---------------------------------------------------------------------------
 # IdentityDef — 身份定义
 # ---------------------------------------------------------------------------
@@ -21,4 +30,5 @@ class IdentityDef:
     traits: set[Trait] = field(default_factory=set)
     max_count: Optional[int] = None  # 数量上限（None=无限制）
     abilities: list[Ability] = field(default_factory=list)
+    derived_identities: list[DerivedIdentityRule] = field(default_factory=list)
     description: str = ""
