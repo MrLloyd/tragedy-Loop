@@ -79,6 +79,9 @@ def validate_basic_script(
 
         if setup.character_id not in context.character_defs:
             issues.append(ValidationIssue(f"{path}.character_id", f"unknown character: {setup.character_id!r}"))
+            continue
+        character_def = context.character_defs[setup.character_id]
+        issues.extend(_validate_character_initial_area(path, setup, character_def))
         identity_id = normalize_identity_id(setup.identity_id)
         if identity_id != "平民" and identity_id not in context.identity_defs:
             issues.append(ValidationIssue(f"{path}.identity_id", f"unknown identity: {setup.identity_id!r}"))
@@ -288,3 +291,46 @@ def _has_script_constraint(character_def: CharacterDef, constraint: str) -> bool
     if constraint == "cannot_ignore_goodwill_identity":
         return "无视友好特性的身份" in text or "無視友好特性的身份" in text
     return False
+
+
+def _validate_character_initial_area(
+    path: str,
+    setup: CharacterSetup,
+    character_def: CharacterDef,
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    selected_area = str(setup.initial_area or "")
+    mode = getattr(character_def, "initial_area_mode", "fixed")
+    candidate_values = {area.value for area in character_def.initial_area_candidates}
+
+    if mode == "script_choice":
+        if not selected_area:
+            issues.append(ValidationIssue(f"{path}.initial_area", "initial_area is required for this character"))
+            return issues
+        if selected_area not in candidate_values:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.initial_area",
+                    f"invalid initial_area {selected_area!r}, expected one of {sorted(candidate_values)}",
+                )
+            )
+        return issues
+
+    if mode == "mastermind_each_loop":
+        if selected_area:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.initial_area",
+                    "initial_area must be decided at loop_start for this character",
+                )
+            )
+        return issues
+
+    if selected_area:
+        issues.append(
+            ValidationIssue(
+                f"{path}.initial_area",
+                "initial_area override is not allowed for this character",
+            )
+        )
+    return issues

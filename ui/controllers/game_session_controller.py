@@ -12,6 +12,7 @@ from engine.display_names import (
     outcome_name,
     phase_name,
     player_name,
+    revealed_identity_message,
     token_name,
 )
 from engine.debug import DebugSession, get_debug_snapshot
@@ -36,6 +37,7 @@ class SessionViewState:
     current_wait: WaitForInput | None = None
     protagonist_announcements: list[str] = field(default_factory=list)
     mastermind_announcements: list[str] = field(default_factory=list)
+    revealed_identity_messages: list[str] = field(default_factory=list)
     outcome: Outcome | None = None
 
     @property
@@ -283,6 +285,8 @@ class GameSessionController(UICallback):
         if isinstance(option, str):
             if option == "pass":
                 return "放弃 / 结束声明"
+            if option in {"goodwill", "paranoia", "intrigue", "hope", "despair", "guard"}:
+                return token_name(option)
             return display_target_name(option)
         card_type = getattr(option, "card_type", None)
         if card_type is not None:
@@ -300,6 +304,9 @@ class GameSessionController(UICallback):
             return
         log = self.game_controller.event_bus.log
         for event in log[self._last_event_log_index:]:
+            reveal_message = self._format_revealed_identity_message(event)
+            if reveal_message:
+                self.view_state.revealed_identity_messages.append(reveal_message)
             message = self._format_mastermind_event(event)
             if message:
                 self.view_state.mastermind_announcements.append(message)
@@ -317,6 +324,16 @@ class GameSessionController(UICallback):
             for key, value in sorted(event.data.items())
         )
         return f"{event_name}: {details}" if details else event_name
+
+    @staticmethod
+    def _format_revealed_identity_message(event: GameEvent) -> str:
+        if event.event_type.name != "IDENTITY_REVEALED":
+            return ""
+        character_id = str(event.data.get("character_id", "") or "")
+        identity_id = str(event.data.get("identity_id", "") or "")
+        if not character_id or not identity_id:
+            return ""
+        return revealed_identity_message(character_id, identity_id)
 
 
 _EVENT_TYPE_NAMES = {

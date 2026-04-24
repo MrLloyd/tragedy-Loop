@@ -112,6 +112,8 @@ class CharacterState:
     goodwill_abilities_used: dict[str, int] = field(default_factory=dict)
     # ability_id -> 本轮回已使用次数
     identity_change_reason: Optional[str] = None
+    derived_traits: set[Trait] = field(default_factory=set)
+    suppressed_traits: set[Trait] = field(default_factory=set)
 
     def reset_for_new_loop(self) -> None:
         """轮回重置：复活、清指示物、回初始位置"""
@@ -124,6 +126,8 @@ class CharacterState:
         self.curse_state = None
         self.identity_id = self.original_identity_id
         self.identity_change_reason = None
+        self.derived_traits.clear()
+        self.suppressed_traits.clear()
 
     def snapshot(self) -> CharacterState:
         """深拷贝，用于原子结算的读阶段"""

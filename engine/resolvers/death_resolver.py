@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from engine.models.enums import DeathResult, TokenType, Trait
-from engine.rules.persistent_effects import settle_persistent_effects
+from engine.rules.runtime_traits import active_traits as resolve_active_traits
 
 if TYPE_CHECKING:
     from engine.game_state import GameState
@@ -58,19 +58,5 @@ class DeathResolver:
 
     def _get_active_traits(self, character: CharacterState,
                            state: GameState) -> set[Trait]:
-        """
-        获取角色当前生效的特性。
-
-        包含基础特性 + 运行时派生特性（如不安定因子的条件特性、
-        纸老虎的条件转换等）。
-        """
-        settle_persistent_effects(state)
-        traits = set(character.base_traits)
-        identity_def = state.identity_defs.get(character.identity_id)
-        if identity_def is not None:
-            traits.update(identity_def.traits)
-
-        # 纸老虎（HSA）：2+ 不安 → 失去不死，获得必定无视友好
-        # 此处预留，具体模组注册时补充
-
-        return traits
+        """统一读取角色当前生效 trait。"""
+        return resolve_active_traits(state, character.character_id)

@@ -12,6 +12,7 @@ from engine.models.effects import Effect
 from engine.models.enums import AbilityTiming, AbilityType, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
 from engine.resolvers.ability_resolver import AbilityCandidate, AbilityResolver
 from engine.resolvers.incident_resolver import IncidentResolver
+from engine.rules.runtime_traits import has_trait
 
 from engine.event_bus import GameEvent, GameEventType
 
@@ -63,7 +64,7 @@ def _validate_action_target(state: GameState, intent: PlacementIntent) -> None:
             raise ValueError(f"target character {intent.target_id} not found")
         if not ch.is_alive:
             raise ValueError(f"target character {intent.target_id} is not alive")
-        if Trait.NO_ACTION_CARDS in ch.base_traits:
+        if has_trait(state, intent.target_id, Trait.NO_ACTION_CARDS):
             raise ValueError(f"target character {intent.target_id} cannot receive action cards")
         return
     if intent.target_type == "board":
@@ -369,6 +370,9 @@ class LoopStartHandler(PhaseHandler):
     phase = GamePhase.LOOP_START
 
     def execute(self, state: GameState) -> PhaseSignal:
+        initial_area_wait = self._request_loop_initial_area_choice(state)
+        if initial_area_wait is not None:
+            return initial_area_wait
         mandatory = self.ability_resolver.collect_abilities(
             state,
             timing=AbilityTiming.LOOP_START,
@@ -380,6 +384,42 @@ class LoopStartHandler(PhaseHandler):
             mandatory,
             next_signal_factory=PhaseComplete,
         )
+
+    def _request_loop_initial_area_choice(self, state: GameState) -> WaitForInput | None:
+        from engine.models.enums import AreaId
+        from engine.rules.character_loader import load_character_defs
+
+        character_defs = load_character_defs()
+        for character_id, character in state.characters.items():
+            character_def = character_defs.get(character_id)
+            if character_def is None:
+                continue
+            if character_def.initial_area_mode != "mastermind_each_loop":
+                continue
+            if character_id in state.loop_initial_area_choices_done:
+                continue
+            candidate_areas = list(character_def.initial_area_candidates) or [character_def.initial_area]
+            option_values = [area.value for area in candidate_areas]
+
+            def _on_choice(choice: Any, *, target_id: str = character_id, allowed: set[str] = set(option_values)) -> PhaseSignal:
+                selected_area = str(choice)
+                if selected_area not in allowed:
+                    raise ValueError(f"invalid initial area choice for {target_id}: {selected_area!r}")
+                area = AreaId(selected_area)
+                target = state.characters[target_id]
+                target.initial_area = area
+                target.area = area
+                state.loop_initial_area_choices_done.add(target_id)
+                return self.execute(state)
+
+            return WaitForInput(
+                input_type="choose_initial_area",
+                prompt=f"剧作家请选择 {character.name} 本轮初始区域",
+                options=option_values,
+                player="mastermind",
+                callback=_on_choice,
+            )
+        return None
 
 
 class TurnStartHandler(PhaseHandler):
@@ -772,67 +812,11 @@ class IncidentHandler(PhaseHandler):
         schedules = state.get_incidents_for_day(state.current_day)
 
         for schedule in schedules:
-            runtime_choice_wait = self._request_runtime_area_choice(state, schedule)
-            if runtime_choice_wait is not None:
-                return runtime_choice_wait
             result = self.incident_resolver.resolve_schedule(state, schedule)
             if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
                 return ForceLoopEnd(reason=schedule.incident_id)
 
         return PhaseComplete()
-
-    def _request_runtime_area_choice(
-        self,
-        state: GameState,
-        schedule: Any,
-        *,
-        errors: list[str] | None = None,
-    ) -> WaitForInput | None:
-        incident_def = state.incident_defs.get(schedule.incident_id)
-        if incident_def is None:
-            return None
-        if not self.incident_resolver.can_occur(state, schedule, incident_def):
-            return None
-
-        missing_area_choices = sum(
-            1
-            for effect in incident_def.effects
-            if effect.effect_type == EffectType.MOVE_CHARACTER and effect.value == "any_board"
-        ) - len(schedule.target_area_ids)
-        if missing_area_choices <= 0:
-            return None
-
-        candidates = self.incident_resolver.condition_resolver.resolve_targets(
-            state,
-            owner_id=schedule.perpetrator_id,
-            selector="any_board",
-            alive_only=False,
-        )
-
-        def _on_choose(choice: Any) -> PhaseSignal:
-            selected_area = str(choice)
-            if selected_area not in candidates:
-                return self._request_runtime_area_choice(
-                    state,
-                    schedule,
-                    errors=[f"无效目标版图：{selected_area}"],
-                ) or PhaseComplete()
-            schedule.target_area_ids.append(selected_area)
-            return self.execute(state)
-
-        context = {
-            "incident_id": schedule.incident_id,
-            "perpetrator_id": schedule.perpetrator_id,
-            "errors": list(errors or []),
-        }
-        return WaitForInput(
-            input_type="choose_incident_area",
-            prompt=f"事件 {incident_def.name} 发动：请选择目标版图",
-            options=list(candidates),
-            context=context,
-            player="mastermind",
-            callback=_on_choose,
-        )
 
 
 class LeaderRotateHandler(PhaseHandler):

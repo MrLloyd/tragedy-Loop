@@ -80,9 +80,13 @@ _OUTCOME_NAMES = {
 
 _WAIT_TYPE_NAMES = {
     "script_setup": "填写非公开信息表",
+    "choose_initial_area": "选择初始区域",
     "place_action_cards": "放置 3 张行动牌",
     "place_action_card": "放置 1 张行动牌",
     "choose_ability_target": "选择能力目标",
+    "choose_incident_character": "选择事件角色目标",
+    "choose_incident_area": "选择事件版图目标",
+    "choose_incident_token_type": "选择事件指示物类型",
     "choose_playwright_ability": "选择剧作家能力",
     "choose_goodwill_ability": "选择友好能力",
     "respond_goodwill_ability": "回应友好能力",
@@ -191,6 +195,10 @@ def identity_name(identity_id: str) -> str:
         return "未公开"
     normalized = normalize_identity_id(identity_id)
     return _module_catalog()["identities"].get(normalized, normalized)
+
+
+def revealed_identity_message(character_id: str, identity_id: str) -> str:
+    return f"{character_name(character_id)}的身份是{identity_name(identity_id)}"
 
 
 def incident_name(incident_id: str) -> str:

@@ -16,8 +16,8 @@ from engine.game_state import GameState
 from engine.models.ability import Ability
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
-from engine.models.identity import IdentityDef
 from engine.rules.persistent_effects import settle_persistent_effects
+from engine.rules.runtime_traits import active_traits as resolve_active_traits
 
 
 @dataclass(frozen=True)
@@ -115,7 +115,7 @@ class AbilityResolver:
                 result.append(candidate)
         return result
 
-    def collect_identity_abilities(
+    def _collect_identity_abilities(
         self,
         state: GameState,
         *,
@@ -159,8 +159,8 @@ class AbilityResolver:
         ability_type: AbilityType | None = None,
         alive_only: bool = True,
     ) -> list[AbilityCandidate]:
-        """兼容旧接口：语义已收束为身份能力收集。"""
-        return self.collect_identity_abilities(
+        """兼容旧接口；新代码应优先使用 `collect_abilities()`。"""
+        return self._collect_identity_abilities(
             state,
             timing=timing,
             ability_type=ability_type,
@@ -253,7 +253,7 @@ class AbilityResolver:
             ability_type=ability_type,
             alive_only=alive_only,
         )
-        identity_candidates = self.collect_identity_abilities(
+        identity_candidates = self._collect_identity_abilities(
             state,
             timing=timing,
             ability_type=ability_type,
@@ -340,16 +340,8 @@ class AbilityResolver:
         return [selector]
 
     def active_traits(self, state: GameState, character_id: str) -> set[Trait]:
-        """角色当前生效特性：基础特性 + 当前身份特性 + 常驻派生特性。"""
-        settle_persistent_effects(state)
-        ch = state.characters.get(character_id)
-        if ch is None:
-            return set()
-        traits = set(ch.base_traits)
-        identity_def: IdentityDef | None = state.identity_defs.get(ch.identity_id)
-        if identity_def is not None:
-            traits.update(identity_def.traits)
-        return traits
+        """角色当前生效特性：基础特性 + 当前身份特性 + 独立派生层。"""
+        return resolve_active_traits(state, character_id)
 
     def goodwill_should_be_ignored(self, state: GameState, character_id: str) -> bool:
         """用于主人公能力阶段：判断是否应视为无视友好。"""

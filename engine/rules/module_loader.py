@@ -226,6 +226,14 @@ def build_script_setup_context(
         "available_identities": sorted(loaded.identity_defs.keys()),
         "available_incidents": sorted(loaded.incident_defs.keys()),
         "available_characters": sorted(character_defs.keys()),
+        "character_initial_area_specs": {
+            character_id: {
+                "mode": character.initial_area_mode,
+                "default_area": character.initial_area.value,
+                "candidates": [area.value for area in character.initial_area_candidates],
+            }
+            for character_id, character in character_defs.items()
+        },
     }
 
 

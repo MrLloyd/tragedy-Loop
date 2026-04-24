@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from engine.display_names import character_name, identity_name
+from engine.event_bus import GameEvent, GameEventType
 from engine.game_controller import GameController
 from engine.models.enums import AreaId, CardType, GamePhase
 from engine.phases.phase_base import WaitForInput
@@ -222,6 +224,20 @@ def test_session_announcements_sync_into_game_screen_snapshot() -> None:
     model.sync_from_session(session.view_state)
 
     assert model.snapshot.announcements
+
+
+def test_session_collects_identity_revealed_popup_message() -> None:
+    session, controller = _boot_with_script_setup()
+
+    controller.event_bus.emit(GameEvent(
+        GameEventType.IDENTITY_REVEALED,
+        {"character_id": "male_student", "identity_id": "mastermind"},
+    ))
+    session._consume_event_log_updates()
+
+    assert session.view_state.revealed_identity_messages[-1] == (
+        f"{character_name('male_student')}的身份是{identity_name('mastermind')}"
+    )
 
 
 def test_submit_confirm_sends_none_for_confirm_only_wait() -> None:

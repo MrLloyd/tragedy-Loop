@@ -124,6 +124,7 @@ class GameState:
     # ---- 跨轮回历史 ----
     loop_history: list[LoopSnapshot] = field(default_factory=list)
     cross_loop_memory: CrossLoopMemory = field(default_factory=CrossLoopMemory)
+    loop_initial_area_choices_done: set[str] = field(default_factory=set)
 
     # ==================================================================
     # 初始化
@@ -324,6 +325,7 @@ class GameState:
         self.incident_results_this_loop.clear()
         self.ability_runtime.usages_this_loop.clear()
         self.ability_runtime.usages_this_day.clear()
+        self.loop_initial_area_choices_done.clear()
 
         # EX 槽
         if self.ex_gauge_resets_per_loop:

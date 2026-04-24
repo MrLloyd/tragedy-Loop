@@ -246,7 +246,7 @@ traged/
 - [x] `Condition` 求值：不安阈值、同区域、密谋阈值、最终日、身份判定、trait 判定、事件发生判定（基础版）✅ 2026-04-19
 - [x] 拒绝逻辑：`Trait.IGNORE_GOODWILL`、`Trait.MUST_IGNORE_GOODWILL`（判断入口）✅ 2026-04-19
 - [x] 将现有 `collect_character_abilities()` 语义收束为“身份能力收集”，避免与“角色友好能力”混名 ✅ 2026-04-19
-- [x] 明确统一收集入口分层：`collect_goodwill_abilities()`、`collect_identity_abilities()`、`collect_rule_abilities()`、`collect_derived_abilities()` ✅ 2026-04-19
+- [x] 明确统一收集入口分层：`collect_goodwill_abilities()`、`_collect_identity_abilities()`、`collect_rule_abilities()`、`collect_derived_abilities()` ✅ 2026-04-19
 - [x] 常驻派生能力统一走 `collect_derived_abilities()`：不安定因子及未来同类身份都走同一入口 ✅ 2026-04-19
 - [x] once-per-loop / once-per-day 使用限制在能力层统一处理 ✅ 2026-04-19
 - [x] 新增 target 解析层（可为 `target_resolver` 或收进 `ability_resolver`）：支持 `same_area_any`、`any_character`、`any_board`、`condition_target`、`hospital_all` 等 selector ✅ 2026-04-19
@@ -546,8 +546,8 @@ traged/
 **场景A - 同时死亡**（如医院事故）：
 1. 读状态：两人都将死亡
 2. 写：两人死亡
-3. 触发：心上人死亡→求爱者+6不安；求爱者死亡→心上人+6不安
-4. 两者已是尸体，不安放到尸体上
+3. 触发：两者的死亡触发都要进入收集，但同批次角色状态仍按已死亡解释
+4. 因此不会把对方再当作正常活体处理；`beloved / lover` 同时死亡时不再互相 +6 不安
 5. 求爱者 turn_end 能力（1+密谋且3+不安→主人公死亡）不触发（已死）
 
 **场景B - 先后死亡**（如杀人狂先杀心上人）：

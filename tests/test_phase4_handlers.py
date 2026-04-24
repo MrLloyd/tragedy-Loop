@@ -238,6 +238,47 @@ def test_rumormonger_playwright_ability_places_paranoia_in_same_area() -> None:
     )
 
 
+def test_unstable_factor_derives_rumormonger_through_playwright_handler() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["unstable"] = CharacterState(
+        character_id="unstable",
+        name="不安定因子",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="unstable_factor",
+        original_identity_id="unstable_factor",
+    )
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.board.areas[AreaId.SCHOOL].tokens.add(TokenType.INTRIGUE, 2)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "rumormonger_playwright_place_paranoia")
+
+    target_wait = signal.callback(choice)
+    assert isinstance(target_wait, WaitForInput)
+
+    follow_up = target_wait.callback("target")
+
+    assert isinstance(follow_up, WaitForInput)
+    assert state.characters["target"].tokens.get(TokenType.PARANOIA) == 1
+    assert any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "rumormonger_playwright_place_paranoia"
+        for event in bus.log
+    )
+
+
 def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)

@@ -48,6 +48,7 @@ class Trigger:
     source_id: str = ""          # 触发来源角色
     is_terminal: bool = False    # 是否为终局效果
     effects: list = field(default_factory=list)
+    sequential: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -99,18 +100,11 @@ class AtomicResolver:
     def _resolve_simultaneous(self, state: GameState,
                               effects: list[Effect],
                               perpetrator_id: str = "") -> ResolutionResult:
-        settle_persistent_effects(state)
-        # ① 读：在快照上规划
-        snapshot = state.snapshot()
-        planned_mutations = []
-        for effect in effects:
-            mutations = self._plan_effect(snapshot, effect, perpetrator_id)
-            planned_mutations.extend(mutations)
-
-        # ② 写：批量应用到真实状态
-        for mutation in planned_mutations:
-            self._apply_mutation(state, mutation)
-        settle_persistent_effects(state)
+        planned_mutations = self._apply_effect_batch(
+            state,
+            effects,
+            perpetrator_id=perpetrator_id,
+        )
 
         # ③ 触发：收集并处理链式效果
         return self._process_triggers(state, planned_mutations)
@@ -410,6 +404,25 @@ class AtomicResolver:
                     {"delta": delta, "new_value": state.ex_gauge},
                 ))
 
+    def _apply_effect_batch(
+        self,
+        state: GameState,
+        effects: list[Effect],
+        *,
+        perpetrator_id: str = "",
+    ) -> list[Mutation]:
+        """仅执行读写两步，不进入触发处理。"""
+        settle_persistent_effects(state)
+        snapshot = state.snapshot()
+        planned_mutations: list[Mutation] = []
+        for effect in effects:
+            planned_mutations.extend(self._plan_effect(snapshot, effect, perpetrator_id))
+
+        for mutation in planned_mutations:
+            self._apply_mutation(state, mutation)
+        settle_persistent_effects(state)
+        return planned_mutations
+
     # ==================================================================
     # 第三步：触发 — 处理链式效果（队列式）
     # ==================================================================
@@ -432,11 +445,19 @@ class AtomicResolver:
             if trigger.is_terminal:
                 terminal_effects.append(trigger)
             else:
-                # 非终局触发：执行效果，可能产生新触发（以 source_id 作为 perpetrator）
-                for effect in trigger.effects:
-                    sub_mutations = self._plan_effect(state, effect, trigger.source_id)
+                # 非终局触发：按 sequential 语义执行效果，可能产生新触发
+                effect_batches = (
+                    [[effect] for effect in trigger.effects]
+                    if trigger.sequential
+                    else [trigger.effects]
+                )
+                for effect_batch in effect_batches:
+                    sub_mutations = self._apply_effect_batch(
+                        state,
+                        effect_batch,
+                        perpetrator_id=trigger.source_id,
+                    )
                     for sm in sub_mutations:
-                        self._apply_mutation(state, sm)
                         new_triggers = self._collect_triggers_from_mutation(sm, state)
                         trigger_queue.extend(new_triggers)
 
@@ -457,8 +478,11 @@ class AtomicResolver:
 
         return ResolutionResult(mutations=mutations, outcome=outcome)
 
-    def _collect_triggers_from_mutation(self, mutation: Mutation,
-                                       state: GameState) -> list[Trigger]:
+    def _collect_triggers_from_mutation(
+        self,
+        mutation: Mutation,
+        state: GameState,
+    ) -> list[Trigger]:
         """从单个 mutation 收集触发"""
         triggers = []
 
@@ -492,9 +516,10 @@ class AtomicResolver:
                                     source_id=cid,
                                     is_terminal=False,
                                     effects=ability.effects,
+                                    sequential=ability.sequential,
                                 ))
                 for owner in state.characters.values():
-                    if owner.character_id == cid or not owner.is_alive or owner.is_removed:
+                    if owner.character_id == cid or owner.is_removed or not owner.is_alive:
                         continue
                     identity_def = state.identity_defs.get(owner.identity_id)
                     if identity_def is None:
@@ -525,6 +550,7 @@ class AtomicResolver:
                             source_id=owner.character_id,
                             is_terminal=False,
                             effects=ability.effects,
+                            sequential=ability.sequential,
                         ))
 
         if mutation.mutation_type == "identity_change":

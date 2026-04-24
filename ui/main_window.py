@@ -9,7 +9,9 @@ from ui.debug_snapshot_server import ReadOnlyDebugSnapshotServer
 from ui.screens.game_screen import GameScreen
 from ui.screens.new_game_screen import NewGameScreen, NewGameScreenModel
 from ui.screens.result_screen import ResultScreen
+from ui.screens.test_mode_screen import TestModeScreen
 from ui.screens.title_screen import TitleScreen
+from ui.controllers.test_mode_controller import TestModeController
 
 try:  # pragma: no cover - integration wiring
     from PySide6.QtWidgets import (
@@ -35,6 +37,8 @@ else:
             self.title_screen = TitleScreen(self)
             self.result_screen = ResultScreen(self)
             self.game_screen = GameScreen(parent=self)
+            self.test_mode_screen: Optional[TestModeScreen] = None
+            self.test_mode_controller: Optional[TestModeController] = None
 
             self._stack.addWidget(self.title_screen)
             self._stack.addWidget(self.game_screen)
@@ -48,6 +52,7 @@ else:
             self._debug_snapshot_server.start()
 
             self.title_screen.new_game_button.clicked.connect(self._start_new_game_flow)
+            self.title_screen.test_mode_button.clicked.connect(self._start_test_mode_flow)
             self.title_screen.quit_button.clicked.connect(self.close)
             self.result_screen.back_button.clicked.connect(self._show_title)
             self.game_screen.set_after_submit(self._handle_session_update)
@@ -72,6 +77,7 @@ else:
                 self._show_unexpected_error("开始新游戏失败", exc)
 
         def _start_new_game_flow_impl(self) -> None:
+            self.test_mode_controller = None
             self.new_game_model = NewGameScreenModel()
             self.session = GameSessionController()
             self.game_controller = GameController(ui_callback=self.session)
@@ -99,6 +105,26 @@ else:
                 return
 
             self._refresh_new_game_screen()
+
+        def _start_test_mode_flow(self) -> None:
+            try:
+                self._start_test_mode_flow_impl()
+            except Exception as exc:
+                self._show_unexpected_error("打开测试模式失败", exc)
+
+        def _start_test_mode_flow_impl(self) -> None:
+            self.session = None
+            self.game_controller = None
+            self.new_game_model = None
+            self.test_mode_controller = TestModeController()
+
+            if self.test_mode_screen is not None:
+                self._stack.removeWidget(self.test_mode_screen)
+                self.test_mode_screen.deleteLater()
+
+            self.test_mode_screen = TestModeScreen(self.test_mode_controller, self)
+            self._stack.addWidget(self.test_mode_screen)
+            self._stack.setCurrentWidget(self.test_mode_screen)
 
         def _submit_script_setup(self) -> None:
             try:
@@ -141,6 +167,8 @@ else:
             self.new_game_screen.refresh_errors()
 
         def _read_local_debug_snapshot(self) -> dict[str, object]:
+            if self.test_mode_screen is not None and self._stack.currentWidget() is self.test_mode_screen:
+                return self.test_mode_screen.read_debug_snapshot()
             if self.session is None:
                 return {"status": "idle"}
             return self.session.read_debug_snapshot()

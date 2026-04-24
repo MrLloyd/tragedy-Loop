@@ -8,7 +8,7 @@ from engine.models.enums import AreaId, GamePhase, PlayerRole
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import ForceLoopEnd, WaitForInput
 from engine.rules.module_loader import build_game_state_from_module
-from ui.controllers.new_game_controller import NewGameController, default_phase5_draft
+from ui.controllers.new_game_controller import CharacterDraft, NewGameController, NewGameDraft, default_phase5_draft
 
 
 class _StubUI(UICallback):
@@ -56,6 +56,46 @@ def test_invalid_script_setup_reprompts_with_errors() -> None:
     assert controller.state_machine.current_phase == GamePhase.GAME_PREPARE
     assert ui.waits[-1].input_type == "script_setup"
     assert ui.waits[-1].context["errors"]
+
+
+def test_loop_start_requests_henchman_initial_area_choice() -> None:
+    ui = _StubUI()
+    controller = GameController(ui_callback=ui)
+    controller.start_game("first_steps", loop_count=1, days_per_loop=1)
+
+    draft = default_phase5_draft()
+    payload = NewGameController.build_payload(NewGameDraft(
+        module_id=draft.module_id,
+        loop_count=draft.loop_count,
+        days_per_loop=draft.days_per_loop,
+        rule_y_id=draft.rule_y_id,
+        rule_x_ids=list(draft.rule_x_ids),
+        characters=[
+            CharacterDraft("male_student", "mastermind"),
+            CharacterDraft("female_student", "key_person"),
+            CharacterDraft("idol", "rumormonger"),
+            CharacterDraft("henchman", "killer"),
+            CharacterDraft("shrine_maiden", "serial_killer"),
+        ],
+        incidents=list(draft.incidents),
+    ))
+
+    controller.provide_input(payload)
+
+    assert controller.state_machine.current_phase == GamePhase.LOOP_START
+    assert ui.waits[-1].input_type == "choose_initial_area"
+    assert ui.waits[-1].options == [
+        AreaId.HOSPITAL.value,
+        AreaId.SHRINE.value,
+        AreaId.CITY.value,
+        AreaId.SCHOOL.value,
+    ]
+
+    controller.provide_input(AreaId.SCHOOL.value)
+
+    assert controller.state.characters["henchman"].initial_area == AreaId.SCHOOL
+    assert controller.state.characters["henchman"].area == AreaId.SCHOOL
+    assert controller.state_machine.current_phase == GamePhase.MASTERMIND_ACTION
 
 
 def test_provide_input_raises_without_pending_callback() -> None:

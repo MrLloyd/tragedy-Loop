@@ -56,8 +56,7 @@
             }
           ]
         }
-      ],
-      "description": "失败条件：轮回结束时，主谋的初始区域有2枚或以上密谋"
+      ]
     },
     {
       "rule_id": "fs_protect_this_place",
@@ -92,8 +91,7 @@
             }
           ]
         }
-      ],
-      "description": "失败条件：轮回结束时，学校有2枚或以上密谋"
+      ]
     }
   ],
   "rules_x": [
@@ -173,8 +171,7 @@
           "max": 2
         }
       },
-      "abilities": [],
-      "description": "剧本制作时，暴徒的人数可以为0-2人"
+      "abilities": []
     }
   ],
   "identities": [

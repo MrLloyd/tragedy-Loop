@@ -155,6 +155,7 @@
       "name": "从者",
       "trait_rule": "同一区域的大人物或大小姐移动时，无视自身移动并跟随那名角色移动（如果多名角色同时移动，由主人公选择跟随哪名角色）。同一区域的大人物或大小姐死亡时，代替那名角色死亡",
       "initial_area": "school",
+      "initial_area_mode": "script_choice",
       "forbidden_areas": [],
       "attributes": [
         "adult",
@@ -188,6 +189,7 @@
       "name": "仙人",
       "trait_rule": "X为剧本规定的数值。在事件判定之外需要参照该角色的不安限度时，该角色的不安限度视为0。；结算该角色担任当事人的事件时，该角色可以视为位于本来所在位置顺时针相邻的版图。",
       "initial_area": "shrine",
+      "initial_area_mode": "script_choice",
       "forbidden_areas": [],
       "attributes": [
         "adult",
@@ -721,6 +723,7 @@
       "name": "手下",
       "trait_rule": "每轮轮回开始阶段，由剧作家决定该角色的初始区域。",
       "initial_area": "hospital",
+      "initial_area_mode": "mastermind_each_loop",
       "forbidden_areas": [],
       "attributes": [
         "adult",

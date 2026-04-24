@@ -89,11 +89,11 @@ def test_phase5_identity_abilities_are_available_for_configured_cast() -> None:
     )
 
     resolver = AbilityResolver()
-    playwright = resolver.collect_identity_abilities(
+    playwright = resolver.collect_abilities(
         state,
         timing=AbilityTiming.PLAYWRIGHT_ABILITY,
     )
-    turn_end = resolver.collect_identity_abilities(
+    turn_end = resolver.collect_abilities(
         state,
         timing=AbilityTiming.TURN_END,
     )

@@ -350,6 +350,62 @@ def test_incident_without_legal_target_still_occurs_but_has_no_phenomenon() -> N
     assert state.incident_results_this_loop[-1].has_phenomenon is False
 
 
+def test_murder_uses_scripted_character_choice_and_excludes_perpetrator() -> None:
+    handler, _ = _make_handler()
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("first_steps"))
+    state.current_day = 1
+    for cid in ("perp", "victim"):
+        state.characters[cid] = CharacterState(
+            character_id=cid,
+            name=cid,
+            area=AreaId.CITY,
+            initial_area=AreaId.CITY,
+            identity_id="平民",
+            original_identity_id="平民",
+            paranoia_limit=2,
+        )
+    state.characters["perp"].tokens.paranoia = 2
+    state.script.incidents = [
+        IncidentSchedule("murder", day=1, perpetrator_id="perp", target_character_ids=["victim"])
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["perp"].is_alive is True
+    assert state.characters["victim"].is_alive is False
+
+
+def test_incident_resolver_does_not_auto_pick_character_when_choice_missing() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("first_steps"))
+    state.current_day = 1
+    for cid in ("perp", "victim"):
+        state.characters[cid] = CharacterState(
+            character_id=cid,
+            name=cid,
+            area=AreaId.CITY,
+            initial_area=AreaId.CITY,
+            identity_id="平民",
+            original_identity_id="平民",
+            paranoia_limit=2,
+        )
+    state.characters["perp"].tokens.paranoia = 2
+
+    result = resolver.resolve_schedule(
+        state,
+        IncidentSchedule("murder", day=1, perpetrator_id="perp"),
+    )
+
+    assert result.occurred is True
+    assert result.has_phenomenon is False
+    assert state.characters["perp"].is_alive is True
+    assert state.characters["victim"].is_alive is True
+
+
 def test_long_range_murder_can_only_target_character_with_two_intrigue() -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
@@ -384,6 +440,39 @@ def test_long_range_murder_can_only_target_character_with_two_intrigue() -> None
     assert result.has_phenomenon is True
     assert state.characters["safe"].is_alive is True
     assert state.characters["victim"].is_alive is False
+
+
+def test_butterfly_effect_without_token_choice_occurs_but_has_no_phenomenon() -> None:
+    handler, _ = _make_handler()
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.current_day = 1
+    for cid in ("perp", "target"):
+        state.characters[cid] = CharacterState(
+            character_id=cid,
+            name=cid,
+            area=AreaId.CITY,
+            initial_area=AreaId.CITY,
+            identity_id="平民",
+            original_identity_id="平民",
+            paranoia_limit=2,
+        )
+    state.characters["perp"].tokens.paranoia = 2
+    state.script.incidents = [
+        IncidentSchedule(
+            "butterfly_effect",
+            day=1,
+            perpetrator_id="perp",
+            target_character_ids=["target"],
+        )
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["target"].tokens.intrigue == 0
+    assert state.incident_results_this_loop[-1].occurred is True
+    assert state.incident_results_this_loop[-1].has_phenomenon is False
 
 
 def test_unease_spread_and_spread_use_hidden_targets_in_order() -> None:
@@ -486,7 +575,7 @@ def test_incident_resolver_can_use_supplied_area_and_token_choices() -> None:
     assert state.characters["target"].tokens.intrigue == 1
 
 
-def test_disappearance_requests_runtime_area_choice_from_mastermind() -> None:
+def test_disappearance_without_area_choice_occurs_but_has_no_phenomenon() -> None:
     handler, _ = _make_handler()
     state = GameState.create_minimal_test_state(days_per_loop=3)
     apply_loaded_module(state, load_module("basic_tragedy_x"))
@@ -507,14 +596,7 @@ def test_disappearance_requests_runtime_area_choice_from_mastermind() -> None:
 
     signal = handler.execute(state)
 
-    assert isinstance(signal, WaitForInput)
-    assert signal.input_type == "choose_incident_area"
-    assert signal.player == "mastermind"
-    assert "school" in signal.options
+    assert isinstance(signal, PhaseComplete)
     assert state.characters["perp"].area == AreaId.CITY
-
-    follow_up = signal.callback("school")
-
-    assert isinstance(follow_up, PhaseComplete)
-    assert state.characters["perp"].area == AreaId.SCHOOL
-    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1
+    assert state.incident_results_this_loop[-1].occurred is True
+    assert state.incident_results_this_loop[-1].has_phenomenon is False

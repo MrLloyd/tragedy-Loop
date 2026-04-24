@@ -18,7 +18,8 @@ else:
             layout = QVBoxLayout(self)
             layout.addWidget(QLabel("惨剧轮回"))
             self.new_game_button = QPushButton("开始新游戏")
+            self.test_mode_button = QPushButton("测试模式")
             self.quit_button = QPushButton("退出")
             layout.addWidget(self.new_game_button)
+            layout.addWidget(self.test_mode_button)
             layout.addWidget(self.quit_button)
-

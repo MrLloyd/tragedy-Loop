@@ -43,6 +43,19 @@ class IncidentResolution:
 class IncidentResolver:
     """事件专属结算入口。"""
 
+    _CHARACTER_CHOICE_SELECTORS = frozenset({
+        "any_character",
+        "same_area_any",
+        "same_area_other",
+        "another_character",
+        "any_other_character",
+    })
+    _TOKEN_CHOICE_VALUES = (
+        TokenType.GOODWILL,
+        TokenType.PARANOIA,
+        TokenType.INTRIGUE,
+    )
+
     def __init__(self, event_bus: EventBus, atomic_resolver: AtomicResolver) -> None:
         self.event_bus = event_bus
         self.atomic_resolver = atomic_resolver
@@ -71,6 +84,16 @@ class IncidentResolver:
         resolution.occurred = True
 
         if incident_def is None:
+            resolution.public_result = self._build_public_result(
+                state,
+                schedule,
+                occurred=True,
+                has_phenomenon=False,
+            )
+            self._record_public_result(state, resolution.public_result)
+            return resolution
+
+        if self.next_runtime_choice(state, schedule, incident_def) is not None:
             resolution.public_result = self._build_public_result(
                 state,
                 schedule,
@@ -177,6 +200,51 @@ class IncidentResolver:
         if public_result is not None:
             state.incident_results_this_loop.append(public_result)
 
+    def next_runtime_choice(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef,
+    ) -> tuple[str, list[str]] | None:
+        character_choices: deque[str] = deque(schedule.target_character_ids)
+        area_choices: deque[str] = deque(schedule.target_area_ids)
+        token_choices: deque[str] = deque(schedule.chosen_token_types)
+        chosen_characters: list[str] = []
+
+        for effect in incident_def.effects:
+            if effect.target in self._CHARACTER_CHOICE_SELECTORS:
+                candidates = self._resolve_character_candidates(
+                    state,
+                    schedule,
+                    effect,
+                    selector=effect.target,
+                    chosen_characters=chosen_characters,
+                )
+                selected_character = self._consume_matching_choice(character_choices, candidates)
+                if selected_character is not None:
+                    chosen_characters.append(selected_character)
+                elif candidates:
+                    return "character", sorted(candidates)
+
+            if effect.effect_type.name == "MOVE_CHARACTER" and effect.value == "any_board":
+                candidates = self.condition_resolver.resolve_targets(
+                    state,
+                    owner_id=schedule.perpetrator_id,
+                    selector="any_board",
+                    alive_only=False,
+                )
+                selected_area = self._consume_matching_choice(area_choices, candidates)
+                if selected_area is None and candidates:
+                    return "area", sorted(candidates)
+
+            if effect.token_type is None and effect.value == "choose_token_type":
+                candidates = [token_type.value for token_type in self._TOKEN_CHOICE_VALUES]
+                selected_token = self._consume_matching_choice(token_choices, candidates)
+                if selected_token is None:
+                    return "token", candidates
+
+        return None
+
     def _materialize_effects(
         self,
         state: GameState,
@@ -228,7 +296,7 @@ class IncidentResolver:
         chosen_characters: list[str],
     ) -> str:
         selector = effect.target
-        if selector not in {"any_character", "same_area_any", "another_character", "any_other_character"}:
+        if selector not in self._CHARACTER_CHOICE_SELECTORS:
             return selector
 
         candidates = self._resolve_character_candidates(
@@ -241,12 +309,11 @@ class IncidentResolver:
         if not candidates:
             return "__no_target__"
 
-        scripted_choice = character_choices[0] if character_choices else None
-        if scripted_choice in candidates:
-            character_choices.popleft()
-            return scripted_choice
+        selected_character = self._consume_matching_choice(character_choices, candidates)
+        if selected_character is not None:
+            return selected_character
 
-        return sorted(candidates)[0]
+        return "__no_target__"
 
     def _resolve_effect_value(
         self,
@@ -293,6 +360,8 @@ class IncidentResolver:
     ) -> list[str]:
         owner_id = schedule.perpetrator_id
         if selector == "another_character":
+            if not chosen_characters:
+                return []
             base_candidates = self.condition_resolver.resolve_targets(
                 state,
                 owner_id=owner_id,
@@ -300,6 +369,12 @@ class IncidentResolver:
             )
             if chosen_characters:
                 base_candidates = [cid for cid in base_candidates if cid != chosen_characters[-1]]
+        elif selector == "same_area_other":
+            base_candidates = self.condition_resolver.resolve_targets(
+                state,
+                owner_id=owner_id,
+                selector="same_area_other",
+            )
         elif selector == "any_other_character":
             base_candidates = [
                 cid for cid in self.condition_resolver.resolve_targets(
@@ -327,3 +402,14 @@ class IncidentResolver:
                 continue
             result.append(candidate)
         return result
+
+    @staticmethod
+    def _consume_matching_choice(
+        choices: deque[str],
+        candidates: list[str],
+    ) -> str | None:
+        while choices:
+            choice = choices.popleft()
+            if choice in candidates:
+                return choice
+        return None

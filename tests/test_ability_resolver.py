@@ -10,6 +10,7 @@ from engine.models.effects import Condition, Effect
 from engine.models.identity import IdentityDef
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.rules.module_loader import apply_loaded_module, load_module
+from engine.rules.runtime_traits import add_derived_trait, suppress_trait
 
 
 def _build_state_with_module() -> GameState:
@@ -19,7 +20,7 @@ def _build_state_with_module() -> GameState:
     return state
 
 
-def test_collect_identity_abilities_by_timing() -> None:
+def test_collect_abilities_includes_identity_candidates_by_timing() -> None:
     state = _build_state_with_module()
     state.characters["key"] = CharacterState(
         character_id="key",
@@ -31,7 +32,7 @@ def test_collect_identity_abilities_by_timing() -> None:
     )
 
     resolver = AbilityResolver()
-    abilities = resolver.collect_identity_abilities(
+    abilities = resolver.collect_abilities(
         state,
         timing=AbilityTiming.ON_DEATH,
         alive_only=False,
@@ -42,7 +43,7 @@ def test_collect_identity_abilities_by_timing() -> None:
     assert abilities[0].source_id == "key"
     assert abilities[0].ability.ability_id == "key_person_on_death"
 
-    compat = resolver.collect_character_abilities(
+    compat = resolver.collect_abilities(
         state,
         timing=AbilityTiming.ON_DEATH,
         alive_only=False,
@@ -85,6 +86,47 @@ def test_active_traits_and_goodwill_ignore() -> None:
     assert resolver.goodwill_should_be_ignored(state, "killer") is True
 
 
+def test_witch_must_ignore_goodwill_trait() -> None:
+    state = GameState()
+    loaded = load_module("basic_tragedy_x")
+    apply_loaded_module(state, loaded)
+    state.characters["witch"] = CharacterState(
+        character_id="witch",
+        name="魔女角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="witch",
+        original_identity_id="witch",
+    )
+
+    resolver = AbilityResolver()
+    traits = resolver.active_traits(state, "witch")
+
+    assert Trait.MUST_IGNORE_GOODWILL in traits
+    assert resolver.goodwill_should_be_ignored(state, "witch") is True
+
+
+def test_active_traits_use_independent_runtime_trait_layer() -> None:
+    state = _build_state_with_module()
+    state.characters["killer"] = CharacterState(
+        character_id="killer",
+        name="杀手角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+
+    add_derived_trait(state, "killer", Trait.IMMORTAL)
+    suppress_trait(state, "killer", Trait.IGNORE_GOODWILL)
+
+    resolver = AbilityResolver()
+    traits = resolver.active_traits(state, "killer")
+    assert Trait.IMMORTAL in traits
+    assert Trait.IGNORE_GOODWILL not in traits
+    assert resolver.goodwill_should_be_ignored(state, "killer") is False
+
+
 def test_token_check_condition_for_character_target() -> None:
     state = _build_state_with_module()
     state.characters["killer"] = CharacterState(
@@ -108,6 +150,50 @@ def test_token_check_condition_for_character_target() -> None:
         },
     )
     assert resolver.evaluate_condition(state, cond) is True
+
+
+def test_has_trait_condition_reads_runtime_trait_layer() -> None:
+    state = _build_state_with_module()
+    state.characters["killer"] = CharacterState(
+        character_id="killer",
+        name="杀手角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+    add_derived_trait(state, "killer", Trait.IMMORTAL)
+    suppress_trait(state, "killer", Trait.IGNORE_GOODWILL)
+
+    resolver = AbilityResolver()
+    assert resolver.evaluate_condition(
+        state,
+        Condition("has_trait", {"target": "killer", "trait": Trait.IMMORTAL.value}),
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition("has_trait", {"target": "killer", "trait": Trait.IGNORE_GOODWILL.value}),
+    ) is False
+
+
+def test_runtime_trait_layer_resets_on_new_loop() -> None:
+    state = _build_state_with_module()
+    state.characters["killer"] = CharacterState(
+        character_id="killer",
+        name="杀手角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+    add_derived_trait(state, "killer", Trait.IMMORTAL)
+    suppress_trait(state, "killer", Trait.IGNORE_GOODWILL)
+
+    state.reset_for_new_loop()
+
+    traits = AbilityResolver().active_traits(state, "killer")
+    assert Trait.IMMORTAL not in traits
+    assert Trait.IGNORE_GOODWILL in traits
 
 
 def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
@@ -236,7 +322,7 @@ def test_collect_identity_abilities_respects_unified_once_limits() -> None:
     )
 
     resolver = AbilityResolver()
-    abilities = resolver.collect_identity_abilities(
+    abilities = resolver.collect_abilities(
         state,
         timing=AbilityTiming.PLAYWRIGHT_ABILITY,
     )
@@ -244,7 +330,7 @@ def test_collect_identity_abilities_respects_unified_once_limits() -> None:
     candidate = abilities[0]
     resolver.mark_ability_used(state, candidate)
 
-    abilities = resolver.collect_identity_abilities(
+    abilities = resolver.collect_abilities(
         state,
         timing=AbilityTiming.PLAYWRIGHT_ABILITY,
     )
@@ -306,8 +392,8 @@ def test_first_steps_p4_3_identity_abilities_are_collected() -> None:
 
     resolver = AbilityResolver()
 
-    turn_end = resolver.collect_identity_abilities(state, timing=AbilityTiming.TURN_END)
-    playwright = resolver.collect_identity_abilities(state, timing=AbilityTiming.PLAYWRIGHT_ABILITY)
+    turn_end = resolver.collect_abilities(state, timing=AbilityTiming.TURN_END)
+    playwright = resolver.collect_abilities(state, timing=AbilityTiming.PLAYWRIGHT_ABILITY)
 
     assert {c.ability.ability_id for c in turn_end} == {
         "killer_turn_end_kill_key_person",
@@ -369,13 +455,13 @@ def test_btx_rule_identity_and_derived_abilities_are_collected() -> None:
         timing=AbilityTiming.PLAYWRIGHT_ABILITY,
         ability_type=AbilityType.OPTIONAL,
     )
-    friend_loop_end = resolver.collect_identity_abilities(
+    friend_loop_end = resolver.collect_abilities(
         state,
         timing=AbilityTiming.LOOP_END,
         ability_type=AbilityType.LOSS_CONDITION,
         alive_only=False,
     )
-    friend_loop_start = resolver.collect_identity_abilities(
+    friend_loop_start = resolver.collect_abilities(
         state,
         timing=AbilityTiming.LOOP_START,
         ability_type=AbilityType.MANDATORY,
@@ -393,8 +479,12 @@ def test_btx_rule_identity_and_derived_abilities_are_collected() -> None:
 
     assert {c.ability.ability_id for c in rule_candidates} == {"btx_fail_key_person_intrigue_2"}
     assert {c.ability.ability_id for c in playwright_rule} == {"btx_rumors_playwright_place_intrigue"}
-    assert {c.ability.ability_id for c in friend_loop_end} == {"friend_loop_end_revealed_loss"}
-    assert {c.ability.ability_id for c in friend_loop_start} == {"friend_loop_start_place_goodwill"}
+    assert {
+        c.ability.ability_id for c in friend_loop_end if c.source_kind == "identity"
+    } == {"friend_loop_end_revealed_loss"}
+    assert {
+        c.ability.ability_id for c in friend_loop_start if c.source_kind == "identity"
+    } == {"friend_loop_start_place_goodwill"}
     assert {c.ability.ability_id for c in derived_playwright} == {"rumormonger_playwright_place_paranoia"}
     assert {c.ability.ability_id for c in derived_on_death} == {"key_person_on_death"}
 

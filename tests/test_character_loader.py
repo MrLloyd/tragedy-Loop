@@ -90,6 +90,24 @@ def test_build_game_state_from_module_supports_test_instance_import() -> None:
     assert state.script.incident_public[0]["day"] == 1
 
 
+def test_build_game_state_from_module_applies_script_selected_initial_area() -> None:
+    setups = [
+        CharacterSetup(character_id="servant", identity_id="killer", initial_area="city"),
+    ]
+
+    state = build_game_state_from_module(
+        "first_steps",
+        character_setups=setups,
+        incidents=[],
+        rule_y_id="fs_murder_plan",
+        rule_x_ids=["fs_ripper_shadow"],
+        skip_script_validation=True,
+    )
+
+    assert state.characters["servant"].initial_area == AreaId.CITY
+    assert state.characters["servant"].area == AreaId.CITY
+
+
 def test_build_game_state_from_module_rejects_unknown_identity() -> None:
     setups = [CharacterSetup(character_id="ai", identity_id="unknown_identity")]
     with pytest.raises(ValueError, match="Unknown identity_id"):

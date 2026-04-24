@@ -172,6 +172,7 @@ else:
             self._session = session
             self._model = GameScreenModel()
             self._after_submit: Callable[[], None] | None = None
+            self._shown_reveal_message_count = 0
 
             outer = QVBoxLayout(self)
             scroll = QScrollArea()
@@ -280,6 +281,7 @@ else:
 
         def bind_session(self, session: GameSessionController) -> None:
             self._session = session
+            self._shown_reveal_message_count = 0
             self._session.set_state_updated_callback(self.refresh)
             self.refresh()
 
@@ -313,6 +315,7 @@ else:
             self._render_wait_options(snapshot)
             self._refresh_target_ids()
             self._toggle_action_buttons(snapshot.wait_input_type)
+            self._show_revealed_identity_popups()
 
         def _render_board(self, snapshot: GameScreenSnapshot) -> None:
             for area_id, text_widget in self.board_area_texts.items():
@@ -375,6 +378,16 @@ else:
             if wait is not None:
                 has_pass = "pass" in wait.options
             self.pass_button.setVisible(has_pass)
+
+        def _show_revealed_identity_popups(self) -> None:
+            if self._session is None:
+                return
+            messages = self._session.view_state.revealed_identity_messages
+            if self._shown_reveal_message_count >= len(messages):
+                return
+            for message in messages[self._shown_reveal_message_count:]:
+                QMessageBox.information(self, "身份公开", message)
+            self._shown_reveal_message_count = len(messages)
 
         def _on_pass(self) -> None:
             if self._session is None:

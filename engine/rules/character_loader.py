@@ -28,6 +28,7 @@ class CharacterDef:
     character_id: str
     name: str
     initial_area: AreaId
+    initial_area_mode: str = "fixed"
     forbidden_areas: list[AreaId] = field(default_factory=list)
     attributes: set[Attribute] = field(default_factory=set)
     paranoia_limit: int = 2
@@ -92,11 +93,14 @@ def instantiate_character_state(
         raise ValueError(f"Unknown character_id in setup: {setup.character_id}")
 
     identity_id = normalize_identity_id(setup.identity_id)
+    initial_area = char_def.initial_area
+    if setup.initial_area:
+        initial_area = AreaId(setup.initial_area)
     return CharacterState(
         character_id=char_def.character_id,
         name=char_def.name,
-        area=char_def.initial_area,
-        initial_area=char_def.initial_area,
+        area=initial_area,
+        initial_area=initial_area,
         identity_id=identity_id,
         original_identity_id=identity_id,
         base_traits=set(char_def.base_traits),
@@ -114,6 +118,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
     character_id = str(data["character_id"])
     name = str(data["name"])
     initial_area = AreaId(str(data["initial_area"]))
+    initial_area_mode = str(data.get("initial_area_mode", "fixed"))
 
     forbidden_areas = [
         AreaId(str(v))
@@ -146,6 +151,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
         character_id=character_id,
         name=name,
         initial_area=initial_area,
+        initial_area_mode=initial_area_mode,
         forbidden_areas=forbidden_areas,
         attributes=attributes,
         paranoia_limit=paranoia_limit,

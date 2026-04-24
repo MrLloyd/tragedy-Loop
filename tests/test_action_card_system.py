@@ -170,6 +170,24 @@ def test_mastermind_no_action_cards_trait():
         assert "NO_ACTION_CARDS" in str(e) or "cannot receive" in str(e)
 
 
+def test_mastermind_no_action_cards_runtime_trait_layer():
+    """运行时派生 trait 也应该阻止行动牌放置"""
+    mm_handler, _, _, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    state.characters["char_1"].derived_traits.add(Trait.NO_ACTION_CARDS)
+
+    signal = mm_handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    try:
+        signal.callback(
+            PlacementIntent(state.mastermind_hand.cards[0], "character", "char_1")
+        )
+        assert False, "should raise ValueError for runtime NO_ACTION_CARDS"
+    except ValueError as e:
+        assert "NO_ACTION_CARDS" in str(e) or "cannot receive" in str(e)
+
+
 # ---------------------------------------------------------------------------
 # T4: 3名主人公依次放牌（从 leader_index 起）
 # ---------------------------------------------------------------------------

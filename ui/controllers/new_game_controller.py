@@ -10,6 +10,7 @@ from engine.models.script import CharacterSetup
 class CharacterDraft:
     character_id: str
     identity_id: str
+    initial_area_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,11 @@ class NewGameController:
     @staticmethod
     def build_character_setups(draft: NewGameDraft) -> list[CharacterSetup]:
         return [
-            CharacterSetup(item.character_id, item.identity_id)
+            CharacterSetup(
+                character_id=item.character_id,
+                identity_id=item.identity_id,
+                initial_area=item.initial_area_id,
+            )
             for item in draft.characters
         ]
 

@@ -3,7 +3,12 @@ from __future__ import annotations
 from engine.game_controller import GameController
 from engine.models.enums import AreaId, GamePhase
 from ui.controllers.game_session_controller import GameSessionController
-from ui.controllers.new_game_controller import NewGameController, default_phase5_draft
+from ui.controllers.new_game_controller import (
+    CharacterDraft,
+    NewGameController,
+    NewGameDraft,
+    default_phase5_draft,
+)
 from ui.screens.new_game_screen import NewGameScreenModel
 
 
@@ -67,6 +72,37 @@ def test_game_prepare_rejects_duplicate_rule_x_and_perpetrators() -> None:
 
     assert any("duplicated rule_x" in error for error in errors)
     assert any("duplicated incident perpetrator" in error for error in errors)
+
+
+def test_game_prepare_requires_script_selected_initial_area_for_servant() -> None:
+    model = NewGameScreenModel()
+    model.update_character(0, character_id="servant", identity_id="mastermind")
+
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(model.draft)
+    )
+
+    assert any("initial_area is required for this character" in error for error in errors)
+
+
+def test_new_game_controller_builds_initial_area_into_character_setup() -> None:
+    draft = default_phase5_draft()
+    characters = list(draft.characters)
+    characters[0] = CharacterDraft("servant", "mastermind", "city")
+    payload = NewGameController.build_payload(NewGameDraft(
+        module_id=draft.module_id,
+        loop_count=draft.loop_count,
+        days_per_loop=draft.days_per_loop,
+        rule_y_id=draft.rule_y_id,
+        rule_x_ids=list(draft.rule_x_ids),
+        characters=characters,
+        incidents=list(draft.incidents),
+    ))
+
+    setups = payload["character_setups"]
+    assert isinstance(setups, list)
+    assert setups[0].character_id == "servant"
+    assert setups[0].initial_area == "city"
 
 
 def test_new_game_controller_builds_engine_input_payload() -> None:
