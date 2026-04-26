@@ -5,6 +5,7 @@ import pytest
 from engine.game_controller import GameController, UICallback
 from engine.models.cards import PlacementIntent
 from engine.models.enums import AreaId, GamePhase, PlayerRole
+from engine.models.selectors import area_choice_selector
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import ForceLoopEnd, WaitForInput
 from engine.rules.module_loader import build_game_state_from_module
@@ -85,13 +86,13 @@ def test_loop_start_requests_henchman_initial_area_choice() -> None:
     assert controller.state_machine.current_phase == GamePhase.LOOP_START
     assert ui.waits[-1].input_type == "choose_initial_area"
     assert ui.waits[-1].options == [
-        AreaId.HOSPITAL.value,
-        AreaId.SHRINE.value,
-        AreaId.CITY.value,
-        AreaId.SCHOOL.value,
+        area_choice_selector(AreaId.HOSPITAL.value),
+        area_choice_selector(AreaId.SHRINE.value),
+        area_choice_selector(AreaId.CITY.value),
+        area_choice_selector(AreaId.SCHOOL.value),
     ]
 
-    controller.provide_input(AreaId.SCHOOL.value)
+    controller.provide_input(area_choice_selector(AreaId.SCHOOL.value))
 
     assert controller.state.characters["henchman"].initial_area == AreaId.SCHOOL
     assert controller.state.characters["henchman"].area == AreaId.SCHOOL

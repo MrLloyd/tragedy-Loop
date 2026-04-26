@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from engine.models.enums import AreaId, GamePhase, TokenType
 from engine.models.board import BoardState
@@ -113,6 +113,8 @@ class GameState:
     # ---- 事件追踪 ----
     incidents_occurred_this_loop: list[str] = field(default_factory=list)
     incident_results_this_loop: list[IncidentPublicResult] = field(default_factory=list)
+    revealed_incident_perpetrators_this_loop: list[dict[str, Any]] = field(default_factory=list)
+    suppressed_incident_perpetrators: set[str] = field(default_factory=set)
     # Phase 2 module_loader 填充；为空时 IncidentHandler 仅做触发标记，跳过效果执行
     incident_defs: dict[str, IncidentDef] = field(default_factory=dict)
     # Phase 2 module_loader 填充；为空时 ON_DEATH 能力触发跳过（安全降级）
@@ -241,6 +243,43 @@ class GameState:
     def get_character(self, character_id: str) -> CharacterState:
         return self.characters[character_id]
 
+    def get_character_forbidden_areas(self, character_id: str) -> list[AreaId]:
+        character = self.characters.get(character_id)
+        if character is None:
+            return []
+        return list(character.forbidden_areas)
+
+    def can_character_enter_area(self, character_id: str, area: AreaId | str) -> bool:
+        character = self.characters.get(character_id)
+        if character is None:
+            return False
+        target_area = AreaId(area) if isinstance(area, str) else area
+        return character.can_enter_area(target_area)
+
+    def available_enterable_areas(
+        self,
+        character_id: str,
+        areas: list[AreaId | str],
+    ) -> list[str]:
+        result: list[str] = []
+        for area in areas:
+            target_area = AreaId(area) if isinstance(area, str) else area
+            if self.can_character_enter_area(character_id, target_area):
+                result.append(target_area.value)
+        return result
+
+    def move_character(self, character_id: str, destination: AreaId | str) -> bool:
+        character = self.characters.get(character_id)
+        if character is None or not character.is_alive or character.is_removed:
+            return False
+        target_area = AreaId(destination) if isinstance(destination, str) else destination
+        if character.area == target_area:
+            return False
+        if not character.can_enter_area(target_area):
+            return False
+        character.area = target_area
+        return True
+
     def get_incidents_for_day(self, day: int) -> list[IncidentSchedule]:
         return [inc for inc in self.script.incidents if inc.day == day]
 
@@ -323,6 +362,8 @@ class GameState:
             inc.occurred = False
         self.incidents_occurred_this_loop.clear()
         self.incident_results_this_loop.clear()
+        self.revealed_incident_perpetrators_this_loop.clear()
+        self.suppressed_incident_perpetrators.clear()
         self.ability_runtime.usages_this_loop.clear()
         self.ability_runtime.usages_this_day.clear()
         self.loop_initial_area_choices_done.clear()
@@ -347,6 +388,7 @@ class GameState:
         self.current_day += 1
         self.placed_cards.clear()
         self.world_moved_today = False
+        self.revealed_incident_perpetrators_this_loop.clear()
         self.ability_runtime.usages_this_day.clear()
 
     def rotate_leader(self) -> None:

@@ -6,17 +6,21 @@ from engine.display_names import (
     area_name,
     character_name,
     character_option_label,
+    display_target_name,
     format_tokens,
     identity_name,
     identity_option_label,
     incident_option_label,
     module_option_label,
     phase_name,
+    revealed_incident_message,
     revealed_identity_message,
     rule_option_label,
     token_name,
 )
 from engine.models.enums import GamePhase
+from engine.models.incident import IncidentSchedule
+from engine.models.selectors import area_choice_selector, character_choice_selector
 from ui.controllers.test_mode_controller import (
     TEST_MODE_DAYS_PER_LOOP,
     TEST_MODE_LOOP_COUNT,
@@ -29,6 +33,7 @@ try:  # pragma: no cover - optional UI dependency
     from PySide6.QtWidgets import (
         QCheckBox,
         QComboBox,
+        QDialog,
         QFormLayout,
         QGridLayout,
         QGroupBox,
@@ -45,6 +50,17 @@ try:  # pragma: no cover - optional UI dependency
 except Exception:  # pragma: no cover
     QWidget = object  # type: ignore[misc,assignment]
 else:
+    from ui.controllers.test_mode_game_session import TestModeGameSessionController
+    from ui.screens.game_screen import GameScreen
+    from ui.widgets import StepChoiceDialog
+
+    class _EmbeddedGameScreen(GameScreen):
+        def _show_revealed_identity_popups(self) -> None:
+            return
+
+        def _show_revealed_incident_popups(self) -> None:
+            return
+
     class TestModeScreen(QWidget):
         """独立测试模式：自由配置角色并触发事件 / 身份能力。"""
 
@@ -53,6 +69,7 @@ else:
         INCIDENT_AREA_TARGET_SLOTS = 2
         INCIDENT_TOKEN_TARGET_SLOTS = 2
         ABILITY_TARGET_SLOTS = 4
+        RULE_ABILITY_TARGET_SLOTS = 4
 
         def __init__(
             self,
@@ -61,10 +78,12 @@ else:
         ) -> None:
             super().__init__(parent)
             self.controller = controller or TestModeController()
+            self.phase_session = TestModeGameSessionController(self.controller)
             self._after_apply: Callable[[], None] | None = None
             self._refreshing = False
             self._character_inputs: list[dict[str, QWidget]] = []
             self._shown_reveal_message_count = 0
+            self._shown_incident_reveal_message_count = 0
 
             outer = QVBoxLayout(self)
             scroll = QScrollArea()
@@ -82,47 +101,21 @@ else:
             self.module_value = QLabel("-")
             self.rule_y_value = QLabel("-")
             self.rule_x_value = QLabel("-")
-            self.loop_value = QLabel("-")
-            self.day_value = QLabel("-")
-            self.phase_value = QLabel("-")
             self.character_summary_value = QLabel("-")
-            self.protagonist_dead_value = QLabel("-")
+            self.failure_report_value = QLabel("-")
             self.failure_state_value = QLabel("-")
-            self.failure_flags_value = QLabel("-")
+            self.failure_reasons_value = QLabel("-")
             self.status_value = QLabel("-")
             self.status_value.setWordWrap(True)
             current_form.addRow("模组", self.module_value)
             current_form.addRow("规则 Y", self.rule_y_value)
             current_form.addRow("规则 X", self.rule_x_value)
-            current_form.addRow("轮回", self.loop_value)
-            current_form.addRow("天数", self.day_value)
-            current_form.addRow("阶段", self.phase_value)
             current_form.addRow("角色", self.character_summary_value)
-            current_form.addRow("主人公死亡", self.protagonist_dead_value)
+            current_form.addRow("失败报送", self.failure_report_value)
             current_form.addRow("失败状态", self.failure_state_value)
-            current_form.addRow("失败标记", self.failure_flags_value)
+            current_form.addRow("失败原因", self.failure_reasons_value)
             current_form.addRow("状态", self.status_value)
             root.addWidget(current_box)
-
-            board_box = QGroupBox("当前版图")
-            board_layout = QGridLayout(board_box)
-            self.board_area_texts: dict[str, QTextEdit] = {}
-            for area_id, row, col in (
-                ("hospital", 0, 0),
-                ("shrine", 0, 1),
-                ("city", 1, 0),
-                ("school", 1, 1),
-            ):
-                area_box = QGroupBox(area_name(area_id))
-                area_layout = QVBoxLayout(area_box)
-                area_text = QTextEdit()
-                area_text.setReadOnly(True)
-                area_text.setMinimumHeight(110)
-                area_text.setMaximumHeight(150)
-                area_layout.addWidget(area_text)
-                board_layout.addWidget(area_box, row, col)
-                self.board_area_texts[area_id] = area_text
-            root.addWidget(board_box)
 
             basic_box = QGroupBox("基础设置")
             basic_form = QFormLayout(basic_box)
@@ -164,7 +157,16 @@ else:
             self.phase_wait_value = QLabel("无")
             self.phase_wait_value.setWordWrap(True)
             phase_layout.addWidget(self.phase_wait_value)
+            self.phase_game_screen = _EmbeddedGameScreen(parent=self)
+            self.phase_game_screen.setMinimumHeight(520)
+            self.phase_game_screen.bind_session(self.phase_session)
+            self.phase_game_screen.set_after_submit(self._on_phase_wait_submitted)
+            phase_layout.addWidget(self.phase_game_screen)
             root.addWidget(phase_box)
+            self.loop_value = self.phase_game_screen.loop_value
+            self.day_value = self.phase_game_screen.day_value
+            self.phase_value = self.phase_game_screen.phase_value
+            self.board_area_texts = self.phase_game_screen.board_area_texts
 
             roster_box = QGroupBox("角色配置")
             roster_layout = QVBoxLayout(roster_box)
@@ -181,19 +183,22 @@ else:
             roster_layout.addLayout(self.characters_grid)
             root.addWidget(roster_box)
 
+            board_setup_box = QGroupBox("版图配置")
+            board_setup_layout = QVBoxLayout(board_setup_box)
+            self.board_setup_grid = QGridLayout()
+            board_setup_layout.addLayout(self.board_setup_grid)
+            root.addWidget(board_setup_box)
+
             incident_box = QGroupBox("触发事件")
             incident_form = QFormLayout(incident_box)
             self.incident_input = QComboBox()
             self.perpetrator_input = QComboBox()
-            self.incident_target_character_inputs = self._build_target_combos(self.INCIDENT_CHARACTER_TARGET_SLOTS)
-            self.incident_target_area_inputs = self._build_target_combos(self.INCIDENT_AREA_TARGET_SLOTS)
-            self.incident_target_token_inputs = self._build_target_combos(self.INCIDENT_TOKEN_TARGET_SLOTS)
             self.trigger_incident_button = QPushButton("触发事件")
             incident_form.addRow("事件", self.incident_input)
             incident_form.addRow("当事人", self.perpetrator_input)
-            incident_form.addRow("角色目标", self._build_target_combo_row(self.incident_target_character_inputs))
-            incident_form.addRow("版图目标", self._build_target_combo_row(self.incident_target_area_inputs))
-            incident_form.addRow("指示物", self._build_target_combo_row(self.incident_target_token_inputs))
+            self.incident_target_hint = QLabel("如事件需要目标，将在触发后逐步弹出选择。")
+            self.incident_target_hint.setWordWrap(True)
+            incident_form.addRow("目标", self.incident_target_hint)
             incident_form.addRow("", self.trigger_incident_button)
             root.addWidget(incident_box)
 
@@ -202,18 +207,36 @@ else:
             self.actor_input = QComboBox()
             self.timing_input = QComboBox()
             self.identity_ability_input = QComboBox()
-            self.ability_target_inputs = self._build_target_combos(self.ABILITY_TARGET_SLOTS)
             self.refresh_ability_button = QPushButton("刷新能力列表")
             self.trigger_identity_ability_button = QPushButton("触发身份能力")
             ability_form.addRow("角色", self.actor_input)
             ability_form.addRow("时点过滤", self.timing_input)
             ability_form.addRow("能力", self.identity_ability_input)
-            ability_form.addRow("目标选择", self._build_target_combo_row(self.ability_target_inputs))
+            self.identity_target_hint = QLabel("如能力需要目标，将在触发后逐步弹出选择。")
+            self.identity_target_hint.setWordWrap(True)
+            ability_form.addRow("目标", self.identity_target_hint)
             ability_row = QHBoxLayout()
             ability_row.addWidget(self.refresh_ability_button)
             ability_row.addWidget(self.trigger_identity_ability_button)
             ability_form.addRow("", ability_row)
             root.addWidget(ability_box)
+
+            rule_ability_box = QGroupBox("触发规则能力")
+            rule_ability_form = QFormLayout(rule_ability_box)
+            self.rule_ability_timing_input = QComboBox()
+            self.rule_ability_input = QComboBox()
+            self.refresh_rule_ability_button = QPushButton("刷新规则能力列表")
+            self.trigger_rule_ability_button = QPushButton("触发规则能力")
+            rule_ability_form.addRow("时点过滤", self.rule_ability_timing_input)
+            rule_ability_form.addRow("能力", self.rule_ability_input)
+            self.rule_target_hint = QLabel("如规则能力需要目标，将在触发后逐步弹出选择。")
+            self.rule_target_hint.setWordWrap(True)
+            rule_ability_form.addRow("目标", self.rule_target_hint)
+            rule_ability_row = QHBoxLayout()
+            rule_ability_row.addWidget(self.refresh_rule_ability_button)
+            rule_ability_row.addWidget(self.trigger_rule_ability_button)
+            rule_ability_form.addRow("", rule_ability_row)
+            root.addWidget(rule_ability_box)
 
             reserved_box = QGroupBox("角色能力（预留）")
             reserved_layout = QVBoxLayout(reserved_box)
@@ -239,12 +262,16 @@ else:
             self.apply_rules_button.clicked.connect(self._on_apply_rules)
             self.actor_input.currentIndexChanged.connect(self._refresh_identity_abilities)
             self.timing_input.currentIndexChanged.connect(self._refresh_identity_abilities)
-            self.identity_ability_input.currentIndexChanged.connect(self._refresh_identity_target_inputs)
+            self.identity_ability_input.currentIndexChanged.connect(self._refresh_identity_abilities)
+            self.rule_ability_timing_input.currentIndexChanged.connect(self._refresh_rule_abilities)
+            self.rule_ability_input.currentIndexChanged.connect(self._refresh_rule_abilities)
             self.execute_phase_button.clicked.connect(self._on_execute_phase)
             self.advance_phase_button.clicked.connect(self._on_advance_phase)
             self.refresh_ability_button.clicked.connect(self._refresh_identity_abilities)
+            self.refresh_rule_ability_button.clicked.connect(self._refresh_rule_abilities)
             self.trigger_incident_button.clicked.connect(self._on_trigger_incident)
             self.trigger_identity_ability_button.clicked.connect(self._on_trigger_identity_ability)
+            self.trigger_rule_ability_button.clicked.connect(self._on_trigger_rule_ability)
 
             self.refresh()
 
@@ -256,6 +283,7 @@ else:
 
         def refresh(self) -> None:
             self._refreshing = True
+            self.phase_session.refresh_from_test_mode()
             self._set_combo_items(
                 self.module_input,
                 [(module_id, module_option_label(module_id)) for module_id in self.controller.available_modules],
@@ -279,13 +307,16 @@ else:
             self._ensure_rule_x_inputs()
             self._refresh_rule_x_options()
             self._rebuild_character_rows()
+            self._rebuild_board_token_rows()
             self._refresh_incident_inputs()
             self._refresh_actor_inputs()
             self._refresh_identity_abilities()
+            self._refresh_rule_abilities()
             snapshot = self.controller.snapshot()
             self._render_live_snapshot(snapshot)
             self.snapshot_text.setPlainText(self._format_recent_logs(snapshot))
             self._show_revealed_identity_popups(snapshot)
+            self._show_revealed_incident_popups(snapshot)
             self._refreshing = False
 
         def _on_module_changed(self) -> None:
@@ -347,12 +378,19 @@ else:
         def _on_trigger_incident(self) -> None:
             try:
                 self._ensure_session()
+                target_values = self._prompt_incident_targets(
+                    incident_id=self._combo_value(self.incident_input),
+                    perpetrator_id=self._combo_value(self.perpetrator_input),
+                )
+                if target_values is None:
+                    return
                 self.controller.trigger_incident(
                     incident_id=self._combo_value(self.incident_input),
                     perpetrator_id=self._combo_value(self.perpetrator_input),
-                    target_character_ids=self._selected_combo_values(self.incident_target_character_inputs),
-                    target_area_ids=self._selected_combo_values(self.incident_target_area_inputs),
-                    chosen_token_types=self._selected_combo_values(self.incident_target_token_inputs),
+                    target_selectors=target_values[0],
+                    target_character_ids=target_values[1],
+                    target_area_ids=target_values[2],
+                    chosen_token_types=target_values[3],
                 )
             except Exception as exc:
                 QMessageBox.warning(self, "触发事件失败", str(exc))
@@ -363,14 +401,49 @@ else:
             try:
                 self._ensure_session()
                 timing = self._combo_value(self.timing_input) or None
+                target_choices = self._prompt_static_target_groups(
+                    title=f"触发身份能力：{self.identity_ability_input.currentText()}",
+                    option_groups=self.controller.available_identity_ability_target_options(
+                        actor_id=self._combo_value(self.actor_input),
+                        ability_id=self._combo_value(self.identity_ability_input),
+                        timing=timing,
+                    ),
+                    choice_label="目标",
+                )
+                if target_choices is None:
+                    return
                 self.controller.trigger_identity_ability(
                     actor_id=self._combo_value(self.actor_input),
                     ability_id=self._combo_value(self.identity_ability_input),
                     timing=timing,
-                    target_choices=self._selected_combo_values(self.ability_target_inputs),
+                    target_choices=target_choices,
                 )
             except Exception as exc:
                 QMessageBox.warning(self, "触发能力失败", str(exc))
+                return
+            self.refresh()
+
+        def _on_trigger_rule_ability(self) -> None:
+            try:
+                self._ensure_session()
+                timing = self._combo_value(self.rule_ability_timing_input) or None
+                target_choices = self._prompt_static_target_groups(
+                    title=f"触发规则能力：{self.rule_ability_input.currentText()}",
+                    option_groups=self.controller.available_rule_ability_target_options(
+                        ability_id=self._combo_value(self.rule_ability_input),
+                        timing=timing,
+                    ),
+                    choice_label="目标",
+                )
+                if target_choices is None:
+                    return
+                self.controller.trigger_rule_ability(
+                    ability_id=self._combo_value(self.rule_ability_input),
+                    timing=timing,
+                    target_choices=target_choices,
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "触发规则能力失败", str(exc))
                 return
             self.refresh()
 
@@ -405,6 +478,14 @@ else:
                     )
                 )
             self.controller.replace_characters(rows)
+            board_tokens: dict[str, dict[str, int]] = {}
+            for area_id, token_spins in self._board_token_inputs.items():
+                board_tokens[area_id] = {
+                    token_id: int(spin.value())
+                    for token_id, spin in token_spins.items()
+                    if int(spin.value()) > 0
+                }
+            self.controller.replace_board_tokens(board_tokens)
 
         def _ensure_rule_x_inputs(self) -> None:
             while len(self.rule_x_inputs) > self.controller.rule_x_count:
@@ -507,6 +588,38 @@ else:
                     }
                 )
 
+        def _rebuild_board_token_rows(self) -> None:
+            while self.board_setup_grid.count():
+                item = self.board_setup_grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+            token_columns = [
+                ("intrigue", "密谋"),
+            ]
+            self._board_token_inputs: dict[str, dict[str, QSpinBox]] = {}
+
+            self.board_setup_grid.addWidget(QLabel("版图"), 0, 0)
+            for column, (_token_id, label) in enumerate(token_columns, start=1):
+                header = QLabel(label)
+                header.setAlignment(Qt.AlignCenter)
+                self.board_setup_grid.addWidget(header, 0, column)
+
+            board_tokens = self.controller.draft.board_tokens
+            for row_index, area_id in enumerate(self.controller.available_area_ids(), start=1):
+                self.board_setup_grid.addWidget(QLabel(area_name(area_id)), row_index, 0)
+                token_spins: dict[str, QSpinBox] = {}
+                area_tokens = board_tokens.get(area_id, {})
+                for column, (token_id, _label) in enumerate(token_columns, start=1):
+                    spin = QSpinBox()
+                    spin.setMinimum(0)
+                    spin.setMaximum(3)
+                    spin.setValue(int(area_tokens.get(token_id, 0)))
+                    self.board_setup_grid.addWidget(spin, row_index, column)
+                    token_spins[token_id] = spin
+                self._board_token_inputs[area_id] = token_spins
+
         def _refresh_incident_inputs(self) -> None:
             self._set_combo_items(
                 self.incident_input,
@@ -522,15 +635,6 @@ else:
                 character_options,
                 self._combo_value(self.perpetrator_input),
             )
-            self._set_optional_target_items(self.incident_target_character_inputs, character_options)
-            self._set_optional_target_items(
-                self.incident_target_area_inputs,
-                [(area_id, area_name(area_id)) for area_id in self.controller.available_area_ids()],
-            )
-            self._set_optional_target_items(
-                self.incident_target_token_inputs,
-                [(token_id, token_name(token_id)) for token_id in self.controller.available_token_ids()],
-            )
 
         def _refresh_actor_inputs(self) -> None:
             character_options = [
@@ -542,47 +646,37 @@ else:
                 character_options,
                 self._combo_value(self.actor_input),
             )
-            timing_options = [("", "全部时点")]
-            timing_options.extend(
-                (phase.value, phase.value)
-                for phase in []
-            )
-            from engine.models.enums import AbilityTiming
-
-            timing_options = [("", "全部时点")] + [
-                (timing.value, timing.value)
-                for timing in AbilityTiming
-            ]
+            timing_options = self._ability_timing_options()
             self._set_combo_items(
                 self.timing_input,
                 timing_options,
                 self._combo_value(self.timing_input),
             )
+            self._set_combo_items(
+                self.rule_ability_timing_input,
+                timing_options,
+                self._combo_value(self.rule_ability_timing_input),
+            )
+
+        @staticmethod
+        def _ability_timing_options() -> list[tuple[str, str]]:
+            from engine.models.enums import AbilityTiming
+
+            return [("", "全部时点")] + [
+                (timing.value, timing.value)
+                for timing in AbilityTiming
+            ]
 
         def _refresh_identity_abilities(self) -> None:
             actor_id = self._combo_value(self.actor_input)
             timing = self._combo_value(self.timing_input) or None
             options = self.controller.available_identity_abilities(actor_id=actor_id or None, timing=timing)
             self._set_combo_items(self.identity_ability_input, options, self._combo_value(self.identity_ability_input))
-            self._refresh_identity_target_inputs()
 
-        def _refresh_identity_target_inputs(self) -> None:
-            actor_id = self._combo_value(self.actor_input)
-            ability_id = self._combo_value(self.identity_ability_input)
-            timing = self._combo_value(self.timing_input) or None
-            option_groups = self.controller.available_identity_ability_target_options(
-                actor_id=actor_id,
-                ability_id=ability_id,
-                timing=timing,
-            ) if actor_id and ability_id else []
-            for index, combo in enumerate(self.ability_target_inputs):
-                current_value = self._combo_value(combo)
-                if index < len(option_groups):
-                    self._set_combo_items(combo, [("", "—")] + option_groups[index], current_value)
-                    combo.setEnabled(True)
-                else:
-                    self._set_combo_items(combo, [("", "—")], "")
-                    combo.setEnabled(False)
+        def _refresh_rule_abilities(self) -> None:
+            timing = self._combo_value(self.rule_ability_timing_input) or None
+            options = self.controller.available_rule_abilities(timing=timing)
+            self._set_combo_items(self.rule_ability_input, options, self._combo_value(self.rule_ability_input))
 
         def _render_live_snapshot(self, snapshot: dict[str, object]) -> None:
             self.module_value.setText(module_option_label(self.controller.draft.module_id))
@@ -599,11 +693,6 @@ else:
                 )
             else:
                 self.rule_x_value.setText("无")
-            self.loop_value.setText(f"第 {int(snapshot.get('current_loop', self.controller.draft.current_loop))} 轮")
-            self.day_value.setText(f"第 {int(snapshot.get('current_day', self.controller.draft.current_day))} 天")
-            self.phase_value.setText(
-                phase_name(str(snapshot.get("current_phase", self.controller.draft.current_phase)))
-            )
             characters = snapshot.get("characters", {})
             total_count = 0
             alive_count = 0
@@ -617,13 +706,28 @@ else:
             self.character_summary_value.setText(f"{alive_count}/{total_count} 存活")
             failure_flags = snapshot.get("failure_flags", [])
             protagonist_dead = bool(snapshot.get("protagonist_dead", False))
-            failure_reached = protagonist_dead
-            if isinstance(failure_flags, list) and failure_flags:
-                self.failure_flags_value.setText("、".join(str(item) for item in failure_flags))
-                failure_reached = True
+            failure_reasons: list[str] = []
+            if protagonist_dead:
+                failure_reasons.append("protagonist_death")
+            if isinstance(failure_flags, list):
+                seen_reasons = set(failure_reasons)
+                for item in failure_flags:
+                    reason = str(item)
+                    if not reason or reason in seen_reasons:
+                        continue
+                    failure_reasons.append(reason)
+                    seen_reasons.add(reason)
+            failure_reached = bool(failure_reasons)
+            if protagonist_dead:
+                self.failure_report_value.setText("主人公死亡")
+            elif failure_reached:
+                self.failure_report_value.setText("主人公失败")
             else:
-                self.failure_flags_value.setText("无")
-            self.protagonist_dead_value.setText("是" if protagonist_dead else "否")
+                self.failure_report_value.setText("无")
+            if failure_reasons:
+                self.failure_reasons_value.setText("、".join(failure_reasons))
+            else:
+                self.failure_reasons_value.setText("无")
             self.failure_state_value.setText("已触发" if failure_reached else "未触发")
             self.status_value.setText(self.controller.status_message or "调试局已就绪")
             pending_wait = snapshot.get("pending_wait")
@@ -633,7 +737,6 @@ else:
                 )
             else:
                 self.phase_wait_value.setText("无")
-            self._render_board(snapshot)
 
         def _render_board(self, snapshot: dict[str, object]) -> None:
             board_tokens = snapshot.get("board_tokens", {})
@@ -696,6 +799,16 @@ else:
                 QMessageBox.information(self, "身份公开", message)
             self._shown_reveal_message_count = len(messages)
 
+        def _show_revealed_incident_popups(self, snapshot: dict[str, object]) -> None:
+            messages = self._extract_revealed_incident_messages(snapshot)
+            if self._shown_incident_reveal_message_count > len(messages):
+                self._shown_incident_reveal_message_count = 0
+            if self._shown_incident_reveal_message_count >= len(messages):
+                return
+            for message in messages[self._shown_incident_reveal_message_count:]:
+                QMessageBox.information(self, "当事人公开", message)
+            self._shown_incident_reveal_message_count = len(messages)
+
         @staticmethod
         def _extract_revealed_identity_messages(snapshot: dict[str, object]) -> list[str]:
             event_log = snapshot.get("event_log", [])
@@ -715,6 +828,27 @@ else:
                 if not character_id or not identity_id:
                     continue
                 messages.append(revealed_identity_message(character_id, identity_id))
+            return messages
+
+        @staticmethod
+        def _extract_revealed_incident_messages(snapshot: dict[str, object]) -> list[str]:
+            event_log = snapshot.get("event_log", [])
+            if not isinstance(event_log, list):
+                return []
+            messages: list[str] = []
+            for item in event_log:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("event_type", "")) != "INCIDENT_REVEALED":
+                    continue
+                data = item.get("data", {})
+                if not isinstance(data, dict):
+                    continue
+                incident_id = str(data.get("incident_id", "") or "")
+                perpetrator_id = str(data.get("perpetrator_id", "") or "")
+                if not incident_id or not perpetrator_id:
+                    continue
+                messages.append(revealed_incident_message(incident_id, perpetrator_id))
             return messages
 
         @staticmethod
@@ -769,40 +903,141 @@ else:
             value = combo.currentData()
             return str(value) if value is not None else combo.currentText().strip()
 
-        @staticmethod
-        def _build_target_combos(count: int) -> list[QComboBox]:
-            return [QComboBox() for _ in range(count)]
-
-        @staticmethod
-        def _build_target_combo_row(combos: list[QComboBox]) -> QWidget:
-            container = QWidget()
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            for combo in combos:
-                combo.setMinimumWidth(120)
-                layout.addWidget(combo)
-            return container
-
-        def _set_optional_target_items(
+        def _prompt_incident_targets(
             self,
-            combos: list[QComboBox],
-            options: list[tuple[str, str]],
-        ) -> None:
-            for combo in combos:
-                self._set_combo_items(combo, [("", "—")] + options, self._combo_value(combo))
-                combo.setEnabled(True)
+            *,
+            incident_id: str,
+            perpetrator_id: str,
+        ) -> tuple[list[dict[str, str]], list[str], list[str], list[str]] | None:
+            if self.controller.session is None or not incident_id or not perpetrator_id:
+                return ([], [], [], [])
+            incident_def = self.controller.session.state.incident_defs.get(incident_id)
+            if incident_def is None:
+                return ([], [], [], [])
+
+            history: list[tuple[str, str]] = []
+            while True:
+                schedule = IncidentSchedule(
+                    incident_id=incident_id,
+                    day=self.controller.session.state.current_day,
+                    perpetrator_id=perpetrator_id,
+                    target_selectors=[
+                        character_choice_selector(value) if kind == "character" else area_choice_selector(value)
+                        for kind, value in history
+                        if kind in {"character", "area"}
+                    ],
+                    target_character_ids=[value for kind, value in history if kind == "character"],
+                    target_area_ids=[value for kind, value in history if kind == "area"],
+                    chosen_token_types=[value for kind, value in history if kind == "token"],
+                )
+                next_choice = self.controller.session.incident_resolver.next_runtime_choice(
+                    self.controller.session.state,
+                    schedule,
+                    incident_def,
+                )
+                if next_choice is None:
+                    return (
+                        [
+                            character_choice_selector(value) if kind == "character" else area_choice_selector(value)
+                            for kind, value in history
+                            if kind in {"character", "area"}
+                        ],
+                        [value for kind, value in history if kind == "character"],
+                        [value for kind, value in history if kind == "area"],
+                        [value for kind, value in history if kind == "token"],
+                    )
+
+                choice_type, candidates = next_choice
+                dialog = StepChoiceDialog(
+                    title=f"触发事件：{incident_option_label(incident_id)}",
+                    prompt=self._incident_choice_prompt(choice_type, len(history) + 1),
+                    options=[
+                        (candidate_id, self._target_dialog_label(choice_type, candidate_id))
+                        for candidate_id in candidates
+                    ],
+                    summary_lines=self._incident_history_lines(history),
+                    allow_back=bool(history),
+                    parent=self,
+                )
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    if dialog.back_requested and history:
+                        history.pop()
+                        continue
+                    return None
+                history.append((choice_type, dialog.selected_value()))
+
+        def _prompt_static_target_groups(
+            self,
+            *,
+            title: str,
+            option_groups: list[list[tuple[str, str]]],
+            choice_label: str,
+        ) -> list[str] | None:
+            if not option_groups:
+                return []
+            selections: list[str] = []
+            while len(selections) < len(option_groups):
+                index = len(selections)
+                dialog = StepChoiceDialog(
+                    title=title,
+                    prompt=f"请选择第 {index + 1} 个{choice_label}",
+                    options=option_groups[index],
+                    summary_lines=self._static_history_lines(option_groups, selections, choice_label),
+                    allow_back=bool(selections),
+                    parent=self,
+                )
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    if dialog.back_requested and selections:
+                        selections.pop()
+                        continue
+                    return None
+                selections.append(dialog.selected_value())
+            return selections
+
+        def _static_history_lines(
+            self,
+            option_groups: list[list[tuple[str, str]]],
+            selections: list[str],
+            choice_label: str,
+        ) -> list[str]:
+            lines: list[str] = []
+            for index, value in enumerate(selections):
+                label = dict(option_groups[index]).get(value, value)
+                lines.append(f"第 {index + 1} 个{choice_label}：{label}")
+            return lines
+
+        def _incident_history_lines(self, history: list[tuple[str, str]]) -> list[str]:
+            labels = {
+                "character": "角色目标",
+                "area": "版图目标",
+                "token": "指示物",
+            }
+            return [
+                f"第 {index + 1} 步｜{labels.get(choice_type, choice_type)}：{self._target_dialog_label(choice_type, value)}"
+                for index, (choice_type, value) in enumerate(history)
+            ]
 
         @staticmethod
-        def _selected_combo_values(combos: list[QComboBox]) -> list[str]:
-            return [
-                value
-                for combo in combos
-                if (value := TestModeScreen._combo_value(combo))
-            ]
+        def _incident_choice_prompt(choice_type: str, step_number: int) -> str:
+            mapping = {
+                "character": "请选择角色目标",
+                "area": "请选择版图目标",
+                "token": "请选择指示物类型",
+            }
+            return f"第 {step_number} 步：{mapping.get(choice_type, '请选择目标')}"
+
+        @staticmethod
+        def _target_dialog_label(choice_type: str, value: str) -> str:
+            if choice_type == "token":
+                return token_name(value)
+            return display_target_name(value) if choice_type == "area" else character_option_label(value)
 
         def _notify_after_apply(self) -> None:
             if self._after_apply is not None:
                 self._after_apply()
+
+        def _on_phase_wait_submitted(self) -> None:
+            self.refresh()
 
         def _ensure_session(self) -> None:
             if self.controller.session is None:

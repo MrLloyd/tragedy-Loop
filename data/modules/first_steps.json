@@ -51,7 +51,9 @@
           "effects": [
             {
               "effect_type": "protagonist_failure",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "mastermind_initial_area_intrigue_2"
             }
           ]
@@ -77,7 +79,11 @@
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "school",
+              "target": {
+                "scope": "fixed_area",
+                "subject": "board",
+                "area": "school"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 2
@@ -86,7 +92,9 @@
           "effects": [
             {
               "effect_type": "protagonist_failure",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "mastermind_initial_area_intrigue_2"
             }
           ]
@@ -114,7 +122,11 @@
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "school",
+              "target": {
+                "scope": "fixed_area",
+                "subject": "board",
+                "area": "school"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 2
@@ -123,7 +135,9 @@
           "effects": [
             {
               "effect_type": "protagonist_failure",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "rule_x_loss_condition"
             }
           ]
@@ -148,7 +162,10 @@
           "effects": [
             {
               "effect_type": "place_token",
-              "target": "any_board",
+              "target": {
+                "scope": "any_area",
+                "subject": "board"
+              },
               "token_type": "intrigue",
               "amount": 1
             }
@@ -189,12 +206,16 @@
           "effects": [
             {
               "effect_type": "protagonist_failure",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "key_person_dead"
             },
             {
               "effect_type": "force_loop_end",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "key_person_dead"
             }
           ]
@@ -226,7 +247,13 @@
           "effects": [
             {
               "effect_type": "kill_character",
-              "target": "same_area_identity:key_person"
+              "target": {
+                "scope": "same_area",
+                "subject": "character",
+                "filters": {
+                  "identity_id": "key_person"
+                }
+              }
             }
           ]
         },
@@ -238,7 +265,9 @@
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 4
@@ -247,7 +276,9 @@
           "effects": [
             {
               "effect_type": "protagonist_death",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "killer_intrigue_4"
             }
           ]
@@ -270,7 +301,10 @@
           "effects": [
             {
               "effect_type": "place_token",
-              "target": "same_area_any",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
               "token_type": "intrigue",
               "amount": 1
             }
@@ -284,7 +318,10 @@
           "effects": [
             {
               "effect_type": "place_token",
-              "target": "same_area_board",
+              "target": {
+                "scope": "same_area",
+                "subject": "board"
+              },
               "token_type": "intrigue",
               "amount": 1
             }
@@ -308,7 +345,10 @@
           "effects": [
             {
               "effect_type": "nullify_card",
-              "target": "same_area_any",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
               "value": "forbid_intrigue"
             }
           ]
@@ -321,7 +361,10 @@
           "effects": [
             {
               "effect_type": "nullify_card",
-              "target": "same_area_board",
+              "target": {
+                "scope": "same_area",
+                "subject": "board"
+              },
               "value": "forbid_intrigue"
             }
           ]
@@ -343,17 +386,23 @@
           "condition": {
             "condition_type": "character_dead",
             "params": {
-              "target": "self"
+              "target": {
+                "ref": "self"
+              }
             }
           },
           "effects": [
             {
               "effect_type": "reveal_identity",
-              "target": "self"
+              "target": {
+                "ref": "self"
+              }
             },
             {
               "effect_type": "protagonist_failure",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "value": "friend_dead"
             }
           ]
@@ -366,13 +415,17 @@
           "condition": {
             "condition_type": "identity_revealed",
             "params": {
-              "target": "self"
+              "target": {
+                "ref": "self"
+              }
             }
           },
           "effects": [
             {
               "effect_type": "place_token",
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "token_type": "goodwill",
               "amount": 1
             }
@@ -404,7 +457,10 @@
           "effects": [
             {
               "effect_type": "place_token",
-              "target": "same_area_any",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
               "token_type": "paranoia",
               "amount": 1
             }
@@ -426,7 +482,9 @@
           "condition": {
             "condition_type": "same_area_count",
             "params": {
-              "target": "self",
+              "target": {
+                "ref": "self"
+              },
               "operator": "==",
               "value": 2
             }
@@ -434,7 +492,10 @@
           "effects": [
             {
               "effect_type": "kill_character",
-              "target": "same_area_other"
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              }
             }
           ]
         }
@@ -450,13 +511,18 @@
       "effects": [
         {
           "effect_type": "place_token",
-          "target": "any_character",
+          "target": {
+            "scope": "any_area",
+            "subject": "character"
+          },
           "token_type": "paranoia",
           "amount": 2
         },
         {
           "effect_type": "place_token",
-          "target": "another_character",
+          "target": {
+            "ref": "another_character"
+          },
           "token_type": "intrigue",
           "amount": 1
         }
@@ -470,7 +536,10 @@
       "effects": [
         {
           "effect_type": "kill_character",
-          "target": "same_area_other"
+          "target": {
+            "scope": "same_area",
+            "subject": "other_character"
+          }
         }
       ]
     },
@@ -482,11 +551,20 @@
       "effects": [
         {
           "effect_type": "kill_character",
-          "target": "hospital_all",
+          "target": {
+            "scope": "fixed_area",
+            "area": "hospital",
+            "subject": "character",
+            "mode": "all"
+          },
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "hospital",
+              "target": {
+                "scope": "fixed_area",
+                "subject": "board",
+                "area": "hospital"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 1
@@ -495,12 +573,18 @@
         },
         {
           "effect_type": "protagonist_death",
-          "target": "self",
+          "target": {
+            "ref": "self"
+          },
           "value": "hospital_intrigue_2",
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "hospital",
+              "target": {
+                "scope": "fixed_area",
+                "subject": "board",
+                "area": "hospital"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 2
@@ -517,7 +601,9 @@
       "effects": [
         {
           "effect_type": "kill_character",
-          "target": "self"
+          "target": {
+            "ref": "self"
+          }
         }
       ]
     },
@@ -529,13 +615,18 @@
       "effects": [
         {
           "effect_type": "remove_token",
-          "target": "any_character",
+          "target": {
+            "scope": "any_area",
+            "subject": "character"
+          },
           "token_type": "goodwill",
           "amount": 2
         },
         {
           "effect_type": "place_token",
-          "target": "another_character",
+          "target": {
+            "ref": "another_character"
+          },
           "token_type": "goodwill",
           "amount": 2
         }
@@ -549,12 +640,20 @@
       "effects": [
         {
           "effect_type": "move_character",
-          "target": "self",
-          "value": "any_board"
+          "target": {
+            "ref": "self"
+          },
+          "value": {
+            "scope": "any_area",
+            "subject": "board"
+          }
         },
         {
           "effect_type": "place_token",
-          "target": "same_area_board",
+          "target": {
+            "scope": "same_area",
+            "subject": "board"
+          },
           "token_type": "intrigue",
           "amount": 1
         }
@@ -568,11 +667,16 @@
       "effects": [
         {
           "effect_type": "kill_character",
-          "target": "any_character",
+          "target": {
+            "scope": "any_area",
+            "subject": "character"
+          },
           "condition": {
             "condition_type": "token_check",
             "params": {
-              "target": "other",
+              "target": {
+                "ref": "other"
+              },
               "token": "intrigue",
               "operator": ">=",
               "value": 2

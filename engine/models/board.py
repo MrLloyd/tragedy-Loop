@@ -10,6 +10,19 @@ from engine.models.enums import AreaId, TokenType
 from engine.models.character import TokenSet
 
 
+class BoardTokenSet(TokenSet):
+    """版图标记物：仅允许密谋，且上限 3。"""
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == TokenType.INTRIGUE.value:
+            object.__setattr__(self, name, max(0, min(3, int(value))))
+            return
+        if name in {token.value for token in TokenType if token != TokenType.INTRIGUE}:
+            object.__setattr__(self, name, 0)
+            return
+        object.__setattr__(self, name, value)
+
+
 # ---------------------------------------------------------------------------
 # BoardArea — 单个版图区域
 # ---------------------------------------------------------------------------
@@ -18,7 +31,7 @@ class BoardArea:
     area_id: AreaId
     row: int                    # 0 or 1（2x2 网格行）
     col: int                    # 0 or 1（2x2 网格列）
-    tokens: TokenSet = field(default_factory=TokenSet)
+    tokens: BoardTokenSet = field(default_factory=BoardTokenSet)
 
     # 诅咒牌（HSA 预留）
     curse_cards: list[str] = field(default_factory=list)

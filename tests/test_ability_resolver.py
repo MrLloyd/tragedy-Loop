@@ -152,6 +152,58 @@ def test_token_check_condition_for_character_target() -> None:
     assert resolver.evaluate_condition(state, cond) is True
 
 
+def test_condition_targets_support_structured_selector_refs_and_fixed_area() -> None:
+    state = _build_state_with_module()
+    state.characters["owner"] = CharacterState(
+        character_id="owner",
+        name="持有者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+    state.characters["other"] = CharacterState(
+        character_id="other",
+        name="他者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="friend",
+        original_identity_id="friend",
+    )
+    state.characters["other"].tokens.add(TokenType.INTRIGUE, 2)
+    state.board.areas[AreaId.SCHOOL].tokens.add(TokenType.INTRIGUE, 2)
+
+    resolver = AbilityResolver()
+
+    assert resolver.evaluate_condition(
+        state,
+        Condition(
+            "token_check",
+            {
+                "target": {"scope": "fixed_area", "subject": "board", "area": "school"},
+                "token": "intrigue",
+                "operator": ">=",
+                "value": 2,
+            },
+        ),
+        owner_id="owner",
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition(
+            "token_check",
+            {
+                "target": {"ref": "other"},
+                "token": "intrigue",
+                "operator": ">=",
+                "value": 2,
+            },
+        ),
+        owner_id="owner",
+        other_id="other",
+    ) is True
+
+
 def test_has_trait_condition_reads_runtime_trait_layer() -> None:
     state = _build_state_with_module()
     state.characters["killer"] = CharacterState(
@@ -225,6 +277,39 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
     state.ability_runtime.usages_this_loop[resolver.ability_usage_key(abilities[0])] = 1
     abilities = resolver.collect_goodwill_abilities(state)
     assert len(abilities) == 0
+
+
+def test_legacy_goodwill_runtime_fallback_emits_selector_targets() -> None:
+    state = _build_state_with_module()
+    state.characters["shrine_maiden"] = CharacterState(
+        character_id="shrine_maiden",
+        name="巫女",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="friend",
+        original_identity_id="friend",
+        goodwill_ability_texts=["必须位于神社才可使用", "公开同一区域任意1名角色的身份", "", ""],
+        goodwill_ability_goodwill_requirements=[3, 5, 0, 0],
+        goodwill_ability_once_per_loop=[False, True],
+    )
+    state.characters["shrine_maiden"].tokens.add(TokenType.GOODWILL, 5)
+
+    abilities = AbilityResolver().collect_goodwill_abilities(state)
+
+    assert [candidate.ability.ability_id for candidate in abilities] == [
+        "goodwill:shrine_maiden:1",
+        "goodwill:shrine_maiden:2",
+    ]
+    assert abilities[0].ability.condition is not None
+    assert abilities[0].ability.condition.params["target"] == {"ref": "self"}
+    assert abilities[0].ability.effects[0].target == {
+        "scope": "same_area",
+        "subject": "board",
+    }
+    assert abilities[1].ability.effects[0].target == {
+        "scope": "same_area",
+        "subject": "character",
+    }
 
 
 def test_collect_goodwill_abilities_prefers_structured_runtime_data() -> None:
@@ -506,7 +591,7 @@ def test_btx_causal_line_is_collected_as_rule_loop_start_ability() -> None:
     assert {candidate.ability.ability_id for candidate in candidates} == {
         "btx_causal_line_loop_start_place_paranoia"
     }
-    assert candidates[0].ability.effects[0].target == "last_loop_goodwill_characters"
+    assert candidates[0].ability.effects[0].target == {"ref": "last_loop_goodwill_characters"}
 
 
 def test_unstable_factor_derived_identities_are_loaded_from_module_data() -> None:
@@ -520,8 +605,8 @@ def test_unstable_factor_derived_identities_are_loaded_from_module_data() -> Non
         "key_person",
     ]
     assert [rule.condition.params["target"] for rule in unstable.derived_identities] == [
-        "school",
-        "city",
+        {"scope": "fixed_area", "subject": "board", "area": "school"},
+        {"scope": "fixed_area", "subject": "board", "area": "city"},
     ]
 
 
@@ -617,14 +702,22 @@ def test_resolve_targets_basic_selectors() -> None:
     )
 
     resolver = AbilityResolver()
-    same_area = resolver.resolve_targets(state, owner_id="owner", selector="same_area_any")
+    same_area = resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"scope": "same_area", "subject": "character"},
+    )
     assert set(same_area) == {"owner", "a"}
-    any_board = resolver.resolve_targets(state, owner_id="owner", selector="any_board")
+    any_board = resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"scope": "any_area", "subject": "board"},
+    )
     assert set(any_board) == {"hospital", "school", "shrine", "city"}
     condition_target = resolver.resolve_targets(
         state,
         owner_id="owner",
-        selector="condition_target",
+        selector={"ref": "condition_target"},
         condition_target="b",
     )
     assert condition_target == ["b"]

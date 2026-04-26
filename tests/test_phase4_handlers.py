@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
+from engine.models.ability import Ability
+from engine.models.cards import ActionCard, CardPlacement
 from engine.models.character import CharacterState
-from engine.models.enums import AbilityTiming, AreaId, PlayerRole, TokenType
+from engine.models.effects import Effect
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, EffectType, PlayerRole, TokenType
+from engine.models.identity import IdentityDef
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
+    ActionResolveHandler,
     ForceLoopEnd,
     FinalGuessHandler,
     LoopEndHandler,
@@ -32,6 +37,15 @@ def _ability_choice(wait: WaitForInput, ability_id: str):
         option for option in wait.options
         if getattr(option, "ability", None) is not None
         and option.ability.ability_id == ability_id
+    )
+
+
+def _install_identity(state: GameState, identity_id: str, abilities: list[Ability]) -> None:
+    state.identity_defs[identity_id] = IdentityDef(
+        identity_id=identity_id,
+        name=identity_id,
+        module="test",
+        abilities=abilities,
     )
 
 
@@ -279,6 +293,171 @@ def test_unstable_factor_derives_rumormonger_through_playwright_handler() -> Non
     )
 
 
+def test_action_resolve_handler_executes_time_traveler_mandatory_before_cards() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ActionResolveHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["traveler"] = CharacterState(
+        character_id="traveler",
+        name="时间旅者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="time_traveler",
+        original_identity_id="time_traveler",
+    )
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_GOODWILL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "traveler",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.GOODWILL_PLUS_1, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "character",
+            "traveler",
+            face_down=True,
+        ),
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert all(not placement.face_down for placement in state.placed_cards)
+    assert state.placed_cards[0].nullified is True
+    assert state.placed_cards[1].nullified is False
+    assert state.characters["traveler"].tokens.get(TokenType.GOODWILL) == 1
+    assert any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "time_traveler_action_resolve_ignore_forbid_goodwill"
+        for event in bus.log
+    )
+
+
+def test_action_resolve_handler_prompts_and_executes_cultist_optional_character_nullify() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ActionResolveHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["cultist"] = CharacterState(
+        character_id="cultist",
+        name="邪教徒",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="cultist",
+        original_identity_id="cultist",
+    )
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["other"] = CharacterState(
+        character_id="other",
+        name="其他目标",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "character",
+            "target",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_1),
+            PlayerRole.PROTAGONIST_1,
+            "character",
+            "other",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "target",
+            face_down=True,
+        ),
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_action_resolve_ability"
+    choice = _ability_choice(signal, "cultist_action_resolve_nullify_forbid_intrigue_character")
+    target_wait = signal.callback(choice)
+    assert isinstance(target_wait, WaitForInput)
+    assert target_wait.input_type == "choose_ability_target"
+
+    next_wait = target_wait.callback("target")
+    assert isinstance(next_wait, WaitForInput)
+    assert next_wait.input_type == "choose_action_resolve_ability"
+
+    result = next_wait.callback("pass")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.placed_cards[0].nullified is True
+    assert state.placed_cards[1].nullified is False
+    assert state.characters["target"].tokens.get(TokenType.INTRIGUE) == 1
+    assert any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "cultist_action_resolve_nullify_forbid_intrigue_character"
+        for event in bus.log
+    )
+
+
+def test_action_resolve_handler_executes_cultist_board_nullify_without_target_prompt() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ActionResolveHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["cultist"] = CharacterState(
+        character_id="cultist",
+        name="邪教徒",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="cultist",
+        original_identity_id="cultist",
+    )
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "board",
+            AreaId.SCHOOL.value,
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "board",
+            AreaId.SCHOOL.value,
+            face_down=True,
+        ),
+    ]
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    choice = _ability_choice(signal, "cultist_action_resolve_nullify_forbid_intrigue_board")
+    result = signal.callback(choice)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.placed_cards[0].nullified is True
+    assert state.placed_cards[1].nullified is False
+    assert state.board.areas[AreaId.SCHOOL].tokens.get(TokenType.INTRIGUE) == 1
+
+
 def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
@@ -511,6 +690,209 @@ def test_serial_killer_mandatory_turn_end_ability_kills_other_lone_character() -
         and event.data.get("ability_id") == "serial_killer_turn_end_kill_lone_target"
         for event in bus.log
     )
+
+
+def test_turn_end_handler_batches_mandatory_effects_in_same_window() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    _install_identity(
+        state,
+        "batch_killer_a",
+        [
+            Ability(
+                ability_id="batch_killer_a_turn_end",
+                name="批次杀手A",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[Effect(effect_type=EffectType.KILL_CHARACTER, target="beloved")],
+            )
+        ],
+    )
+    _install_identity(
+        state,
+        "batch_killer_b",
+        [
+            Ability(
+                ability_id="batch_killer_b_turn_end",
+                name="批次杀手B",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[Effect(effect_type=EffectType.KILL_CHARACTER, target="lover")],
+            )
+        ],
+    )
+    state.characters["killer_a"] = CharacterState(
+        character_id="killer_a",
+        name="杀手A",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="batch_killer_a",
+        original_identity_id="batch_killer_a",
+    )
+    state.characters["killer_b"] = CharacterState(
+        character_id="killer_b",
+        name="杀手B",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="batch_killer_b",
+        original_identity_id="batch_killer_b",
+    )
+    state.characters["beloved"] = CharacterState(
+        character_id="beloved",
+        name="心上人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="beloved",
+        original_identity_id="beloved",
+    )
+    state.characters["lover"] = CharacterState(
+        character_id="lover",
+        name="求爱者",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="lover",
+        original_identity_id="lover",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["beloved"].is_alive is False
+    assert state.characters["lover"].is_alive is False
+    assert state.characters["beloved"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["lover"].tokens.get(TokenType.PARANOIA) == 0
+
+
+def test_single_mandatory_turn_end_preserves_ability_reason() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    _install_identity(
+        state,
+        "force_end_identity",
+        [
+            Ability(
+                ability_id="force_end_turn_end",
+                name="强制结束",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[
+                    Effect(effect_type=EffectType.FORCE_LOOP_END, target={"ref": "none"}),
+                ],
+            )
+        ],
+    )
+    state.characters["forcer"] = CharacterState(
+        character_id="forcer",
+        name="执行者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="force_end_identity",
+        original_identity_id="force_end_identity",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, ForceLoopEnd)
+    assert signal.reason == "force_end_turn_end"
+
+
+def test_turn_end_handler_collects_all_mandatory_choices_before_resolution() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    _install_identity(
+        state,
+        "choice_killer_a",
+        [
+            Ability(
+                ability_id="choice_killer_a_turn_end",
+                name="选目标A",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target={"scope": "any_area", "subject": "character"},
+                        token_type=TokenType.INTRIGUE,
+                        amount=1,
+                    )
+                ],
+            )
+        ],
+    )
+    _install_identity(
+        state,
+        "choice_killer_b",
+        [
+            Ability(
+                ability_id="choice_killer_b_turn_end",
+                name="选目标B",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target={"scope": "any_area", "subject": "character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=1,
+                    )
+                ],
+            )
+        ],
+    )
+    state.characters["chooser_a"] = CharacterState(
+        character_id="chooser_a",
+        name="选择者A",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="choice_killer_a",
+        original_identity_id="choice_killer_a",
+    )
+    state.characters["chooser_b"] = CharacterState(
+        character_id="chooser_b",
+        name="选择者B",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="choice_killer_b",
+        original_identity_id="choice_killer_b",
+    )
+    state.characters["target_a"] = CharacterState(
+        character_id="target_a",
+        name="目标A",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["target_b"] = CharacterState(
+        character_id="target_b",
+        name="目标B",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    wait = handler.execute(state)
+
+    assert isinstance(wait, WaitForInput)
+    assert wait.input_type == "choose_ability_target"
+    follow_up = wait.callback("target_a")
+
+    assert isinstance(follow_up, WaitForInput)
+    assert state.characters["target_a"].tokens.get(TokenType.INTRIGUE) == 0
+    assert state.characters["target_b"].tokens.get(TokenType.PARANOIA) == 0
+
+    result = follow_up.callback("target_b")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["target_a"].tokens.get(TokenType.INTRIGUE) == 1
+    assert state.characters["target_b"].tokens.get(TokenType.PARANOIA) == 1
 
 
 def test_turn_end_handler_executes_time_traveler_final_day_failure() -> None:

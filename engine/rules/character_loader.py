@@ -106,6 +106,7 @@ def instantiate_character_state(
         base_traits=set(char_def.base_traits),
         attributes=set(char_def.attributes),
         paranoia_limit=char_def.paranoia_limit,
+        base_forbidden_areas=list(char_def.forbidden_areas),
         forbidden_areas=list(char_def.forbidden_areas),
         goodwill_abilities=list(char_def.goodwill_abilities),
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
@@ -229,7 +230,7 @@ def _parse_effect(data: dict[str, object]) -> Effect:
     condition = _parse_condition(data["condition"]) if data.get("condition") else None
     return Effect(
         effect_type=EffectType(str(data["effect_type"])),
-        target=str(data.get("target", "self")),
+        target=data.get("target", "self"),
         token_type=token_type,
         amount=int(data.get("amount", 0)),
         value=data.get("value"),
@@ -241,7 +242,7 @@ def _legacy_goodwill_condition(character_id: str, slot: int) -> Condition | None
     if character_id == "shrine_maiden" and slot == 0:
         return Condition(
             condition_type="area_is",
-            params={"target": "self", "value": AreaId.SHRINE.value},
+            params={"target": {"ref": "self"}, "value": AreaId.SHRINE.value},
         )
     return None
 
@@ -251,7 +252,10 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("female_student", 0): [
             Effect(
                 effect_type=EffectType.REMOVE_TOKEN,
-                target="same_area_other",
+                target={
+                    "scope": "same_area",
+                    "subject": "other_character",
+                },
                 token_type=TokenType.PARANOIA,
                 amount=1,
             )
@@ -259,7 +263,10 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("male_student", 0): [
             Effect(
                 effect_type=EffectType.REMOVE_TOKEN,
-                target="same_area_other",
+                target={
+                    "scope": "same_area",
+                    "subject": "other_character",
+                },
                 token_type=TokenType.PARANOIA,
                 amount=1,
             )
@@ -267,7 +274,10 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("idol", 0): [
             Effect(
                 effect_type=EffectType.REMOVE_TOKEN,
-                target="same_area_other",
+                target={
+                    "scope": "same_area",
+                    "subject": "other_character",
+                },
                 token_type=TokenType.PARANOIA,
                 amount=1,
             )
@@ -275,7 +285,10 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("idol", 1): [
             Effect(
                 effect_type=EffectType.PLACE_TOKEN,
-                target="same_area_other",
+                target={
+                    "scope": "same_area",
+                    "subject": "other_character",
+                },
                 token_type=TokenType.GOODWILL,
                 amount=1,
             )
@@ -283,13 +296,16 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("office_worker", 0): [
             Effect(
                 effect_type=EffectType.REVEAL_IDENTITY,
-                target="self",
+                target={"ref": "self"},
             )
         ],
         ("shrine_maiden", 0): [
             Effect(
                 effect_type=EffectType.REMOVE_TOKEN,
-                target="same_area_board",
+                target={
+                    "scope": "same_area",
+                    "subject": "board",
+                },
                 token_type=TokenType.INTRIGUE,
                 amount=1,
             )
@@ -297,7 +313,10 @@ def _legacy_goodwill_effects(character_id: str, slot: int) -> list[Effect]:
         ("shrine_maiden", 1): [
             Effect(
                 effect_type=EffectType.REVEAL_IDENTITY,
-                target="same_area_any",
+                target={
+                    "scope": "same_area",
+                    "subject": "character",
+                },
             )
         ],
     }

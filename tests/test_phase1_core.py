@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
+from engine.models.board import BoardState
 from engine.models.ability import Ability
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
@@ -97,6 +98,93 @@ def test_atomic_resolver_failure_when_soldier_blocks_death() -> None:
     assert any(e.event_type == GameEventType.PROTAGONIST_FAILURE for e in bus.log)
 
 
+def test_game_state_available_enterable_areas_filters_forbidden_areas() -> None:
+    state = GameState.create_minimal_test_state()
+    state.characters["mover"] = CharacterState(
+        character_id="mover",
+        name="移动者",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        base_forbidden_areas=[AreaId.HOSPITAL, AreaId.CITY],
+        forbidden_areas=[AreaId.HOSPITAL, AreaId.CITY],
+    )
+
+    assert state.get_character_forbidden_areas("mover") == [AreaId.HOSPITAL, AreaId.CITY]
+    assert state.can_character_enter_area("mover", AreaId.HOSPITAL) is False
+    assert state.can_character_enter_area("mover", AreaId.SCHOOL) is True
+    assert state.available_enterable_areas(
+        "mover",
+        [AreaId.HOSPITAL, AreaId.SCHOOL, AreaId.SHRINE, AreaId.CITY],
+    ) == [AreaId.SCHOOL.value, AreaId.SHRINE.value]
+
+
+def test_atomic_resolver_move_character_respects_forbidden_areas() -> None:
+    bus = EventBus()
+    resolver = AtomicResolver(bus, DeathResolver())
+    state = GameState.create_minimal_test_state()
+    state.characters["mover"] = CharacterState(
+        character_id="mover",
+        name="移动者",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        base_forbidden_areas=[AreaId.SCHOOL],
+        forbidden_areas=[AreaId.SCHOOL],
+    )
+
+    result = resolver.resolve(
+        state,
+        effects=[Effect(effect_type=EffectType.MOVE_CHARACTER, target="mover", value=AreaId.SCHOOL.value)],
+        sequential=False,
+    )
+
+    assert result.outcome == Outcome.NONE
+    assert state.characters["mover"].area == AreaId.SHRINE
+    assert not any(e.event_type == GameEventType.CHARACTER_MOVED for e in bus.log)
+
+
+def test_board_state_adjacency_handles_grid_and_faraway() -> None:
+    board = BoardState()
+
+    assert board.get_horizontal_adjacent(AreaId.HOSPITAL) == AreaId.SHRINE
+    assert board.get_vertical_adjacent(AreaId.HOSPITAL) == AreaId.CITY
+    assert board.get_diagonal_adjacent(AreaId.HOSPITAL) == AreaId.SCHOOL
+    assert board.get_all_adjacent(AreaId.HOSPITAL) == [AreaId.SHRINE, AreaId.CITY]
+    assert board.is_adjacent(AreaId.HOSPITAL, AreaId.SHRINE) is True
+    assert board.is_adjacent(AreaId.HOSPITAL, AreaId.SCHOOL) is False
+
+    assert board.get_horizontal_adjacent(AreaId.FARAWAY) is None
+    assert board.get_vertical_adjacent(AreaId.FARAWAY) is None
+    assert board.get_diagonal_adjacent(AreaId.FARAWAY) is None
+    assert board.get_all_adjacent(AreaId.FARAWAY) == []
+    assert board.is_adjacent(AreaId.FARAWAY, AreaId.HOSPITAL) is False
+
+
+def test_game_state_move_character_handles_valid_and_invalid_targets() -> None:
+    state = GameState.create_minimal_test_state()
+    state.characters["mover"] = CharacterState(
+        character_id="mover",
+        name="移动者",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    assert state.move_character("mover", AreaId.HOSPITAL) is False
+    assert state.move_character("mover", AreaId.SHRINE.value) is True
+    assert state.characters["mover"].area == AreaId.SHRINE
+
+    state.characters["mover"].is_alive = False
+    assert state.move_character("mover", AreaId.SCHOOL) is False
+    state.characters["mover"].is_alive = True
+    state.characters["mover"].is_removed = True
+    assert state.move_character("mover", AreaId.CITY) is False
+
+
 def test_loop_end_handler_emits_loop_ended_event() -> None:
     bus = EventBus()
     resolver = AtomicResolver(bus, DeathResolver())
@@ -139,6 +227,41 @@ def test_on_death_ability_is_published_and_triggered() -> None:
     assert any(
         e.event_type == GameEventType.ABILITY_DECLARED
         and e.data.get("ability_id") == "key_person_on_death"
+        for e in bus.log
+    )
+    assert any(e.event_type == GameEventType.PROTAGONIST_FAILURE for e in bus.log)
+
+
+def test_derived_on_death_ability_is_published_and_triggered() -> None:
+    bus = EventBus()
+    resolver = AtomicResolver(bus, DeathResolver())
+    state = GameState()
+    loaded = load_module("basic_tragedy_x")
+    apply_loaded_module(state, loaded)
+
+    state.characters["unstable"] = CharacterState(
+        character_id="unstable",
+        name="不安定因子",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="unstable_factor",
+        original_identity_id="unstable_factor",
+    )
+    state.board.areas[AreaId.SCHOOL].tokens.add(TokenType.INTRIGUE, 2)
+    state.board.areas[AreaId.CITY].tokens.add(TokenType.INTRIGUE, 2)
+
+    result = resolver.resolve(
+        state,
+        effects=[Effect(effect_type=EffectType.KILL_CHARACTER, target="unstable")],
+        sequential=False,
+    )
+
+    assert result.outcome == Outcome.PROTAGONIST_FAILURE
+    assert "key_person_dead" in state.failure_flags
+    assert any(
+        e.event_type == GameEventType.ABILITY_DECLARED
+        and e.data.get("ability_id") == "key_person_on_death"
+        and e.data.get("source_kind") == "derived"
         for e in bus.log
     )
     assert any(e.event_type == GameEventType.PROTAGONIST_FAILURE for e in bus.log)
@@ -287,7 +410,7 @@ def test_same_batch_deaths_still_collect_all_on_death_effects() -> None:
                 effects=[
                     Effect(
                         effect_type=EffectType.PLACE_TOKEN,
-                        target="same_area_board",
+                        target={"scope": "same_area", "subject": "board"},
                         token_type=TokenType.INTRIGUE,
                         amount=1,
                     )
@@ -349,7 +472,7 @@ def test_same_batch_dead_character_does_not_trigger_on_other_death() -> None:
                 effects=[
                     Effect(
                         effect_type=EffectType.PLACE_TOKEN,
-                        target="same_area_other",
+                        target={"scope": "same_area", "subject": "other_character"},
                         token_type=TokenType.PARANOIA,
                         amount=1,
                     )
@@ -406,7 +529,7 @@ def test_earlier_dead_character_is_not_targeted_by_later_death_trigger_without_c
                 effects=[
                     Effect(
                         effect_type=EffectType.PLACE_TOKEN,
-                        target="same_area_other",
+                        target={"scope": "same_area", "subject": "other_character"},
                         token_type=TokenType.PARANOIA,
                         amount=1,
                     )

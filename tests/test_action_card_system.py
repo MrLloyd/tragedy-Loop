@@ -6,7 +6,7 @@ from engine.event_bus import EventBus
 from engine.game_state import GameState
 from engine.models.cards import ActionCard, CardPlacement, PlacementIntent, create_mastermind_hand, create_protagonist_hand
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, CardType, PlayerRole, TokenType, Trait
+from engine.models.enums import AreaId, CardType, EffectType, PlayerRole, TokenType, Trait
 from engine.phases.phase_base import ActionResolveHandler, MastermindActionHandler, ProtagonistActionHandler, PhaseComplete, WaitForInput
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
@@ -24,6 +24,27 @@ def _make_action_handlers() -> tuple[MastermindActionHandler, ProtagonistActionH
     pp_handler = ProtagonistActionHandler(bus, resolver)
     act_handler = ActionResolveHandler(bus, resolver)
     return mm_handler, pp_handler, act_handler, bus
+
+
+class SpyAtomicResolver(AtomicResolver):
+    def __init__(self, event_bus: EventBus) -> None:
+        super().__init__(event_bus, DeathResolver())
+        self.calls: list[dict[str, object]] = []
+
+    def resolve(self, state: GameState, effects: list, sequential: bool = False, perpetrator_id: str = ""):
+        self.calls.append(
+            {
+                "effects": list(effects),
+                "sequential": sequential,
+                "perpetrator_id": perpetrator_id,
+            }
+        )
+        return super().resolve(
+            state,
+            effects,
+            sequential=sequential,
+            perpetrator_id=perpetrator_id,
+        )
 
 
 def _make_state_for_placement() -> GameState:
@@ -278,67 +299,80 @@ def test_protagonists_reject_duplicate_slot_but_allow_mastermind_slot_overlap():
 
 
 # ---------------------------------------------------------------------------
-# T5: FORBID 互消（2张 FORBID_INTRIGUE 同目标）
+# T5: 禁止密谋特殊结算（全场 2 张及以上同时失效）
 # ---------------------------------------------------------------------------
 
-def test_action_resolve_forbid_mutual_cancel():
-    """两张禁止牌同目标同类型应互相抵消"""
+def test_action_resolve_forbid_intrigue_global_mutual_cancel():
+    """两张禁止密谋分散在不同位置时也应同时失效"""
     _, _, act_handler, _ = _make_action_handlers()
     state = _make_state_for_placement()
 
-    # 放置 2 张 FORBID_INTRIGUE（禁止密谋）+ 1 张密谋+1（应被禁止）
-    char_id = "char_1"
-
-    forbid1 = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.MASTERMIND)
-    forbid2 = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0)
-    intrigue = ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND)
+    forbid1 = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0)
+    forbid2 = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_1)
+    intrigue1 = ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND)
+    intrigue2 = ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND)
 
     state.placed_cards = [
-        CardPlacement(forbid1, PlayerRole.MASTERMIND, "character", char_id, face_down=True),
-        CardPlacement(forbid2, PlayerRole.PROTAGONIST_0, "character", char_id, face_down=True),
-        CardPlacement(intrigue, PlayerRole.MASTERMIND, "character", char_id, face_down=True),
+        CardPlacement(forbid1, PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+        CardPlacement(forbid2, PlayerRole.PROTAGONIST_1, "character", "char_2", face_down=True),
+        CardPlacement(intrigue1, PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+        CardPlacement(intrigue2, PlayerRole.MASTERMIND, "character", "char_2", face_down=True),
     ]
 
     result = act_handler.execute(state)
     assert isinstance(result, PhaseComplete)
 
-    # 两张禁止牌都应被标记为 nullified
     assert state.placed_cards[0].nullified is True
     assert state.placed_cards[1].nullified is True
-    # 密谋牌不应被禁止
     assert state.placed_cards[2].nullified is False
-    # 角色密谋应该 +1
-    assert state.characters[char_id].tokens.intrigue == 1
+    assert state.placed_cards[3].nullified is False
+    assert state.characters["char_1"].tokens.intrigue == 1
+    assert state.characters["char_2"].tokens.intrigue == 1
 
 
 # ---------------------------------------------------------------------------
-# T6: FORBID 奇数张生效（1张 FORBID_INTRIGUE）
+# T6: 单张禁止密谋正常生效
 # ---------------------------------------------------------------------------
 
-def test_action_resolve_forbid_odd_count():
-    """奇数张禁止牌，最后一张生效，目标被禁"""
+def test_action_resolve_single_forbid_intrigue_blocks_same_target_intrigue():
+    """仅有一张禁止密谋时，应正常禁止同位置密谋牌"""
     _, _, act_handler, _ = _make_action_handlers()
     state = _make_state_for_placement()
 
     char_id = "char_1"
 
-    forbid = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.MASTERMIND)
+    forbid = ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0)
     intrigue = ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND)
 
     state.placed_cards = [
-        CardPlacement(forbid, PlayerRole.MASTERMIND, "character", char_id, face_down=True),
+        CardPlacement(forbid, PlayerRole.PROTAGONIST_0, "character", char_id, face_down=True),
         CardPlacement(intrigue, PlayerRole.MASTERMIND, "character", char_id, face_down=True),
     ]
 
     result = act_handler.execute(state)
     assert isinstance(result, PhaseComplete)
 
-    # 禁止牌本身不标记为 nullified
     assert state.placed_cards[0].nullified is False
-    # 密谋牌应被禁止
     assert state.placed_cards[1].nullified is True
-    # 角色密谋保持 0
     assert state.characters[char_id].tokens.intrigue == 0
+
+
+def test_action_resolve_forbid_movement_still_blocks_same_target_movement():
+    """其他禁止牌仍按同位置规则正常生效"""
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.FORBID_MOVEMENT, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.placed_cards[0].nullified is False
+    assert state.placed_cards[1].nullified is True
+    assert state.characters["char_1"].area == AreaId.HOSPITAL
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +485,23 @@ def test_token_effect_on_board():
     assert state.board.areas[area_id].tokens.intrigue == 2
 
 
+def test_board_intrigue_is_capped_at_three() -> None:
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+
+    area_id = AreaId.SCHOOL
+    state.board.areas[area_id].tokens.intrigue = 2
+    card = ActionCard(CardType.INTRIGUE_PLUS_2, PlayerRole.MASTERMIND)
+    state.placed_cards = [
+        CardPlacement(card, PlayerRole.MASTERMIND, "board", area_id.value, face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.board.areas[area_id].tokens.intrigue == 3
+
+
 # ---------------------------------------------------------------------------
 # T11: 移动牌（横移）放到角色 → 角色移动到相邻区域
 # ---------------------------------------------------------------------------
@@ -477,3 +528,138 @@ def test_movement_card_horizontal():
 
     # 验证角色移动到正确区域
     assert state.characters[char_id].area == expected_dest
+
+
+def test_action_resolve_batches_composed_movement_then_other_cards():
+    bus = EventBus()
+    resolver = SpyAtomicResolver(bus)
+    handler = ActionResolveHandler(bus, resolver)
+    state = _make_state_for_placement()
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.MOVE_VERTICAL_P, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "board", AreaId.SCHOOL.value, face_down=True),
+        CardPlacement(ActionCard(CardType.GOODWILL_PLUS_1, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+    ]
+
+    result = handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert len(resolver.calls) == 2
+
+    movement_call, other_call = resolver.calls
+    movement_effects = movement_call["effects"]
+    other_effects = other_call["effects"]
+
+    assert movement_call["sequential"] is False
+    assert len(movement_effects) == 1
+    assert movement_effects[0].effect_type == EffectType.MOVE_CHARACTER
+    assert movement_effects[0].target == "char_1"
+    assert movement_effects[0].value == AreaId.SCHOOL.value
+
+    assert other_call["sequential"] is False
+    assert len(other_effects) == 2
+    assert all(effect.effect_type == EffectType.PLACE_TOKEN for effect in other_effects)
+
+    assert state.characters["char_1"].area == AreaId.SCHOOL
+    assert state.characters["char_1"].tokens.goodwill == 1
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1
+
+
+def test_movement_cards_same_target_same_direction_stays_horizontal():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL_P, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.SHRINE
+
+
+def test_movement_cards_same_target_horizontal_and_diagonal_compose_to_vertical():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_DIAGONAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL_P, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.CITY
+
+
+def test_movement_cards_same_target_vertical_and_diagonal_compose_to_horizontal():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_DIAGONAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+        CardPlacement(ActionCard(CardType.MOVE_VERTICAL_P, PlayerRole.PROTAGONIST_0), PlayerRole.PROTAGONIST_0, "character", "char_1", face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.SHRINE
+
+
+def test_movement_card_into_forbidden_area_stays_in_place():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    state.characters["char_1"].forbidden_areas = [AreaId.SCHOOL]
+    state.characters["char_1"].base_forbidden_areas = [AreaId.SCHOOL]
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_DIAGONAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+    ]
+
+    result = act_handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.HOSPITAL
+
+
+def test_movement_card_on_faraway_character_stays_in_place():
+    bus = EventBus()
+    resolver = SpyAtomicResolver(bus)
+    handler = ActionResolveHandler(bus, resolver)
+    state = _make_state_for_placement()
+    state.characters["char_1"].area = AreaId.FARAWAY
+    state.characters["char_1"].initial_area = AreaId.FARAWAY
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+    ]
+
+    result = handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.FARAWAY
+    assert resolver.calls == []
+
+
+def test_movement_card_on_dead_character_stays_in_place():
+    bus = EventBus()
+    resolver = SpyAtomicResolver(bus)
+    handler = ActionResolveHandler(bus, resolver)
+    state = _make_state_for_placement()
+    state.characters["char_1"].is_alive = False
+
+    state.placed_cards = [
+        CardPlacement(ActionCard(CardType.MOVE_VERTICAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),
+    ]
+
+    result = handler.execute(state)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["char_1"].area == AreaId.HOSPITAL
+    assert resolver.calls == []

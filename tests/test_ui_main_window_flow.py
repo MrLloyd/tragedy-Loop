@@ -6,8 +6,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from engine.models.enums import GamePhase
+from engine.models.enums import GamePhase, TokenType
 from engine.event_bus import GameEvent, GameEventType
+from engine.display_names import character_name, identity_name, incident_name
 from ui.controllers.game_session_controller import GameSessionController
 from ui.controllers.test_mode_controller import TestCharacterDraft, TestModeController
 
@@ -102,58 +103,124 @@ def test_test_mode_screen_renders_phase_and_board_snapshot() -> None:
     assert screen.character_summary_value.text() == "2/2 存活"
     assert screen.loop_input.maximum() == 3
     assert screen.day_input.maximum() == 3
-    assert "已公开" in screen.board_area_texts["school"].toPlainText()
-    assert "office_worker" in screen.board_area_texts["school"].toPlainText()
-    assert "ai" in screen.board_area_texts["city"].toPlainText()
+    assert f"身份：{identity_name('mastermind')}" in screen.board_area_texts["school"].toPlainText()
+    assert character_name("office_worker") in screen.board_area_texts["school"].toPlainText()
+    assert character_name("ai") in screen.board_area_texts["city"].toPlainText()
 
     screen.close()
     app.processEvents()
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
-def test_test_mode_screen_uses_dropdown_targets() -> None:
+def test_test_mode_screen_uses_step_dialog_for_incident_targets(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     controller = TestModeController("first_steps")
     controller.replace_characters(
         [
             TestCharacterDraft(
                 character_id="office_worker",
-                identity_id="mastermind",
+                identity_id="平民",
                 area="school",
+                tokens={"paranoia": 2},
             ),
             TestCharacterDraft(
                 character_id="ai",
                 identity_id="平民",
                 area="school",
             ),
+            TestCharacterDraft(
+                character_id="shrine_maiden",
+                identity_id="平民",
+                area="city",
+            ),
         ]
     )
     controller.rebuild_session()
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    dialog_choices = iter(["ai", "shrine_maiden"])
+
+    def _fake_exec(dialog) -> int:
+        target_value = next(dialog_choices)
+        for row in range(dialog.options_list.count()):
+            item = dialog.options_list.item(row)
+            if item.data(0x0100) == target_value:
+                dialog.options_list.setCurrentRow(row)
+                break
+        dialog._accept_selected()
+        return test_mode_screen_module.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(test_mode_screen_module.StepChoiceDialog, "exec", _fake_exec)
 
     screen = TestModeScreen(controller)
     screen.show()
     app.processEvents()
 
-    assert len(screen.incident_target_character_inputs) == 3
-    assert all(combo.count() > 0 for combo in screen.incident_target_character_inputs)
-
-    screen.actor_input.setCurrentIndex(screen.actor_input.findData("office_worker"))
-    screen.timing_input.setCurrentIndex(screen.timing_input.findData("playwright_ability"))
-    screen.identity_ability_input.setCurrentIndex(
-        screen.identity_ability_input.findData("mastermind_playwright_place_intrigue_character")
-    )
+    screen.incident_input.setCurrentIndex(screen.incident_input.findData("unease_spread"))
+    screen.perpetrator_input.setCurrentIndex(screen.perpetrator_input.findData("office_worker"))
+    screen.trigger_incident_button.click()
     app.processEvents()
 
-    enabled_targets = [combo for combo in screen.ability_target_inputs if combo.isEnabled()]
-    assert len(enabled_targets) == 1
-    assert enabled_targets[0].findData("ai") >= 0
+    assert controller.session is not None
+    assert controller.session.state.characters["ai"].tokens.get(TokenType.PARANOIA) == 2
+    assert controller.session.state.characters["shrine_maiden"].tokens.get(TokenType.INTRIGUE) == 1
 
     screen.close()
     app.processEvents()
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
-def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects() -> None:
+def test_test_mode_screen_refreshes_spiritual_contamination_after_module_switch() -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    assert screen.incident_input.findData("spiritual_contamination") == -1
+
+    screen.module_input.setCurrentIndex(screen.module_input.findData("basic_tragedy_x"))
+    app.processEvents()
+
+    assert screen.incident_input.findData("spiritual_contamination") >= 0
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_applies_board_tokens_for_rule_test() -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.rule_y_input.setCurrentIndex(screen.rule_y_input.findData("fs_protect_this_place"))
+    screen.apply_rules_button.click()
+    app.processEvents()
+
+    school_intrigue_spin = screen._board_token_inputs["school"]["intrigue"]
+    school_intrigue_spin.setValue(2)
+    screen.phase_input.setCurrentIndex(screen.phase_input.findData("loop_end"))
+    screen.apply_button.click()
+    app.processEvents()
+
+    screen.rule_ability_timing_input.setCurrentIndex(screen.rule_ability_timing_input.findData("loop_end"))
+    screen.refresh_rule_ability_button.click()
+    app.processEvents()
+
+    assert list(screen._board_token_inputs["school"].keys()) == ["intrigue"]
+    assert school_intrigue_spin.maximum() == 3
+    assert screen.rule_ability_input.findData("fs_fail_mastermind_initial_area_intrigue_2_protect") >= 0
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     controller = TestModeController("first_steps")
     controller.replace_characters(
@@ -182,6 +249,22 @@ def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects() -> N
     )
     controller.rebuild_session()
 
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    dialog_choices = iter(["shrine_maiden", "teacher"])
+
+    def _fake_exec(dialog) -> int:
+        target_value = next(dialog_choices)
+        for row in range(dialog.options_list.count()):
+            item = dialog.options_list.item(row)
+            if item.data(0x0100) == target_value:
+                dialog.options_list.setCurrentRow(row)
+                break
+        dialog._accept_selected()
+        return test_mode_screen_module.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(test_mode_screen_module.StepChoiceDialog, "exec", _fake_exec)
+
     screen = TestModeScreen(controller)
     screen.show()
     app.processEvents()
@@ -190,9 +273,6 @@ def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects() -> N
     screen.timing_input.setCurrentIndex(screen.timing_input.findData("playwright_ability"))
     screen.identity_ability_input.setCurrentIndex(
         screen.identity_ability_input.findData("rumormonger_playwright_place_paranoia")
-    )
-    screen.ability_target_inputs[0].setCurrentIndex(
-        screen.ability_target_inputs[0].findData("shrine_maiden")
     )
     screen.trigger_identity_ability_button.click()
     app.processEvents()
@@ -204,14 +284,72 @@ def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects() -> N
     screen.identity_ability_input.setCurrentIndex(
         screen.identity_ability_input.findData("rumormonger_playwright_place_paranoia")
     )
-    screen.ability_target_inputs[0].setCurrentIndex(
-        screen.ability_target_inputs[0].findData("teacher")
-    )
     screen.trigger_identity_ability_button.click()
     app.processEvents()
 
     assert controller.session.state.characters["shrine_maiden"].tokens.paranoia == 1
     assert controller.session.state.characters["teacher"].tokens.paranoia == 1
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_lists_and_triggers_derived_identity_ability(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("basic_tragedy_x")
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="unstable_factor",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="doctor",
+                identity_id="平民",
+                area="school",
+            ),
+        ]
+    )
+    controller.replace_board_tokens(
+        {
+            "school": {"intrigue": 2},
+        }
+    )
+    controller.rebuild_session()
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    def _fake_exec(dialog) -> int:
+        for row in range(dialog.options_list.count()):
+            item = dialog.options_list.item(row)
+            if item.data(0x0100) == "doctor":
+                dialog.options_list.setCurrentRow(row)
+                break
+        dialog._accept_selected()
+        return test_mode_screen_module.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(test_mode_screen_module.StepChoiceDialog, "exec", _fake_exec)
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.actor_input.setCurrentIndex(screen.actor_input.findData("ai"))
+    screen.timing_input.setCurrentIndex(screen.timing_input.findData("playwright_ability"))
+    app.processEvents()
+
+    derived_index = screen.identity_ability_input.findData("rumormonger_playwright_place_paranoia")
+    assert derived_index >= 0
+    screen.identity_ability_input.setCurrentIndex(derived_index)
+    app.processEvents()
+
+    screen.trigger_identity_ability_button.click()
+    app.processEvents()
+
+    assert controller.session is not None
+    assert controller.session.state.characters["doctor"].tokens.get(TokenType.PARANOIA) == 1
 
     screen.close()
     app.processEvents()
@@ -243,6 +381,75 @@ def test_test_mode_screen_can_execute_and_advance_phase() -> None:
     app.processEvents()
 
     assert screen.phase_value.text() == "回合结束阶段"
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_reuses_game_screen_for_phase_wait_input(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.PLAYWRIGHT_ABILITY.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="mastermind",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="shrine_maiden",
+                identity_id="平民",
+                area="school",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    from ui.screens import game_screen as game_screen_module
+
+    def _fake_exec(dialog) -> int:
+        for row in range(dialog.options_list.count()):
+            item = dialog.options_list.item(row)
+            if item.data(0x0100) == "ai":
+                dialog.options_list.setCurrentRow(row)
+                break
+        dialog._accept_selected()
+        return game_screen_module.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(game_screen_module.StepChoiceDialog, "exec", _fake_exec)
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.execute_phase_button.click()
+    app.processEvents()
+
+    wait = screen.phase_session.view_state.current_wait
+    assert wait is not None
+    assert wait.input_type == "choose_playwright_ability"
+    ability_row = next(
+        index
+        for index, option in enumerate(wait.options)
+        if getattr(getattr(option, "ability", None), "ability_id", "") == "mastermind_playwright_place_intrigue_character"
+    )
+    screen.phase_game_screen.options_list.setCurrentRow(ability_row)
+    screen.phase_game_screen.submit_button.click()
+    app.processEvents()
+
+    assert controller.session is not None
+    assert controller.session.state.characters["ai"].tokens.get(TokenType.INTRIGUE) == 1
 
     screen.close()
     app.processEvents()
@@ -307,10 +514,38 @@ def test_test_mode_screen_shows_triggered_failure_condition(monkeypatch) -> None
     screen.execute_phase_button.click()
     app.processEvents()
 
-    assert screen.protagonist_dead_value.text() == "否"
+    assert screen.failure_report_value.text() == "主人公失败"
     assert screen.failure_state_value.text() == "已触发"
-    assert screen.failure_flags_value.text() == "friend_dead"
+    assert screen.failure_reasons_value.text() == "friend_dead"
     assert "触发失败条件：friend_dead" in screen.status_value.text()
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_merges_failure_reasons_and_prefers_death_report(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("basic_tragedy_x")
+    controller.rebuild_session()
+    controller.session.state.protagonist_dead = True
+    controller.session.state.failure_flags.add("key_person_dead")
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    monkeypatch.setattr(
+        test_mode_screen_module.QMessageBox,
+        "information",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    assert screen.failure_report_value.text() == "主人公死亡"
+    assert screen.failure_state_value.text() == "已触发"
+    assert screen.failure_reasons_value.text() == "protagonist_death、key_person_dead"
 
     screen.close()
     app.processEvents()
@@ -348,6 +583,39 @@ def test_game_screen_shows_identity_revealed_popup_once(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_game_screen_shows_incident_revealed_popup_once(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    session = GameSessionController()
+    session.view_state.revealed_incident_messages.append(
+        f"{incident_name('murder')}事件的当事人是{character_name('male_student')}"
+    )
+
+    from ui.screens import game_screen as game_screen_module
+
+    popup_calls: list[tuple[str, str]] = []
+
+    def _fake_information(_parent, title: str, text: str) -> int:
+        popup_calls.append((title, text))
+        return 0
+
+    monkeypatch.setattr(game_screen_module.QMessageBox, "information", _fake_information)
+
+    screen = GameScreen(session)
+    screen.show()
+    app.processEvents()
+
+    assert popup_calls == [("当事人公开", "谋杀事件的当事人是男子学生")]
+
+    screen.refresh()
+    app.processEvents()
+
+    assert popup_calls == [("当事人公开", "谋杀事件的当事人是男子学生")]
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
 def test_test_mode_screen_shows_identity_revealed_popup_once(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     controller = TestModeController("first_steps")
@@ -377,6 +645,41 @@ def test_test_mode_screen_shows_identity_revealed_popup_once(monkeypatch) -> Non
     app.processEvents()
 
     assert popup_calls == [("身份公开", "男子学生的身份是主谋")]
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_shows_incident_revealed_popup_once(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    assert controller.session is not None
+    controller.session.event_bus.emit(GameEvent(
+        GameEventType.INCIDENT_REVEALED,
+        {"incident_id": "murder", "perpetrator_id": "male_student", "day": 1},
+    ))
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    popup_calls: list[tuple[str, str]] = []
+
+    def _fake_information(_parent, title: str, text: str) -> int:
+        popup_calls.append((title, text))
+        return 0
+
+    monkeypatch.setattr(test_mode_screen_module.QMessageBox, "information", _fake_information)
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    assert popup_calls == [("当事人公开", "谋杀事件的当事人是男子学生")]
+
+    screen.refresh()
+    app.processEvents()
+
+    assert popup_calls == [("当事人公开", "谋杀事件的当事人是男子学生")]
 
     screen.close()
     app.processEvents()

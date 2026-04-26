@@ -1,6 +1,6 @@
 {
   "source": "tragedy_loop_appendix.md §附录C 角色表（与引擎枚举：AreaId、Attribute 对齐）",
-  "schema_note": "goodwill_ability_texts / goodwill_ability_goodwill_requirements 下标 0–3 对应友好能力1–4；goodwill_ability_once_per_loop 长度为2，对应能力1与能力2是否每轮回限一次（附录仅定义这两项）。",
+  "schema_note": "goodwill_abilities 为正式结构化入口；goodwill_ability_texts / goodwill_ability_goodwill_requirements / goodwill_ability_once_per_loop 为迁移期兼容字段。下标 0–3 对应友好能力1–4；goodwill_ability_once_per_loop 长度为2，对应能力1与能力2是否每轮回限一次（附录仅定义这两项）。",
   "characters": [
     {
       "character_id": "ai",
@@ -32,6 +32,21 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:ai:1",
+          "name": "AI 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "選擇公開信息表中記述的1個事件，處理該事件的效果。處理時，當事人默认为A.I.，且一切需要劇作家決定的內容由隊長代為決定（所選事件本身不視作已發生）。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -61,6 +76,21 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:streamer:1",
+          "name": "UP主 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同一区域另外一名角色身上放置1枚友好指示物，并移除1枚不安指示物。随后，可以将那名角色身上的Ex牌转移到与那名角色位于同一区域、且非UP主的1名角色身上。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -90,6 +120,37 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:higher_being:1",
+          "name": "上位存在 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同区域任意1名角色身上放置1枚希望/绝望指示物（无视友好时剧作家可用）",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "amount": 1,
+              "value": {
+                "choice": "choose_token_type",
+                "options": [
+                  "hope",
+                  "despair"
+                ]
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -104,21 +165,36 @@
       ],
       "paranoia_limit": 3,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "公开该角色的身份，并选择同一区域1名角色放置2枚友好指示物",
-        "",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        2,
-        0,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        true,
-        false
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:temp_worker_alt:1",
+          "name": "临时工？ 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开该角色的身份，并选择同一区域1名角色放置2枚友好指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "ref": "self"
+              }
+            },
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "token_type": "goodwill",
+              "amount": 2
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -178,6 +254,21 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:servant:1",
+          "name": "从者 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "选择场上的另外1名角色，本轮轮回中，将那名角色追加至特性适用对象中。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ],
       "initial_area_candidates": [
         "school",
@@ -273,6 +364,54 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:idol:1",
+          "name": "偶像 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除同一区域另1名角色身上的1枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "paranoia",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:idol:2",
+          "name": "偶像 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同一区域另1名角色身上放置1枚友好指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "goodwill",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -302,6 +441,51 @@
       "goodwill_ability_once_per_loop": [
         true,
         true
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:soldier:1",
+          "name": "军人 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同一区域任意1名角色身上放置2枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "token_type": "paranoia",
+              "amount": 2
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:soldier:2",
+          "name": "军人 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "本轮回中主人公不会死亡",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "protagonist_protect",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -331,6 +515,55 @@
       "goodwill_ability_once_per_loop": [
         true,
         true
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:detective:1",
+          "name": "刑警 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开1个本轮已发生事件的当事人",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_incident",
+              "target": {
+                "ref": "none"
+              },
+              "chooser": "leader",
+              "value": {
+                "choice": "choose_occurred_incident"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:detective:2",
+          "name": "刑警 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同区域任意1名角色放置1枚护卫指示物（死亡时移除护卫代替）",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "token_type": "guard",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -360,6 +593,53 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:doctor:1",
+          "name": "医生 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "放置/移除同一区域另外1名角色身上的1枚不安指示物。如果本角色的身份带有无视友好的特性，并且身上已经放置了2枚或以上的友好指示物，则剧作家可以在剧作家能力阶段使用该能力。",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "paranoia",
+              "amount": 1,
+              "value": "choose_place_or_remove"
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:doctor:2",
+          "name": "医生 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "本轮回中住院患者不再拥有禁行区域，可移动至医院外",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "lift_forbidden_areas",
+              "target": {
+                "ref": "literal",
+                "value": "inpatient"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -389,6 +669,29 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:vip:1",
+          "name": "大人物 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开领地中另外1名角色的身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -418,6 +721,55 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:ojousama:1",
+          "name": "大小姐 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "必须位于学校或都市才可使用，往同区域任意1名角色放置1枚友好指示物",
+          "condition": {
+            "condition_type": "any_of",
+            "params": {
+              "conditions": [
+                {
+                  "condition_type": "area_is",
+                  "params": {
+                    "target": {
+                      "ref": "self"
+                    },
+                    "value": "school"
+                  }
+                },
+                {
+                  "condition_type": "area_is",
+                  "params": {
+                    "target": {
+                      "ref": "self"
+                    },
+                    "value": "city"
+                  }
+                }
+              ]
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "token_type": "goodwill",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -447,6 +799,31 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:female_student:1",
+          "name": "女子学生 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除同一区域另外1名角色身上的1枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "paranoia",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -476,6 +853,21 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:sister:1",
+          "name": "妹妹 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "同一区域的1名成人使用1个友好能力，此时无视该成人的友好指示物数量。即使该成人带有无视友好特性，也不能拒绝使用那个能力。但能力依然受到次数限制。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -505,6 +897,54 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:media_person:1",
+          "name": "媒体人 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往另外1名角色身上放置1枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "any_area",
+                "subject": "other_character"
+              },
+              "token_type": "paranoia",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:media_person:2",
+          "name": "媒体人 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往同区域任意1名角色或版图放置1枚密谋指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character_or_board"
+              },
+              "token_type": "intrigue",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -534,6 +974,45 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:scholar:1",
+          "name": "学者 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除该角色身上所有的指示物。随后，如果本局游戏使用Ex槽，选择Ex槽+1或-1。",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_all_tokens",
+              "target": {
+                "ref": "self"
+              }
+            },
+            {
+              "effect_type": "modify_ex_gauge",
+              "target": {
+                "ref": "none"
+              },
+              "value": {
+                "choice": "choose_ex_delta",
+                "options": [
+                  "1",
+                  "-1"
+                ]
+              },
+              "condition": {
+                "condition_type": "module_has_ex_gauge",
+                "params": {}
+              }
+            }
+          ],
+          "sequential": true,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -567,6 +1046,52 @@
       "goodwill_ability_once_per_loop": [
         false,
         true
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:little_girl:1",
+          "name": "小女孩 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "本轮回中该角色不再拥有禁行区域，可以移动至学校之外",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "lift_forbidden_areas",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 1,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:little_girl:2",
+          "name": "小女孩 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "将该角色移动至相邻的版图",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "move_character",
+              "target": {
+                "ref": "self"
+              },
+              "value": {
+                "scope": "adjacent_area",
+                "subject": "board"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -581,21 +1106,33 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "必须在第2轮轮回或之后才可以使用。公开该角色的身份。即使带有无视友好特性，也不能拒绝行使该能力。）",
-        "",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        3,
-        0,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        false,
-        false
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:outsider:1",
+          "name": "局外人 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "必须在第2轮轮回或之后才可以使用。公开该角色的身份。即使带有无视友好特性，也不能拒绝行使该能力。）",
+          "condition": {
+            "condition_type": "loop_number_check",
+            "params": {
+              "operator": ">=",
+              "value": 2
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
       ]
     },
     {
@@ -612,21 +1149,59 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "必须位于神社才可使用，移除神社的1枚密谋指示物",
-        "公开同一区域任意1名角色的身份",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        3,
-        5,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        false,
-        true
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:shrine_maiden:1",
+          "name": "巫女 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "必须位于神社才可使用，移除神社的1枚密谋指示物",
+          "condition": {
+            "condition_type": "area_is",
+            "params": {
+              "target": {
+                "ref": "self"
+              },
+              "value": "shrine"
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "board"
+              },
+              "token_type": "intrigue",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:shrine_maiden:2",
+          "name": "巫女 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开同一区域任意1名角色的身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -656,6 +1231,53 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:phantom:1",
+          "name": "幻想 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "将同一区域任意1名角色移动至任意版图",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "move_character",
+              "target": {
+                "scope": "same_area",
+                "subject": "character"
+              },
+              "value": {
+                "scope": "any_area",
+                "subject": "board"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:phantom:2",
+          "name": "幻想 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "将该角色从版图上移除",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_character",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -687,6 +1309,50 @@
       "goodwill_ability_once_per_loop": [
         true,
         true
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:alien:1",
+          "name": "异界人 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "使同一区域另外1名角色死亡",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "kill_character",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:alien:2",
+          "name": "异界人 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "复活同一区域任意1具尸体",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "revive_character",
+              "target": {
+                "scope": "same_area",
+                "subject": "dead_character"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -716,6 +1382,21 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:informant:1",
+          "name": "情报商 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "声明1条规则X的名称。剧作家从当前剧本所选用的规则X中，公开1条主人公未声明的规则X。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -746,6 +1427,28 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:henchman:1",
+          "name": "手下 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "本轮回中该角色为当事人的事件不会发生",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "suppress_incident",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ],
       "initial_area_candidates": [
         "hospital",
@@ -781,6 +1484,34 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:nurse:1",
+          "name": "护士 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除同一区域不安达到或超出限度的另外1名角色身上的1枚不安指示物。即使带有无视友好特性也不能拒绝使用该能力。",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character",
+                "filters": {
+                  "limit_reached": true
+                }
+              },
+              "token_type": "paranoia",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
       ]
     },
     {
@@ -795,21 +1526,57 @@
       ],
       "paranoia_limit": 3,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "往不安达到或超出不安限度的角色身上放置1枚友好指示物",
-        "公开同一区域另1名不安达限度的角色身份",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        3,
-        4,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        false,
-        true
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:cult_leader:1",
+          "name": "教主 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "往不安达到或超出不安限度的角色身上放置1枚友好指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "any_area",
+                "subject": "character",
+                "filters": {
+                  "limit_reached": true
+                }
+              },
+              "token_type": "goodwill",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:cult_leader:2",
+          "name": "教主 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开同一区域另1名不安达限度的角色身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character",
+                "filters": {
+                  "limit_reached": true
+                }
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -824,21 +1591,58 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "放置/移除同一区域1名学生身上的1枚不安指示物",
-        "公开同一区域1名学生的身份",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        3,
-        4,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        false,
-        false
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:teacher:1",
+          "name": "教师 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "放置/移除同一区域1名学生身上的1枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character",
+                "filters": {
+                  "attribute": "student"
+                }
+              },
+              "token_type": "paranoia",
+              "amount": 1,
+              "value": "choose_place_or_remove"
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:teacher:2",
+          "name": "教师 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开同一区域1名学生的身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "scope": "same_area",
+                "subject": "character",
+                "filters": {
+                  "attribute": "student"
+                }
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 4,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -868,6 +1672,21 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:copycat:1",
+          "name": "模仿犯 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "必须在第2轮轮回或之后才可以使用。公开场上与该角色身份相同的所有角色名。即使带有无视友好特性，也不能拒绝使用该能力。",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -897,6 +1716,32 @@
       "goodwill_ability_once_per_loop": [
         false,
         true
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:class_rep:1",
+          "name": "班长 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "由队长选择1张已使用完毕的行动牌收回至手牌",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "return_card",
+              "target": {
+                "ref": "none"
+              },
+              "chooser": "leader",
+              "value": {
+                "choice": "choose_return_card"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -926,6 +1771,31 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:male_student:1",
+          "name": "男子学生 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除同一区域另外1名角色身上的1枚不安指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "paranoia",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -955,6 +1825,55 @@
       "goodwill_ability_once_per_loop": [
         true,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:deity:1",
+          "name": "神灵 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开1个事件的当事人",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_incident",
+              "target": {
+                "ref": "none"
+              },
+              "chooser": "leader",
+              "value": {
+                "choice": "choose_incident"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:deity:2",
+          "name": "神灵 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "移除同一区域任意1名角色身上或版图上的1枚密谋指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "character_or_board"
+              },
+              "token_type": "intrigue",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -962,28 +1881,36 @@
       "name": "职员",
       "trait_rule": "",
       "initial_area": "city",
-      "forbidden_areas": [],
+      "forbidden_areas": [
+        "school"
+      ],
       "attributes": [
         "adult",
         "male"
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "公开该角色的身份",
-        "",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        3,
-        0,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        false,
-        false
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:office_worker:1",
+          "name": "职员 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开该角色的身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 3,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -1013,6 +1940,50 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
+      ],
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:transfer_student:1",
+          "name": "转校生 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "将同一区域另外1名角色身上的1枚密谋指示物替换为友好指示物",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "remove_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "token_type": "intrigue",
+              "amount": 1,
+              "condition": {
+                "condition_type": "token_check",
+                "params": {
+                  "target": {
+                    "ref": "other"
+                  },
+                  "token": "intrigue",
+                  "operator": ">=",
+                  "value": 1
+                }
+              }
+            },
+            {
+              "effect_type": "place_token",
+              "target": {
+                "ref": "condition_target"
+              },
+              "token_type": "goodwill",
+              "amount": 1
+            }
+          ],
+          "sequential": true,
+          "goodwill_requirement": 2,
+          "once_per_loop": false,
+          "can_be_refused": true
+        }
       ]
     },
     {
@@ -1031,7 +2002,7 @@
       "paranoia_limit": 4,
       "base_traits": [],
       "goodwill_ability_texts": [
-        "主人公在每个回合的主人公能力阶段，可以将该角色身上的1枚指示物移动至同一区域的另外1名角色身上。如果该角色带有无视友好的特性，剧作家必须在剧作家能力阶段使用此特性（强制）",
+        "",
         "",
         "",
         ""
@@ -1045,7 +2016,8 @@
       "goodwill_ability_once_per_loop": [
         false,
         false
-      ]
+      ],
+      "goodwill_abilities": []
     },
     {
       "character_id": "inpatient",
@@ -1091,21 +2063,41 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "选择同一区域另外2名角色，将1枚任意指示物在两者之间移动",
-        "公开1具尸体的身份",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        2,
-        5,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        true,
-        true
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:appraiser:1",
+          "name": "鉴别员 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "选择同一区域另外2名角色，将1枚任意指示物在两者之间移动",
+          "condition": null,
+          "effects": [],
+          "sequential": false,
+          "goodwill_requirement": 2,
+          "once_per_loop": true,
+          "can_be_refused": true
+        },
+        {
+          "ability_id": "goodwill:appraiser:2",
+          "name": "鉴别员 友好能力2",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "公开1具尸体的身份",
+          "condition": null,
+          "effects": [
+            {
+              "effect_type": "reveal_identity",
+              "target": {
+                "scope": "any_area",
+                "subject": "dead_character"
+              }
+            }
+          ],
+          "sequential": false,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ]
     }
   ]

@@ -12,6 +12,7 @@ from engine.display_names import (
     outcome_name,
     phase_name,
     player_name,
+    revealed_incident_message,
     revealed_identity_message,
     token_name,
 )
@@ -38,6 +39,7 @@ class SessionViewState:
     protagonist_announcements: list[str] = field(default_factory=list)
     mastermind_announcements: list[str] = field(default_factory=list)
     revealed_identity_messages: list[str] = field(default_factory=list)
+    revealed_incident_messages: list[str] = field(default_factory=list)
     outcome: Outcome | None = None
 
     @property
@@ -249,6 +251,7 @@ class GameSessionController(UICallback):
                     "incident_id": incident.incident_id,
                     "day": incident.day,
                     "perpetrator_id": incident.perpetrator_id,
+                    "target_selectors": list(incident.target_selectors),
                     "target_character_ids": list(incident.target_character_ids),
                     "target_area_ids": list(incident.target_area_ids),
                     "chosen_token_types": list(incident.chosen_token_types),
@@ -288,6 +291,8 @@ class GameSessionController(UICallback):
             if option in {"goodwill", "paranoia", "intrigue", "hope", "despair", "guard"}:
                 return token_name(option)
             return display_target_name(option)
+        if isinstance(option, dict):
+            return display_target_name(option)
         card_type = getattr(option, "card_type", None)
         if card_type is not None:
             return card_name(card_type.value)
@@ -307,6 +312,9 @@ class GameSessionController(UICallback):
             reveal_message = self._format_revealed_identity_message(event)
             if reveal_message:
                 self.view_state.revealed_identity_messages.append(reveal_message)
+            incident_reveal_message = self._format_revealed_incident_message(event)
+            if incident_reveal_message:
+                self.view_state.revealed_incident_messages.append(incident_reveal_message)
             message = self._format_mastermind_event(event)
             if message:
                 self.view_state.mastermind_announcements.append(message)
@@ -335,6 +343,16 @@ class GameSessionController(UICallback):
             return ""
         return revealed_identity_message(character_id, identity_id)
 
+    @staticmethod
+    def _format_revealed_incident_message(event: GameEvent) -> str:
+        if event.event_type.name != "INCIDENT_REVEALED":
+            return ""
+        incident_id = str(event.data.get("incident_id", "") or "")
+        perpetrator_id = str(event.data.get("perpetrator_id", "") or "")
+        if not incident_id or not perpetrator_id:
+            return ""
+        return revealed_incident_message(incident_id, perpetrator_id)
+
 
 _EVENT_TYPE_NAMES = {
     "CHARACTER_DEATH": "角色死亡",
@@ -346,6 +364,7 @@ _EVENT_TYPE_NAMES = {
     "PROTAGONIST_FAILURE": "主人公失败",
     "LOOP_END_FORCED": "强制结束轮回",
     "IDENTITY_REVEALED": "身份公开",
+    "INCIDENT_REVEALED": "当事人公开",
     "INCIDENT_OCCURRED": "事件发生",
     "PHASE_CHANGED": "阶段切换",
     "LOOP_STARTED": "轮回开始",
@@ -370,6 +389,7 @@ _EVENT_DATA_KEY_NAMES = {
     "other_character_id": "死亡角色",
     "outcome": "结果",
     "phase": "阶段",
+    "perpetrator_id": "当事人",
     "reason": "原因",
     "source_kind": "来源类型",
     "target_id": "目标",
@@ -379,7 +399,7 @@ _EVENT_DATA_KEY_NAMES = {
 
 
 def _format_event_value(key: str, value: Any) -> str:
-    if key in {"character_id", "target_id", "other_character_id"}:
+    if key in {"character_id", "target_id", "other_character_id", "perpetrator_id"}:
         return display_target_name(str(value))
     if key == "destination":
         return display_target_name(str(value))

@@ -178,6 +178,11 @@ class Visibility:
                 identity = identity_name(str(details.get("identity_id", "?")))
                 return f"{cid} 的身份是 {identity}"
 
+            case "reveal_incident":
+                incident_id = incident_name(str(details.get("incident_id", "?")))
+                perpetrator = character_name(str(details.get("perpetrator_id", "?")))
+                return f"{incident_id}事件的当事人是{perpetrator}"
+
             case "incident_occurred":
                 incident_id = incident_name(str(details.get("incident_id", "?")))
                 day = details.get("day", "?")

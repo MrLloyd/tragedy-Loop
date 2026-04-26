@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +25,14 @@ from engine.display_names import (
     token_name,
 )
 from engine.models.enums import AreaId, GamePhase, TokenType
+from engine.models.incident import IncidentSchedule
+from engine.models.selectors import (
+    area_choice_selector,
+    character_choice_selector,
+    selector_is_self_ref,
+    selector_literal_value,
+    selector_requires_choice,
+)
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import ForceLoopEnd, PhaseComplete, WaitForInput, create_phase_handlers
 from engine.rules.persistent_effects import settle_persistent_effects
@@ -58,6 +67,7 @@ class TestModeDraft:
     current_day: int = 1
     current_phase: str = GamePhase.PLAYWRIGHT_ABILITY.value
     characters: list[TestCharacterDraft] = field(default_factory=list)
+    board_tokens: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 class TestModeController:
@@ -73,6 +83,12 @@ class TestModeController:
         self.phase_handlers: dict[GamePhase, Any] = {}
         self.pending_wait: WaitForInput | None = None
         self.status_message = ""
+        self._wait_sequence = 0
+        self._current_signal = ""
+        self._input_in_progress = False
+        self._last_input_summary = ""
+        self._last_error = ""
+        self._trace_tail: deque[str] = deque(maxlen=50)
         self.set_module(module_id)
         if not self.draft.characters:
             self.add_character()
@@ -100,6 +116,90 @@ class TestModeController:
     def available_incident_ids(self) -> list[str]:
         raw = self._context.get("available_incidents", [])
         return [str(item) for item in raw] if isinstance(raw, list) else []
+
+    def available_incident_target_options(
+        self,
+        *,
+        incident_id: str,
+        perpetrator_id: str,
+        target_selectors: list[dict[str, str]] | None = None,
+        target_character_ids: list[str] | None = None,
+        target_area_ids: list[str] | None = None,
+        chosen_token_types: list[str] | None = None,
+    ) -> dict[str, list[list[tuple[str, str]]]]:
+        groups: dict[str, list[list[tuple[str, str]]]] = {
+            "character": [],
+            "area": [],
+            "token": [],
+        }
+        if self.session is None or not incident_id or not perpetrator_id:
+            return groups
+
+        incident_def = self.session.state.incident_defs.get(incident_id)
+        if incident_def is None:
+            return groups
+
+        selected_characters = [item for item in (target_character_ids or []) if item]
+        selected_areas = [item for item in (target_area_ids or []) if item]
+        selected_tokens = [item for item in (chosen_token_types or []) if item]
+        accepted_selectors: list[dict[str, str]] = list(target_selectors or [])
+        accepted_characters: list[str] = []
+        accepted_areas: list[str] = []
+        accepted_tokens: list[str] = []
+        character_index = 0
+        area_index = 0
+        token_index = 0
+
+        for _ in range(len(incident_def.effects) + 4):
+            schedule = IncidentSchedule(
+                incident_id=incident_id,
+                day=self.session.state.current_day,
+                perpetrator_id=perpetrator_id,
+                target_selectors=list(accepted_selectors),
+                target_character_ids=list(accepted_characters),
+                target_area_ids=list(accepted_areas),
+                chosen_token_types=list(accepted_tokens),
+            )
+            next_choice = self.session.incident_resolver.next_runtime_choice(
+                self.session.state,
+                schedule,
+                incident_def,
+            )
+            if next_choice is None:
+                break
+
+            choice_type, candidates = next_choice
+            groups[choice_type].append(
+                [(candidate_id, self._target_option_label(candidate_id)) for candidate_id in candidates]
+            )
+
+            if choice_type == "character":
+                selected = selected_characters[character_index] if character_index < len(selected_characters) else ""
+                character_index += 1
+                if selected in candidates:
+                    accepted_selectors.append(character_choice_selector(selected))
+                    accepted_characters.append(selected)
+                    continue
+                break
+            if choice_type == "area":
+                selected = selected_areas[area_index] if area_index < len(selected_areas) else ""
+                area_index += 1
+                if selected in candidates:
+                    accepted_selectors.append(area_choice_selector(selected))
+                    accepted_areas.append(selected)
+                    continue
+                break
+            if choice_type == "token":
+                selected = selected_tokens[token_index] if token_index < len(selected_tokens) else ""
+                token_index += 1
+                if selected in candidates:
+                    accepted_tokens.append(selected)
+                    continue
+                break
+
+            break
+
+        return groups
 
     @property
     def available_rule_y_ids(self) -> list[str]:
@@ -144,6 +244,7 @@ class TestModeController:
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
             characters=[self._normalize_character(item) for item in characters],
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
     def set_rules(self, *, rule_y_id: str, rule_x_ids: list[str]) -> None:
@@ -155,6 +256,7 @@ class TestModeController:
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
             characters=list(self.draft.characters),
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
     def set_runtime(self, *, current_loop: int, current_day: int, current_phase: str) -> None:
@@ -166,6 +268,7 @@ class TestModeController:
             current_day=max(1, min(TEST_MODE_DAYS_PER_LOOP, int(current_day))),
             current_phase=current_phase,
             characters=list(self.draft.characters),
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
     def replace_characters(self, characters: list[TestCharacterDraft]) -> None:
@@ -177,6 +280,19 @@ class TestModeController:
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
             characters=[self._normalize_character(item) for item in characters],
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
+        )
+
+    def replace_board_tokens(self, board_tokens: dict[str, dict[str, int]]) -> None:
+        self.draft = TestModeDraft(
+            module_id=self.draft.module_id,
+            rule_y_id=self.draft.rule_y_id,
+            rule_x_ids=list(self.draft.rule_x_ids),
+            current_loop=self.draft.current_loop,
+            current_day=self.draft.current_day,
+            current_phase=self.draft.current_phase,
+            characters=list(self.draft.characters),
+            board_tokens=self._normalize_board_tokens(board_tokens),
         )
 
     def add_character(self) -> None:
@@ -237,6 +353,7 @@ class TestModeController:
                     for item in self.draft.characters
                     if item.character_id
                 ],
+                board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
             ),
         )
         self._reset_phase_runtime()
@@ -267,19 +384,32 @@ class TestModeController:
         actor_id: str | None = None,
         timing: str | None = None,
     ) -> list[tuple[str, str]]:
-        if self.session is None:
-            return []
-        candidates = list_debug_abilities(
-            self.session,
-            actor_id=actor_id,
-            timing=timing,
-            alive_only=False,
-        )
         result: list[tuple[str, str]] = []
-        for candidate in candidates:
-            if candidate.source_kind != "identity":
-                continue
+        for candidate in self._list_debug_ability_candidates(
+            source_kinds=("identity", "derived"),
+            source_id=actor_id,
+            timing=timing,
+        ):
             label = f"{candidate.ability.name}｜{candidate.ability.timing.value}｜{candidate.ability.ability_id}"
+            result.append((candidate.ability.ability_id, label))
+        return result
+
+    def available_rule_abilities(
+        self,
+        *,
+        timing: str | None = None,
+    ) -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = []
+        for candidate in self._list_debug_ability_candidates(
+            source_kind="rule",
+            timing=timing,
+        ):
+            label = (
+                f"{rule_option_label(candidate.source_id)}"
+                f"｜{candidate.ability.name}"
+                f"｜{candidate.ability.timing.value}"
+                f"｜{candidate.ability.ability_id}"
+            )
             result.append((candidate.ability.ability_id, label))
         return result
 
@@ -290,25 +420,34 @@ class TestModeController:
         ability_id: str,
         timing: str | None = None,
     ) -> list[list[tuple[str, str]]]:
-        candidate = self._find_identity_ability_candidate(
-            actor_id=actor_id,
+        candidate = self._find_debug_ability_candidate(
+            source_kinds=("identity", "derived"),
+            source_id=actor_id,
             ability_id=ability_id,
             timing=timing,
         )
+        return self._ability_target_options(candidate)
+
+    def available_rule_ability_target_options(
+        self,
+        *,
+        ability_id: str,
+        timing: str | None = None,
+    ) -> list[list[tuple[str, str]]]:
+        candidate = self._find_debug_ability_candidate(
+            source_kind="rule",
+            ability_id=ability_id,
+            timing=timing,
+        )
+        return self._ability_target_options(candidate)
+
+    def _ability_target_options(self, candidate: Any | None) -> list[list[tuple[str, str]]]:
         if candidate is None or self.session is None:
             return []
-
         option_groups: list[list[tuple[str, str]]] = []
+        owner_id = self._candidate_owner_id(candidate)
         for effect in candidate.ability.effects:
-            selector = effect.target
-            if not self._requires_debug_target_choice(selector):
-                continue
-            options = self.session.ability_resolver.resolve_targets(
-                self.session.state,
-                owner_id=candidate.source_id,
-                selector=selector,
-                alive_only=True,
-            )
+            options = self._ability_effect_options(owner_id=owner_id, effect=effect)
             if not options:
                 continue
             option_groups.append(
@@ -316,11 +455,59 @@ class TestModeController:
             )
         return option_groups
 
+    def _ability_effect_options(
+        self,
+        *,
+        owner_id: str,
+        effect: Any,
+    ) -> list[str]:
+        if self.session is None:
+            return []
+        selector = effect.target
+        if selector_requires_choice(selector):
+            return self.session.ability_resolver.resolve_targets(
+                self.session.state,
+                owner_id=owner_id,
+                selector=selector,
+                alive_only=True,
+            )
+        move_options = self._ability_move_area_options(owner_id=owner_id, effect=effect)
+        if move_options:
+            return move_options
+        token_options = self._ability_token_options(effect)
+        if token_options:
+            return token_options
+        if effect.effect_type.name in {"PLACE_TOKEN", "REMOVE_TOKEN"} and effect.value == "choose_place_or_remove":
+            return ["place", "remove"]
+        return []
+
+    def _ability_move_area_options(
+        self,
+        *,
+        owner_id: str,
+        effect: Any,
+    ) -> list[str]:
+        if self.session is None:
+            return []
+        if effect.effect_type.name != "MOVE_CHARACTER" or not selector_requires_choice(effect.value):
+            return []
+        mover_id = owner_id if selector_is_self_ref(effect.target) else selector_literal_value(effect.target)
+        if mover_id not in self.session.state.characters:
+            return []
+        all_areas = self.session.ability_resolver.resolve_targets(
+            self.session.state,
+            owner_id=owner_id,
+            selector=effect.value,
+            alive_only=False,
+        )
+        return self.session.state.available_enterable_areas(mover_id, all_areas)
+
     def trigger_incident(
         self,
         *,
         incident_id: str,
         perpetrator_id: str,
+        target_selectors: list[dict[str, str]] | None = None,
         target_character_ids: list[str] | None = None,
         target_area_ids: list[str] | None = None,
         chosen_token_types: list[str] | None = None,
@@ -332,11 +519,17 @@ class TestModeController:
             self.session,
             incident_id=incident_id,
             perpetrator_id=perpetrator_id,
+            target_selectors=target_selectors,
             target_character_ids=target_character_ids,
             target_area_ids=target_area_ids,
             chosen_token_types=chosen_token_types,
         )
-        status = "有现象" if result.resolution.has_phenomenon else "无现象"
+        if not result.resolution.occurred:
+            status = "未发生"
+        elif result.resolution.has_phenomenon:
+            status = "发生｜有现象"
+        else:
+            status = "发生｜无现象"
         self.status_message = self._append_failure_status(
             f"事件触发：{incident_option_label(incident_id)}｜{status}",
             before_flags=before_flags,
@@ -363,6 +556,36 @@ class TestModeController:
         )
         self.status_message = self._append_failure_status(
             f"身份能力触发：{ability_id}｜{result.resolution.outcome.value}",
+            before_flags=before_flags,
+            before_protagonist_dead=before_protagonist_dead,
+        )
+
+    def trigger_rule_ability(
+        self,
+        *,
+        ability_id: str,
+        timing: str | None = None,
+        target_choices: list[str] | None = None,
+    ) -> None:
+        if self.session is None:
+            raise RuntimeError("调试局尚未建立")
+        candidate = self._find_debug_ability_candidate(
+            source_kind="rule",
+            ability_id=ability_id,
+            timing=timing,
+        )
+        if candidate is None:
+            raise ValueError(f"规则能力不可用：{ability_id}")
+        before_flags, before_protagonist_dead = self._capture_failure_state()
+        result = trigger_debug_ability(
+            self.session,
+            actor_id=candidate.source_id,
+            ability_id=ability_id,
+            timing=timing,
+            target_choices=target_choices,
+        )
+        self.status_message = self._append_failure_status(
+            f"规则能力触发：{rule_option_label(candidate.source_id)}｜{ability_id}｜{result.resolution.outcome.value}",
             before_flags=before_flags,
             before_protagonist_dead=before_protagonist_dead,
         )
@@ -423,6 +646,51 @@ class TestModeController:
 
     def read_debug_snapshot(self) -> dict[str, Any]:
         return self.snapshot()
+
+    def submit_input(self, choice: Any) -> None:
+        wait = self.pending_wait
+        if wait is None or wait.callback is None:
+            self._record_runtime_error("provide_input without pending callback")
+            raise RuntimeError("No pending input callback; test mode is not waiting for input")
+
+        callback = wait.callback
+        self.pending_wait = None
+        self._input_in_progress = True
+        self._last_input_summary = self._summarize_input(choice)
+        self._last_error = ""
+        self._append_trace(
+            f"provide_input wait#{wait.wait_id} {self._last_input_summary}"
+        )
+        try:
+            result = callback(choice)
+        except Exception:
+            self.pending_wait = wait
+            self._record_runtime_error("callback raised; restored pending callback")
+            raise
+        finally:
+            self._input_in_progress = False
+        if result is not None:
+            self._handle_phase_signal(result)
+        self._sync_runtime_from_session()
+
+    def get_runtime_debug_snapshot(self) -> dict[str, Any]:
+        engine_phase = ""
+        state_current_phase = ""
+        if self.state_machine is not None:
+            engine_phase = self.state_machine.current_phase.value
+        if self.session is not None:
+            state_current_phase = self.session.state.current_phase.value
+        return {
+            "engine_phase": engine_phase,
+            "state_current_phase": state_current_phase,
+            "current_signal": self._current_signal,
+            "input_in_progress": self._input_in_progress,
+            "has_pending_callback": self.pending_wait is not None and self.pending_wait.callback is not None,
+            "pending_wait_id": self.pending_wait.wait_id if self.pending_wait is not None else 0,
+            "last_input_summary": self._last_input_summary,
+            "last_error": self._last_error,
+            "trace_tail": list(self._trace_tail),
+        }
 
     def execute_current_phase(self) -> None:
         if self.session is None or self.state_machine is None:
@@ -505,33 +773,63 @@ class TestModeController:
         self.status_message = f"阶段已推进：{phase_name(prev_phase.value)} → {phase_name(next_phase.value)}"
 
     @staticmethod
-    def _requires_debug_target_choice(selector: str) -> bool:
-        return (
-            selector in {"same_area_any", "any_character", "any_board", "same_area_board"}
-            or selector.startswith("same_area_identity:")
-        )
+    def _ability_token_options(effect: Any) -> list[str]:
+        value = getattr(effect, "value", None)
+        if value == "choose_token_type":
+            return [token.value for token in TokenType]
+        if isinstance(value, dict) and value.get("choice") == "choose_token_type":
+            options = value.get("options", [])
+            if not isinstance(options, list):
+                return []
+            valid = {token.value for token in TokenType}
+            return [item for item in options if isinstance(item, str) and item in valid]
+        return []
 
-    def _find_identity_ability_candidate(
+    def _list_debug_ability_candidates(
         self,
         *,
-        actor_id: str,
-        ability_id: str,
+        source_kind: str | None = None,
+        source_kinds: tuple[str, ...] | None = None,
+        source_id: str | None = None,
         timing: str | None = None,
-    ) -> Any | None:
+    ) -> list[Any]:
         if self.session is None:
-            return None
+            return []
         candidates = list_debug_abilities(
             self.session,
-            actor_id=actor_id,
+            actor_id=source_id,
             timing=timing,
             alive_only=False,
         )
-        for candidate in candidates:
-            if candidate.source_kind != "identity":
-                continue
+        allowed_kinds = source_kinds or ((source_kind,) if source_kind else ())
+        if not allowed_kinds:
+            return candidates
+        return [candidate for candidate in candidates if candidate.source_kind in allowed_kinds]
+
+    def _find_debug_ability_candidate(
+        self,
+        *,
+        source_kind: str | None = None,
+        source_kinds: tuple[str, ...] | None = None,
+        source_id: str | None = None,
+        ability_id: str,
+        timing: str | None = None,
+    ) -> Any | None:
+        for candidate in self._list_debug_ability_candidates(
+            source_kind=source_kind,
+            source_kinds=source_kinds,
+            source_id=source_id,
+            timing=timing,
+        ):
             if candidate.ability.ability_id == ability_id:
                 return candidate
         return None
+
+    @staticmethod
+    def _candidate_owner_id(candidate: Any) -> str:
+        if getattr(candidate, "source_kind", "") == "rule":
+            return ""
+        return str(getattr(candidate, "source_id", ""))
 
     def _target_option_label(self, option_id: str) -> str:
         if option_id in self.available_character_ids:
@@ -560,6 +858,24 @@ class TestModeController:
             revealed=item.revealed,
             tokens=tokens,
         )
+
+    def _normalize_board_tokens(
+        self,
+        board_tokens: dict[str, dict[str, int]] | None,
+    ) -> dict[str, dict[str, int]]:
+        normalized: dict[str, dict[str, int]] = {}
+        source = board_tokens or {}
+        for area_id in self.available_area_ids():
+            raw_tokens = source.get(area_id, {})
+            if not isinstance(raw_tokens, dict):
+                raw_tokens = {}
+            intrigue = max(0, min(3, int(raw_tokens.get(TokenType.INTRIGUE.value, 0))))
+            normalized[area_id] = (
+                {TokenType.INTRIGUE.value: intrigue}
+                if intrigue > 0
+                else {}
+            )
+        return normalized
 
     def _default_character_id(self, *, exclude: set[str] | None = None) -> str:
         exclude = exclude or set()
@@ -646,6 +962,13 @@ class TestModeController:
             self.session.atomic_resolver,
         )
         self.pending_wait = None
+        self._wait_sequence = 0
+        self._current_signal = ""
+        self._input_in_progress = False
+        self._last_input_summary = ""
+        self._last_error = ""
+        self._trace_tail.clear()
+        self._append_trace(f"reset_phase_runtime {self.state_machine.current_phase.value}")
         self._sync_runtime_from_session()
 
     def _sync_runtime_from_session(self) -> None:
@@ -660,6 +983,7 @@ class TestModeController:
             current_day=self.session.state.current_day,
             current_phase=phase,
             characters=list(self.draft.characters),
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
         self.session.state.current_phase = GamePhase(phase)
 
@@ -667,9 +991,12 @@ class TestModeController:
         if self.session is None:
             return
         phase = self.state_machine.current_phase.value if self.state_machine is not None else "unknown"
+        self._current_signal = type(signal).__name__
+        self._append_trace(f"handle_signal {self._current_signal}")
         match signal:
             case PhaseComplete():
                 self.pending_wait = None
+                self._last_error = ""
                 self.session.debug_log.append({
                     "action": "execute_test_phase",
                     "phase": phase,
@@ -677,7 +1004,16 @@ class TestModeController:
                 })
                 self.status_message = f"阶段执行完成：{phase_name(phase)}；可继续推进"
             case WaitForInput() as wait:
+                if wait.callback is None:
+                    self._record_runtime_error(f"WaitForInput({wait.input_type}) missing callback")
+                    raise RuntimeError(f"WaitForInput({wait.input_type}) missing callback")
+                self._wait_sequence += 1
+                wait.wait_id = self._wait_sequence
                 self.pending_wait = wait
+                self._last_error = ""
+                self._append_trace(
+                    f"wait #{wait.wait_id} {wait.input_type} player={wait.player}"
+                )
                 self.session.debug_log.append({
                     "action": "execute_test_phase",
                     "phase": phase,
@@ -688,8 +1024,10 @@ class TestModeController:
                 self.status_message = f"阶段等待输入：{wait.input_type}（{wait.player}）"
             case ForceLoopEnd() as forced:
                 self.pending_wait = None
+                self._last_error = ""
                 if self.state_machine is not None:
                     self.state_machine.force_loop_end()
+                self._append_trace(f"force_loop_end {forced.reason}")
                 self.session.debug_log.append({
                     "action": "execute_test_phase",
                     "phase": phase,
@@ -699,3 +1037,32 @@ class TestModeController:
                 self.status_message = f"阶段触发强制轮回结束：{forced.reason or phase_name(phase)}"
             case _:
                 raise RuntimeError(f"unsupported phase signal: {type(signal).__name__}")
+
+    def _append_trace(self, message: str) -> None:
+        self._trace_tail.append(message)
+
+    def _record_runtime_error(self, message: str) -> None:
+        self._last_error = message
+        self._append_trace(f"error {message}")
+
+    @staticmethod
+    def _summarize_input(choice: Any) -> str:
+        if choice is None:
+            return "None"
+        if isinstance(choice, str):
+            return choice
+        target_type = getattr(choice, "target_type", None)
+        target_id = getattr(choice, "target_id", None)
+        if target_type is not None and target_id is not None:
+            card = getattr(choice, "card", None)
+            card_type = getattr(card, "card_type", None)
+            card_name = getattr(card_type, "value", str(card_type)) if card_type is not None else "unknown_card"
+            return f"{card_name}:{target_type}:{target_id}"
+        if isinstance(choice, dict):
+            return f"dict(keys={sorted(choice.keys())})"
+        if isinstance(choice, list):
+            return f"list(len={len(choice)})"
+        ability = getattr(choice, "ability", None)
+        if ability is not None and hasattr(ability, "ability_id"):
+            return str(ability.ability_id)
+        return type(choice).__name__

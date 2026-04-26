@@ -13,8 +13,9 @@ from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, GamePhase, Outcome, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, EffectType, GamePhase, Outcome, TokenType
 from engine.models.incident import IncidentSchedule
+from engine.models.selectors import selector_is_self_ref, selector_literal_value, selector_requires_choice
 from engine.resolvers.ability_resolver import AbilityCandidate, AbilityResolver
 from engine.resolvers.atomic_resolver import AtomicResolver, ResolutionResult
 from engine.resolvers.death_resolver import DeathResolver
@@ -51,6 +52,7 @@ class DebugSetup:
     current_day: int | None = None
     current_phase: str | GamePhase | None = None
     characters: list[DebugCharacterSetup] = field(default_factory=list)
+    board_tokens: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -109,12 +111,22 @@ def apply_debug_setup(session: DebugSession, setup: DebugSetup) -> GameState:
             raise ValueError(f"unknown character: {character_setup.character_id!r}")
         _apply_character_setup(character, character_setup)
 
+    for area_id, tokens in setup.board_tokens.items():
+        try:
+            area = state.board.areas[AreaId(area_id)]
+        except ValueError as exc:
+            raise ValueError(f"unknown board area: {area_id!r}") from exc
+        area.tokens.clear()
+        for token_name, value in tokens.items():
+            area.tokens.set(TokenType(token_name), value)
+
     session.debug_log.append({
         "action": "apply_debug_setup",
         "current_loop": state.current_loop,
         "current_day": state.current_day,
         "current_phase": state.current_phase.value,
         "characters": [item.character_id for item in setup.characters],
+        "board_areas": sorted(setup.board_tokens.keys()),
     })
     return state
 
@@ -227,6 +239,7 @@ def trigger_debug_incident(
     incident_id: str,
     perpetrator_id: str,
     day: int | None = None,
+    target_selectors: list[Any] | None = None,
     target_character_ids: list[str] | None = None,
     target_area_ids: list[str] | None = None,
     chosen_token_types: list[str] | None = None,
@@ -236,6 +249,7 @@ def trigger_debug_incident(
         incident_id=incident_id,
         day=day if day is not None else session.state.current_day,
         perpetrator_id=perpetrator_id,
+        target_selectors=list(target_selectors or []),
         target_character_ids=list(target_character_ids or []),
         target_area_ids=list(target_area_ids or []),
         chosen_token_types=list(chosen_token_types or []),
@@ -246,6 +260,7 @@ def trigger_debug_incident(
         "action": "trigger_debug_incident",
         "incident_id": incident_id,
         "perpetrator_id": perpetrator_id,
+        "target_selectors": list(target_selectors or []),
         "targets": target_character_ids or [],
         "areas": target_area_ids or [],
         "tokens": chosen_token_types or [],
@@ -331,16 +346,23 @@ def _concretize_debug_effects(
     choices = list(target_choices)
     effects: list[Effect] = []
     for effect in candidate.ability.effects:
-        options = _resolve_debug_effect_options(session, owner_id=owner_id, effect=effect)
-        if options is None:
-            effects.append(effect)
-            continue
-        if not options:
-            continue
-        selected = choices.pop(0) if choices else options[0]
-        if selected not in options:
-            raise ValueError(f"invalid debug target {selected!r}; valid options: {options!r}")
-        effects.append(_concretize_effect(effect, selected))
+        current = effect
+        while True:
+            options = _resolve_debug_effect_options(session, owner_id=owner_id, effect=current)
+            if options is None:
+                effects.append(current)
+                break
+            if not options:
+                break
+            selected = choices.pop(0) if choices else options[0]
+            if selected not in options:
+                raise ValueError(f"invalid debug target {selected!r}; valid options: {options!r}")
+            current = _apply_debug_effect_choice(
+                session,
+                owner_id=owner_id,
+                effect=current,
+                selected=selected,
+            )
     return effects
 
 
@@ -350,14 +372,103 @@ def _resolve_debug_effect_options(
     owner_id: str,
     effect: Effect,
 ) -> list[str] | None:
-    if effect.target in {"same_area_any", "any_character", "any_board", "same_area_board"} or effect.target.startswith("same_area_identity:"):
+    if selector_requires_choice(effect.target):
         return session.ability_resolver.resolve_targets(
             session.state,
             owner_id=owner_id,
             selector=effect.target,
             alive_only=True,
         )
+    if effect.effect_type.name == "MOVE_CHARACTER" and selector_requires_choice(effect.value):
+        mover_id = owner_id if selector_is_self_ref(effect.target) else selector_literal_value(effect.target)
+        if mover_id not in session.state.characters:
+            return []
+        all_areas = session.ability_resolver.resolve_targets(
+            session.state,
+            owner_id=owner_id,
+            selector=effect.value,
+            alive_only=False,
+        )
+        return session.state.available_enterable_areas(mover_id, all_areas)
+    token_choices = _resolve_debug_token_options(session, owner_id=owner_id, effect=effect)
+    if token_choices is not None:
+        return token_choices
+    if effect.effect_type.name in {"PLACE_TOKEN", "REMOVE_TOKEN"} and effect.value == "choose_place_or_remove":
+        return ["place", "remove"]
     return None
+
+
+def _apply_debug_effect_choice(
+    session: DebugSession,
+    *,
+    owner_id: str,
+    effect: Effect,
+    selected: str,
+) -> Effect:
+    if selector_requires_choice(effect.target):
+        return _concretize_effect(effect, selected)
+    if effect.effect_type.name == "MOVE_CHARACTER" and selector_requires_choice(effect.value):
+        return Effect(
+            effect_type=effect.effect_type,
+            target=effect.target,
+            token_type=effect.token_type,
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=selected,
+            condition=effect.condition,
+        )
+    token_choices = _resolve_debug_token_options(session, owner_id=owner_id, effect=effect)
+    if token_choices is not None:
+        return Effect(
+            effect_type=effect.effect_type,
+            target=effect.target,
+            token_type=TokenType(selected),
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=None,
+            condition=effect.condition,
+        )
+    if effect.effect_type.name in {"PLACE_TOKEN", "REMOVE_TOKEN"} and effect.value == "choose_place_or_remove":
+        return Effect(
+            effect_type=EffectType.PLACE_TOKEN if selected == "place" else EffectType.REMOVE_TOKEN,
+            target=effect.target,
+            token_type=effect.token_type,
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=None,
+            condition=effect.condition,
+        )
+    return effect
+
+
+def _resolve_debug_token_options(
+    session: DebugSession,
+    *,
+    owner_id: str,
+    effect: Effect,
+) -> list[str] | None:
+    value = effect.value
+    options: list[str] | None = None
+    if value == "choose_token_type":
+        options = [token.value for token in TokenType]
+    elif isinstance(value, dict) and value.get("choice") == "choose_token_type":
+        options = value.get("options", [])
+        if not isinstance(options, list):
+            return []
+        valid = {token.value for token in TokenType}
+        options = [item for item in options if isinstance(item, str) and item in valid]
+    if options is None:
+        return None
+    if isinstance(value, dict) and value.get("only_available_on_self"):
+        owner = session.state.characters.get(owner_id)
+        if owner is None:
+            return []
+        options = [
+            token_name
+            for token_name in options
+            if owner.tokens.get(TokenType(token_name)) > 0
+        ]
+    return options
 
 
 def _concretize_effect(effect: Effect, target_id: str) -> Effect:

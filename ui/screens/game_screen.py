@@ -140,9 +140,10 @@ class GameScreenModel:
         return str(option)
 
 try:  # pragma: no cover - widget rendering is not unit-tested
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (
         QComboBox,
+        QDialog,
         QFormLayout,
         QGridLayout,
         QGroupBox,
@@ -160,6 +161,8 @@ try:  # pragma: no cover - widget rendering is not unit-tested
 except Exception:  # pragma: no cover
     QWidget = object  # type: ignore[misc,assignment]
 else:
+    from ui.widgets import StepChoiceDialog
+
     class GameScreen(QWidget):
         """对局主界面：展示可见状态，并消费 WaitForInput。"""
 
@@ -173,6 +176,9 @@ else:
             self._model = GameScreenModel()
             self._after_submit: Callable[[], None] | None = None
             self._shown_reveal_message_count = 0
+            self._shown_incident_reveal_message_count = 0
+            self._shown_wait_dialog_key: tuple[str, int] | None = None
+            self._dialog_in_progress = False
 
             outer = QVBoxLayout(self)
             scroll = QScrollArea()
@@ -282,6 +288,8 @@ else:
         def bind_session(self, session: GameSessionController) -> None:
             self._session = session
             self._shown_reveal_message_count = 0
+            self._shown_incident_reveal_message_count = 0
+            self._shown_wait_dialog_key = None
             self._session.set_state_updated_callback(self.refresh)
             self.refresh()
 
@@ -316,6 +324,8 @@ else:
             self._refresh_target_ids()
             self._toggle_action_buttons(snapshot.wait_input_type)
             self._show_revealed_identity_popups()
+            self._show_revealed_incident_popups()
+            self._schedule_wait_choice_dialog()
 
         def _render_board(self, snapshot: GameScreenSnapshot) -> None:
             for area_id, text_widget in self.board_area_texts.items():
@@ -389,6 +399,61 @@ else:
                 QMessageBox.information(self, "身份公开", message)
             self._shown_reveal_message_count = len(messages)
 
+        def _show_revealed_incident_popups(self) -> None:
+            if self._session is None:
+                return
+            messages = self._session.view_state.revealed_incident_messages
+            if self._shown_incident_reveal_message_count >= len(messages):
+                return
+            for message in messages[self._shown_incident_reveal_message_count:]:
+                QMessageBox.information(self, "当事人公开", message)
+            self._shown_incident_reveal_message_count = len(messages)
+
+        def _schedule_wait_choice_dialog(self) -> None:
+            if self._session is None or self._dialog_in_progress:
+                return
+            wait = self._session.view_state.current_wait
+            if wait is None or wait.input_type not in {
+                "choose_ability_target",
+                "choose_incident_character",
+                "choose_incident_area",
+                "choose_incident_token_type",
+            }:
+                return
+            dialog_key = self._wait_dialog_key(wait)
+            if self._shown_wait_dialog_key == dialog_key:
+                return
+            self._shown_wait_dialog_key = dialog_key
+            QTimer.singleShot(0, lambda key=dialog_key: self._show_wait_choice_dialog(key))
+
+        def _show_wait_choice_dialog(self, dialog_key: tuple[str, int]) -> None:
+            if self._session is None or self._dialog_in_progress:
+                return
+            wait = self._session.view_state.current_wait
+            if wait is None or self._wait_dialog_key(wait) != dialog_key or not wait.options:
+                return
+
+            dialog = StepChoiceDialog(
+                title="目标选择",
+                prompt=wait.prompt or "请选择目标",
+                options=[
+                    (str(option), self._model._format_wait_option(option))
+                    for option in wait.options
+                ],
+                parent=self,
+            )
+            self._dialog_in_progress = True
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                self._session.submit_input(dialog.selected_value())
+            except Exception as exc:
+                QMessageBox.warning(self, "输入错误", str(exc))
+            finally:
+                self._dialog_in_progress = False
+            self.refresh()
+            self._notify_after_submit()
+
         def _on_pass(self) -> None:
             if self._session is None:
                 return
@@ -461,6 +526,11 @@ else:
         def _notify_after_submit(self) -> None:
             if self._after_submit is not None:
                 self._after_submit()
+
+        @staticmethod
+        def _wait_dialog_key(wait: Any) -> tuple[str, int]:
+            wait_id = int(getattr(wait, "wait_id", 0) or id(wait))
+            return (str(getattr(wait, "input_type", "")), wait_id)
 
         @staticmethod
         def _format_kv_text(data: dict[str, Any]) -> str:

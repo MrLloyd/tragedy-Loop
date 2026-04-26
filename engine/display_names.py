@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from engine.models.enums import AreaId
+from engine.models.selectors import selector_area_id, selector_character_id
 from engine.rules.character_loader import load_character_defs, normalize_identity_id
 
 _REPO_ROOT = Path(__file__).parent.parent
@@ -87,6 +88,7 @@ _WAIT_TYPE_NAMES = {
     "choose_incident_character": "选择事件角色目标",
     "choose_incident_area": "选择事件版图目标",
     "choose_incident_token_type": "选择事件指示物类型",
+    "choose_action_resolve_ability": "选择行动结算能力",
     "choose_playwright_ability": "选择剧作家能力",
     "choose_goodwill_ability": "选择友好能力",
     "respond_goodwill_ability": "回应友好能力",
@@ -201,6 +203,10 @@ def revealed_identity_message(character_id: str, identity_id: str) -> str:
     return f"{character_name(character_id)}的身份是{identity_name(identity_id)}"
 
 
+def revealed_incident_message(incident_id: str, perpetrator_id: str) -> str:
+    return f"{incident_name(incident_id)}事件的当事人是{character_name(perpetrator_id)}"
+
+
 def incident_name(incident_id: str) -> str:
     return _module_catalog()["incidents"].get(incident_id, incident_id)
 
@@ -247,7 +253,15 @@ def format_tokens(tokens: dict[str, int]) -> str:
     return "、".join(parts) if parts else "无"
 
 
-def display_target_name(value: str) -> str:
+def display_target_name(value: Any) -> str:
+    if not isinstance(value, str):
+        character_id = selector_character_id(value)
+        if character_id is not None:
+            return character_name(character_id)
+        area_id = selector_area_id(value)
+        if area_id is not None:
+            return area_name(area_id)
+        return str(value)
     if value in _AREA_NAMES:
         return area_name(value)
     if value in _character_names():

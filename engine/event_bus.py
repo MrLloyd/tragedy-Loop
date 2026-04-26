@@ -35,6 +35,7 @@ class GameEventType(Enum):
     # 信息
     IDENTITY_REVEALED = auto()       # 身份公开
     INCIDENT_OCCURRED = auto()       # 事件发生
+    INCIDENT_REVEALED = auto()       # 事件当事人公开
 
     # 阶段流转
     PHASE_CHANGED = auto()           # 阶段切换
@@ -66,6 +67,7 @@ class GameEvent:
     # PROTAGONIST_FAILURE:  {"cause": str}
     # IDENTITY_REVEALED:    {"character_id": str, "identity_id": str}
     # INCIDENT_OCCURRED:    {"incident_id": str, "day": int}
+    # INCIDENT_REVEALED:    {"incident_id": str, "perpetrator_id": str, "day": int}
     # ABILITY_REFUSED:      {"character_id": str, "ability_id": str}
 
 

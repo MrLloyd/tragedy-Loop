@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from engine.models.enums import AbilityTiming, AreaId, DeathResult, EffectType, Outcome, TokenType, Trait
+from engine.models.enums import AbilityTiming, AreaId, CardType, DeathResult, EffectType, Outcome, TokenType, Trait
 from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.rules.persistent_effects import settle_persistent_effects
@@ -61,6 +61,14 @@ class ResolutionResult:
     announcements: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ScopedEffect:
+    """附带 effect 所属角色上下文的效果包装。"""
+
+    effect: Effect
+    perpetrator_id: str = ""
+
+
 # ---------------------------------------------------------------------------
 # AtomicResolver — 原子结算器
 # ---------------------------------------------------------------------------
@@ -77,7 +85,7 @@ class AtomicResolver:
         self.death_resolver = death_resolver
         self.ability_resolver = AbilityResolver()
 
-    def resolve(self, state: GameState, effects: list[Effect],
+    def resolve(self, state: GameState, effects: list[Effect | ScopedEffect],
                 sequential: bool = False,
                 perpetrator_id: str = "") -> ResolutionResult:
         """
@@ -98,7 +106,7 @@ class AtomicResolver:
     # ==================================================================
 
     def _resolve_simultaneous(self, state: GameState,
-                              effects: list[Effect],
+                              effects: list[Effect | ScopedEffect],
                               perpetrator_id: str = "") -> ResolutionResult:
         planned_mutations = self._apply_effect_batch(
             state,
@@ -114,7 +122,7 @@ class AtomicResolver:
     # ==================================================================
 
     def _resolve_sequential(self, state: GameState,
-                            effects: list[Effect],
+                            effects: list[Effect | ScopedEffect],
                             perpetrator_id: str = "") -> ResolutionResult:
         all_mutations: list[Mutation] = []
         final_outcome = Outcome.NONE
@@ -133,67 +141,28 @@ class AtomicResolver:
             outcome=final_outcome,
         )
 
+    @staticmethod
+    def _coerce_scoped_effect(
+        effect: Effect | ScopedEffect,
+        *,
+        default_perpetrator_id: str,
+    ) -> ScopedEffect:
+        if isinstance(effect, ScopedEffect):
+            return effect
+        return ScopedEffect(effect=effect, perpetrator_id=default_perpetrator_id)
+
     # ==================================================================
     # 第一步：读 — 在快照上规划变更
     # ==================================================================
 
-    def _resolve_target_ids(self, snapshot: GameState, target: str,
+    def _resolve_target_ids(self, snapshot: GameState, target: Any,
                             perpetrator_id: str) -> list[str]:
-        """
-        将符号目标解析为具体的角色 ID 或区域 ID 列表。
-
-        支持的符号目标：
-          same_area_all   — 当事人所在区域的全部存活角色（含当事人）
-          same_area_other — 同区域除当事人外的存活角色
-          same_area_board — 当事人所在区域的版图 area_id（返回区域 ID 字符串）
-          其他            — 原样返回（具体角色 ID / 区域 ID）
-        """
-        if target == "self":
-            return [perpetrator_id] if perpetrator_id and perpetrator_id in snapshot.characters else []
-        if target == "__no_target__":
-            return []
-
-        if target in ("same_area_all", "same_area_other", "same_area_board"):
-            if not perpetrator_id or perpetrator_id not in snapshot.characters:
-                return []
-            perp_area = snapshot.characters[perpetrator_id].area
-            if target == "same_area_board":
-                return [perp_area.value]
-            alive_in_area = [
-                cid for cid, ch in snapshot.characters.items()
-                if ch.area == perp_area and ch.is_alive
-            ]
-            if target == "same_area_other":
-                alive_in_area = [cid for cid in alive_in_area if cid != perpetrator_id]
-            return alive_in_area
-        if target.startswith("same_area_identity:"):
-            if not perpetrator_id or perpetrator_id not in snapshot.characters:
-                return []
-            identity_id = target.split(":", 1)[1]
-            perp_area = snapshot.characters[perpetrator_id].area
-            return [
-                cid for cid, ch in snapshot.characters.items()
-                if ch.area == perp_area and ch.is_alive and ch.identity_id == identity_id
-            ]
-        if target == "hospital_all":
-            return [
-                cid for cid, ch in snapshot.characters.items()
-                if ch.area == AreaId.HOSPITAL and ch.is_alive
-            ]
-        if target == "any_character":
-            return [cid for cid, ch in snapshot.characters.items() if ch.is_alive and not ch.is_removed]
-        if target == "any_board":
-            return [area_id.value for area_id in snapshot.board.areas]
-        if target == "last_loop_goodwill_characters":
-            last_snapshot = snapshot.get_last_loop_snapshot()
-            if last_snapshot is None:
-                return []
-            return [
-                character_id
-                for character_id, character_snapshot in last_snapshot.character_snapshots.items()
-                if character_snapshot.tokens.goodwill > 0 and character_id in snapshot.characters
-            ]
-        return [target]
+        return self.ability_resolver.resolve_targets(
+            snapshot,
+            owner_id=perpetrator_id,
+            selector=target,
+            alive_only=True,
+        )
 
     def _plan_effect(self, snapshot: GameState, effect: Effect,
                      perpetrator_id: str = "") -> list[Mutation]:
@@ -234,17 +203,43 @@ class AtomicResolver:
                 for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
                     if tid in snapshot.characters:
                         ch = snapshot.characters[tid]
-                        if effect.token_type:
-                            current = ch.tokens.get(effect.token_type)
-                            if current > 0:
-                                mutations.append(Mutation(
-                                    mutation_type="token_change",
-                                    target_id=tid,
-                                    details={
-                                        "token_type": effect.token_type.value,
-                                        "delta": -current,
-                                    },
-                                ))
+                        token_types = [effect.token_type] if effect.token_type else list(TokenType)
+                        for token_type in token_types:
+                            if token_type is None:
+                                continue
+                            current = ch.tokens.get(token_type)
+                            if current <= 0:
+                                continue
+                            mutations.append(Mutation(
+                                mutation_type="token_change",
+                                target_id=tid,
+                                details={
+                                    "token_type": token_type.value,
+                                    "delta": -current,
+                                },
+                            ))
+
+            case EffectType.MOVE_TOKEN:
+                if effect.token_type is None or perpetrator_id not in snapshot.characters:
+                    return mutations
+                source = snapshot.characters[perpetrator_id]
+                remaining = source.tokens.get(effect.token_type)
+                if remaining <= 0:
+                    return mutations
+                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if remaining <= 0:
+                        break
+                    moved = min(effect.amount or 1, remaining)
+                    mutations.append(Mutation(
+                        mutation_type="token_move",
+                        target_id=tid,
+                        details={
+                            "source_id": perpetrator_id,
+                            "token_type": effect.token_type.value,
+                            "amount": moved,
+                        },
+                    ))
+                    remaining -= moved
 
             case EffectType.KILL_CHARACTER:
                 for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
@@ -254,13 +249,51 @@ class AtomicResolver:
                         details={"cause": "effect"},
                     ))
 
-            case EffectType.MOVE_CHARACTER:
+            case EffectType.REVIVE_CHARACTER:
                 for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if tid not in snapshot.characters:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="character_revive",
+                        target_id=tid,
+                        details={},
+                    ))
+
+            case EffectType.MOVE_CHARACTER:
+                destination = effect.value
+                if destination in (None, ""):
+                    return mutations
+                try:
+                    destination_area = AreaId(str(destination))
+                except ValueError:
+                    return mutations
+                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if tid not in snapshot.characters:
+                        continue
+                    if not snapshot.can_character_enter_area(tid, destination_area):
+                        continue
                     mutations.append(Mutation(
                         mutation_type="character_move",
                         target_id=tid,
-                        details={"destination": effect.value},
+                        details={"destination": destination_area.value},
                     ))
+
+            case EffectType.LIFT_FORBIDDEN_AREAS:
+                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if tid not in snapshot.characters:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="lift_forbidden_areas",
+                        target_id=tid,
+                        details={},
+                    ))
+
+            case EffectType.PROTAGONIST_PROTECT:
+                mutations.append(Mutation(
+                    mutation_type="protagonist_protect",
+                    target_id="",
+                    details={},
+                ))
 
             case EffectType.PROTAGONIST_DEATH:
                 mutations.append(Mutation(
@@ -291,6 +324,15 @@ class AtomicResolver:
                         details={},
                     ))
 
+            case EffectType.REVEAL_INCIDENT:
+                incident_id = str(effect.value or "")
+                if incident_id:
+                    mutations.append(Mutation(
+                        mutation_type="reveal_incident",
+                        target_id=incident_id,
+                        details={"incident_id": incident_id},
+                    ))
+
             case EffectType.CHANGE_IDENTITY:
                 identity_id = str(effect.value or "")
                 for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
@@ -300,12 +342,69 @@ class AtomicResolver:
                         details={"identity_id": identity_id},
                     ))
 
+            case EffectType.NULLIFY_CARD:
+                try:
+                    card_type = CardType(str(effect.value or ""))
+                except ValueError:
+                    return mutations
+                target_ids = set(self._resolve_target_ids(snapshot, effect.target, perpetrator_id))
+                for index, placement in enumerate(snapshot.placed_cards):
+                    if placement.nullified:
+                        continue
+                    if placement.target_id not in target_ids:
+                        continue
+                    if placement.card.card_type != card_type:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="card_nullify",
+                        target_id=str(index),
+                        details={"placement_index": index},
+                    ))
+
             case EffectType.MODIFY_EX_GAUGE:
+                delta = effect.amount
+                if delta == 0:
+                    try:
+                        delta = int(effect.value or 0)
+                    except (TypeError, ValueError):
+                        delta = 0
                 mutations.append(Mutation(
                     mutation_type="ex_gauge_change",
                     target_id="",
-                    details={"delta": effect.amount},
+                    details={"delta": delta},
                 ))
+
+            case EffectType.RETURN_CARD:
+                try:
+                    placement_index = int(str(effect.value or ""))
+                except ValueError:
+                    return mutations
+                if 0 <= placement_index < len(snapshot.placed_cards):
+                    mutations.append(Mutation(
+                        mutation_type="card_return",
+                        target_id=str(placement_index),
+                        details={"placement_index": placement_index},
+                    ))
+
+            case EffectType.REMOVE_CHARACTER:
+                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if tid not in snapshot.characters:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="character_remove",
+                        target_id=tid,
+                        details={},
+                    ))
+
+            case EffectType.SUPPRESS_INCIDENT:
+                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                    if tid not in snapshot.characters:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="incident_suppress",
+                        target_id=tid,
+                        details={},
+                    ))
 
             case EffectType.NO_EFFECT:
                 pass  # 事件发生但无现象
@@ -347,6 +446,31 @@ class AtomicResolver:
                              "delta": delta},
                         ))
 
+            case "token_move":
+                source_id = mutation.details["source_id"]
+                token_type = TokenType(mutation.details["token_type"])
+                amount = int(mutation.details["amount"])
+                if amount <= 0 or source_id not in state.characters:
+                    return
+                removed = state.characters[source_id].tokens.remove(token_type, amount)
+                if removed <= 0:
+                    return
+                target_id = mutation.target_id
+                if target_id in state.characters:
+                    state.characters[target_id].tokens.add(token_type, removed)
+                elif hasattr(AreaId, target_id.upper()):
+                    area_id = AreaId(target_id)
+                    if area_id in state.board.areas:
+                        state.board.areas[area_id].tokens.add(token_type, removed)
+                self.event_bus.emit(GameEvent(
+                    GameEventType.TOKEN_CHANGED,
+                    {"target_id": source_id, "token_type": token_type.value, "delta": -removed},
+                ))
+                self.event_bus.emit(GameEvent(
+                    GameEventType.TOKEN_CHANGED,
+                    {"target_id": target_id, "token_type": token_type.value, "delta": removed},
+                ))
+
             case "character_death":
                 cid = mutation.target_id
                 if cid in state.characters:
@@ -359,12 +483,38 @@ class AtomicResolver:
                 cid = mutation.target_id
                 dest = mutation.details["destination"]
                 if cid in state.characters:
+                    moved = state.move_character(cid, dest)
+                    if not moved:
+                        return
                     ch = state.characters[cid]
-                    ch.area = AreaId(dest) if isinstance(dest, str) else dest
                     self.event_bus.emit(GameEvent(
                         GameEventType.CHARACTER_MOVED,
                         {"character_id": cid, "destination": str(ch.area.value)},
                     ))
+
+            case "character_revive":
+                cid = mutation.target_id
+                if cid in state.characters:
+                    ch = state.characters[cid]
+                    ch.is_alive = True
+                    ch.is_removed = False
+
+            case "character_remove":
+                cid = mutation.target_id
+                if cid in state.characters:
+                    state.characters[cid].is_removed = True
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.CHARACTER_REMOVED,
+                        {"character_id": cid},
+                    ))
+
+            case "lift_forbidden_areas":
+                cid = mutation.target_id
+                if cid in state.characters:
+                    state.characters[cid].clear_forbidden_areas()
+
+            case "protagonist_protect":
+                state.soldier_protection_active = True
 
             case "protagonist_death":
                 if not state.soldier_protection_active:
@@ -386,6 +536,29 @@ class AtomicResolver:
                         {"character_id": cid, "identity_id": ch.identity_id},
                     ))
 
+            case "reveal_incident":
+                incident_id = str(mutation.details["incident_id"])
+                schedule = next(
+                    (item for item in state.script.incidents if item.incident_id == incident_id),
+                    None,
+                )
+                if schedule is not None:
+                    state.revealed_incident_perpetrators_this_loop.append(
+                        {
+                            "incident_id": incident_id,
+                            "perpetrator_id": schedule.perpetrator_id,
+                            "day": schedule.day,
+                        }
+                    )
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.INCIDENT_REVEALED,
+                        {
+                            "incident_id": incident_id,
+                            "perpetrator_id": schedule.perpetrator_id,
+                            "day": schedule.day,
+                        },
+                    ))
+
             case "identity_change":
                 cid = mutation.target_id
                 identity_id = mutation.details["identity_id"]
@@ -396,6 +569,17 @@ class AtomicResolver:
                     reason="effect",
                 )
 
+            case "card_nullify":
+                index = int(mutation.details["placement_index"])
+                if 0 <= index < len(state.placed_cards):
+                    state.placed_cards[index].nullified = True
+
+            case "card_return":
+                index = int(mutation.details["placement_index"])
+                if 0 <= index < len(state.placed_cards):
+                    placement = state.placed_cards.pop(index)
+                    placement.card.is_used_this_loop = False
+
             case "ex_gauge_change":
                 delta = mutation.details["delta"]
                 state.ex_gauge = max(0, state.ex_gauge + delta)
@@ -404,10 +588,13 @@ class AtomicResolver:
                     {"delta": delta, "new_value": state.ex_gauge},
                 ))
 
+            case "incident_suppress":
+                state.suppressed_incident_perpetrators.add(mutation.target_id)
+
     def _apply_effect_batch(
         self,
         state: GameState,
-        effects: list[Effect],
+        effects: list[Effect | ScopedEffect],
         *,
         perpetrator_id: str = "",
     ) -> list[Mutation]:
@@ -416,7 +603,13 @@ class AtomicResolver:
         snapshot = state.snapshot()
         planned_mutations: list[Mutation] = []
         for effect in effects:
-            planned_mutations.extend(self._plan_effect(snapshot, effect, perpetrator_id))
+            scoped = self._coerce_scoped_effect(
+                effect,
+                default_perpetrator_id=perpetrator_id,
+            )
+            planned_mutations.extend(
+                self._plan_effect(snapshot, scoped.effect, scoped.perpetrator_id)
+            )
 
         for mutation in planned_mutations:
             self._apply_mutation(state, mutation)
@@ -518,6 +711,30 @@ class AtomicResolver:
                                     effects=ability.effects,
                                     sequential=ability.sequential,
                                 ))
+                for candidate in self.ability_resolver.collect_derived_abilities(
+                    state,
+                    timing=AbilityTiming.ON_DEATH,
+                    alive_only=False,
+                ):
+                    if candidate.source_id != cid:
+                        continue
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.ABILITY_DECLARED,
+                        {
+                            "source_kind": "derived",
+                            "character_id": cid,
+                            "identity_id": candidate.identity_id,
+                            "ability_id": candidate.ability.ability_id,
+                            "timing": AbilityTiming.ON_DEATH.value,
+                        },
+                    ))
+                    triggers.append(Trigger(
+                        trigger_type="on_death",
+                        source_id=cid,
+                        is_terminal=False,
+                        effects=candidate.ability.effects,
+                        sequential=candidate.ability.sequential,
+                    ))
                 for owner in state.characters.values():
                     if owner.character_id == cid or owner.is_removed or not owner.is_alive:
                         continue

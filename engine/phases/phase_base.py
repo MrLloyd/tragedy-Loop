@@ -8,9 +8,18 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from engine.models.cards import CardPlacement, PlacementIntent
 from engine.models.ability import Ability
-from engine.models.effects import Effect
+from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
+from engine.models.selectors import (
+    area_choice_selector,
+    parse_target_selector,
+    selector_area_id,
+    selector_is_self_ref,
+    selector_literal_value,
+    selector_requires_choice,
+)
 from engine.resolvers.ability_resolver import AbilityCandidate, AbilityResolver
+from engine.resolvers.atomic_resolver import ScopedEffect
 from engine.resolvers.incident_resolver import IncidentResolver
 from engine.rules.runtime_traits import has_trait
 
@@ -55,6 +64,29 @@ class ForceLoopEnd:
 
 # 阶段返回类型
 PhaseSignal = PhaseComplete | WaitForInput | ForceLoopEnd
+
+
+@dataclass
+class PreparedAbilityCandidate:
+    """阶段级强制窗口中已收集完目标选择的能力候选。"""
+
+    candidate: AbilityCandidate
+    owner_id: str
+    selected_targets: dict[int, str] = field(default_factory=dict)
+
+
+@dataclass
+class CompositeActionCard:
+    target_type: str
+    target_id: str
+    placements: list[CardPlacement] = field(default_factory=list)
+    movement_card_type: Optional[CardType] = None
+
+
+@dataclass(frozen=True)
+class EffectChoiceRequest:
+    choice_kind: str  # "target" | "value" | "token" | "mode"
+    options: list[str]
 
 
 def _validate_action_target(state: GameState, intent: PlacementIntent) -> None:
@@ -171,26 +203,183 @@ class PhaseHandler(ABC):
     ) -> PhaseSignal:
         if not candidates:
             return next_signal_factory()
-
-        candidate = candidates[0]
-
-        def _next() -> PhaseSignal:
-            return self._execute_mandatory_batch(
-                state,
-                candidates[1:],
-                next_signal_factory=next_signal_factory,
+        prepared = [
+            PreparedAbilityCandidate(
+                candidate=candidate,
+                owner_id=self._candidate_owner_id(candidate),
             )
-
-        return self._resolve_candidate(
+            for candidate in candidates
+        ]
+        planning_state = state.snapshot()
+        return self._collect_mandatory_choices(
             state,
-            candidate,
-            next_signal_factory=_next,
+            planning_state,
+            prepared,
+            candidate_index=0,
+            effect_index=0,
+            next_signal_factory=next_signal_factory,
         )
 
     def _candidate_owner_id(self, candidate: AbilityCandidate) -> str:
         if candidate.source_kind in {"identity", "goodwill", "derived"}:
             return candidate.source_id
         return ""
+
+    def _filter_candidates_with_available_targets(
+        self,
+        state: GameState,
+        candidates: list[AbilityCandidate],
+    ) -> list[AbilityCandidate]:
+        filtered: list[AbilityCandidate] = []
+        for candidate in candidates:
+            owner_id = self._candidate_owner_id(candidate)
+            if all(
+                (
+                    choice_request is None
+                    or bool(choice_request.options)
+                )
+                for idx, effect in enumerate(candidate.ability.effects)
+                for choice_request in (
+                    self._resolve_effect_choice_options(
+                        state,
+                        owner_id=owner_id,
+                        effect=self._materialize_condition_target_effect(
+                            state,
+                            candidate.ability.effects,
+                            idx,
+                            effect,
+                        ),
+                    ),
+                )
+            ):
+                filtered.append(candidate)
+        return filtered
+
+    def _collect_mandatory_choices(
+        self,
+        state: GameState,
+        planning_state: GameState,
+        prepared: list[PreparedAbilityCandidate],
+        *,
+        candidate_index: int,
+        effect_index: int,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        if candidate_index >= len(prepared):
+            return self._execute_prepared_mandatory_batch(
+                state,
+                prepared,
+                next_signal_factory=next_signal_factory,
+            )
+
+        current = prepared[candidate_index]
+        effects = current.candidate.ability.effects
+        for index in range(effect_index, len(effects)):
+            effect = self._materialize_condition_target_effect(
+                planning_state,
+                effects,
+                index,
+                effects[index],
+            )
+            effects[index] = effect
+            choice_request = self._resolve_effect_choice_options(
+                planning_state,
+                owner_id=current.owner_id,
+                effect=effect,
+            )
+            if choice_request is None or len(choice_request.options) <= 1:
+                continue
+
+            def _on_choice(
+                choice: Any,
+                *,
+                current_index: int = candidate_index,
+                effect_choice_index: int = index,
+                allowed: tuple[str, ...] = tuple(choice_request.options),
+            ) -> PhaseSignal:
+                selected = str(choice)
+                if selected not in allowed:
+                    raise ValueError(f"invalid ability target: {selected!r}")
+                bound_effect = self._apply_effect_choice(
+                    prepared[current_index].candidate.ability.effects[effect_choice_index],
+                    choice_kind=choice_request.choice_kind,
+                    selected=selected,
+                )
+                prepared[current_index].candidate.ability.effects[effect_choice_index] = bound_effect
+                return self._collect_mandatory_choices(
+                    state,
+                    planning_state,
+                    prepared,
+                    candidate_index=current_index,
+                    effect_index=effect_choice_index + 1,
+                    next_signal_factory=next_signal_factory,
+                )
+
+            return WaitForInput(
+                input_type="choose_ability_target",
+                prompt=f"请选择 {current.candidate.ability.name} 的目标",
+                options=choice_request.options,
+                player="mastermind",
+                callback=_on_choice,
+            )
+
+        return self._collect_mandatory_choices(
+            state,
+            planning_state,
+            prepared,
+            candidate_index=candidate_index + 1,
+            effect_index=0,
+            next_signal_factory=next_signal_factory,
+        )
+
+    def _execute_prepared_mandatory_batch(
+        self,
+        state: GameState,
+        prepared: list[PreparedAbilityCandidate],
+        *,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        if not prepared:
+            return next_signal_factory()
+
+        round_effects: list[ScopedEffect] = []
+        for item in prepared:
+            self._emit_ability_declared(item.candidate)
+            round_effects.extend(self._bind_all_candidate_effects(item))
+
+        result = self.atomic_resolver.resolve(state, round_effects)
+        for item in prepared:
+            self.ability_resolver.mark_ability_used(state, item.candidate)
+        default_reason = (
+            prepared[0].candidate.ability.ability_id
+            if len(prepared) == 1
+            else "mandatory_batch"
+        )
+        signal = self._resolution_result_to_signal(
+            result,
+            default_reason=default_reason,
+        )
+        if signal is not None:
+            return signal
+
+        return next_signal_factory()
+
+    def _bind_all_candidate_effects(
+        self,
+        prepared: PreparedAbilityCandidate,
+    ) -> list[ScopedEffect]:
+        return [
+            self._bind_candidate_effect(prepared, effect_index)
+            for effect_index in range(len(prepared.candidate.ability.effects))
+        ]
+
+    def _bind_candidate_effect(
+        self,
+        prepared: PreparedAbilityCandidate,
+        effect_index: int,
+    ) -> ScopedEffect:
+        effect = prepared.candidate.ability.effects[effect_index]
+        return ScopedEffect(effect=effect, perpetrator_id=prepared.owner_id)
 
     def _prepare_effects_for_resolution(
         self,
@@ -202,53 +391,76 @@ class PhaseHandler(ABC):
     ) -> list[Effect] | WaitForInput:
         effects = list(candidate.ability.effects)
         for index, effect in enumerate(effects):
-            choices = self._resolve_effect_choice_options(state, owner_id=owner_id, effect=effect)
-            if choices is None:
-                continue
-            if not choices:
-                return []
-            if len(choices) == 1:
-                effects[index] = self._concretize_effect(effect, choices[0])
-                continue
-
-            def _on_choice(choice: Any, *, effect_index: int = index) -> PhaseSignal:
-                selected = str(choice)
-                if selected not in choices:
-                    raise ValueError(f"invalid ability target: {selected!r}")
-                updated = list(effects)
-                updated[effect_index] = self._concretize_effect(effect, selected)
-                follow_up = AbilityCandidate(
-                    source_kind=candidate.source_kind,
-                    source_id=candidate.source_id,
-                    ability=Ability(
-                        ability_id=candidate.ability.ability_id,
-                        name=candidate.ability.name,
-                        ability_type=candidate.ability.ability_type,
-                        timing=candidate.ability.timing,
-                        description=candidate.ability.description,
-                        condition=candidate.ability.condition,
-                        effects=updated,
-                        sequential=candidate.ability.sequential,
-                        goodwill_requirement=candidate.ability.goodwill_requirement,
-                        once_per_loop=candidate.ability.once_per_loop,
-                        once_per_day=candidate.ability.once_per_day,
-                        can_be_refused=candidate.ability.can_be_refused,
-                    ),
-                    identity_id=candidate.identity_id,
-                )
-                return self._resolve_candidate(
+            while True:
+                current = self._materialize_condition_target_effect(
                     state,
-                    follow_up,
-                    next_signal_factory=next_signal_factory,
+                    effects,
+                    index,
+                    effects[index],
                 )
+                effects[index] = current
+                choice_request = self._resolve_effect_choice_options(
+                    state,
+                    owner_id=owner_id,
+                    effect=current,
+                )
+                if choice_request is None:
+                    break
+                if not choice_request.options:
+                    return []
+                if len(choice_request.options) == 1:
+                    effects[index] = self._apply_effect_choice(
+                        current,
+                        choice_kind=choice_request.choice_kind,
+                        selected=choice_request.options[0],
+                    )
+                    continue
 
-            return WaitForInput(
-                input_type="choose_ability_target",
-                prompt=f"请选择 {candidate.ability.name} 的目标",
-                options=choices,
-                player="mastermind",
-                callback=_on_choice,
-            )
+                request = choice_request
+                current_effect = current
+
+                def _on_choice(choice: Any, *, effect_index: int = index) -> PhaseSignal:
+                    selected = str(choice)
+                    if selected not in request.options:
+                        raise ValueError(f"invalid ability target: {selected!r}")
+                    updated = list(effects)
+                    updated[effect_index] = self._apply_effect_choice(
+                        current_effect,
+                        choice_kind=request.choice_kind,
+                        selected=selected,
+                    )
+                    follow_up = AbilityCandidate(
+                        source_kind=candidate.source_kind,
+                        source_id=candidate.source_id,
+                        ability=Ability(
+                            ability_id=candidate.ability.ability_id,
+                            name=candidate.ability.name,
+                            ability_type=candidate.ability.ability_type,
+                            timing=candidate.ability.timing,
+                            description=candidate.ability.description,
+                            condition=candidate.ability.condition,
+                            effects=updated,
+                            sequential=candidate.ability.sequential,
+                            goodwill_requirement=candidate.ability.goodwill_requirement,
+                            once_per_loop=candidate.ability.once_per_loop,
+                            once_per_day=candidate.ability.once_per_day,
+                            can_be_refused=candidate.ability.can_be_refused,
+                        ),
+                        identity_id=candidate.identity_id,
+                    )
+                    return self._resolve_candidate(
+                        state,
+                        follow_up,
+                        next_signal_factory=next_signal_factory,
+                    )
+
+                return WaitForInput(
+                    input_type="choose_ability_target",
+                    prompt=f"请选择 {candidate.ability.name} 的目标",
+                    options=request.options,
+                    player="mastermind",
+                    callback=_on_choice,
+                )
         return effects
 
     def _resolve_effect_choice_options(
@@ -257,25 +469,72 @@ class PhaseHandler(ABC):
         *,
         owner_id: str,
         effect: Effect,
-    ) -> list[str] | None:
-        if (
-            effect.target in {"same_area_any", "same_area_other", "any_character", "any_board"}
-            or effect.target.startswith("same_area_identity:")
-        ):
-            return self.ability_resolver.resolve_targets(
+    ) -> EffectChoiceRequest | None:
+        if selector_requires_choice(effect.target):
+            choices = self.ability_resolver.resolve_targets(
                 state,
                 owner_id=owner_id,
                 selector=effect.target,
                 alive_only=True,
             )
-        if effect.target == "same_area_board":
-            return self.ability_resolver.resolve_targets(
+            if effect.condition is not None:
+                choices = [
+                    target_id
+                    for target_id in choices
+                    if self.ability_resolver.evaluate_condition(
+                        state,
+                        effect.condition,
+                        owner_id=owner_id,
+                        other_id=target_id,
+                    )
+                ]
+            if effect.effect_type == EffectType.NULLIFY_CARD:
+                choices = [
+                    target_id
+                    for target_id in choices
+                    if self._matches_nullify_card_target(state, target_id=target_id, effect=effect)
+                ]
+            return EffectChoiceRequest(choice_kind="target", options=choices)
+        if effect.effect_type == EffectType.MOVE_CHARACTER and selector_requires_choice(effect.value):
+            choices = self._resolve_move_destination_options(
                 state,
                 owner_id=owner_id,
-                selector=effect.target,
-                alive_only=True,
+                effect=effect,
             )
+            return EffectChoiceRequest(choice_kind="value", options=choices)
+        value_choices = self._resolve_value_choice_options(state, effect)
+        if value_choices is not None:
+            return EffectChoiceRequest(choice_kind="value", options=value_choices)
+        token_choices = self._resolve_token_choice_options(
+            state,
+            owner_id=owner_id,
+            effect=effect,
+        )
+        if token_choices is not None:
+            return EffectChoiceRequest(choice_kind="token", options=token_choices)
+        if effect.effect_type in {EffectType.PLACE_TOKEN, EffectType.REMOVE_TOKEN} and effect.value == "choose_place_or_remove":
+            return EffectChoiceRequest(choice_kind="mode", options=["place", "remove"])
         return None
+
+    @staticmethod
+    def _matches_nullify_card_target(
+        state: GameState,
+        *,
+        target_id: str,
+        effect: Effect,
+    ) -> bool:
+        if effect.effect_type != EffectType.NULLIFY_CARD:
+            return True
+        try:
+            card_type = CardType(str(effect.value or ""))
+        except ValueError:
+            return False
+        return any(
+            not placement.nullified
+            and placement.target_id == target_id
+            and placement.card.card_type == card_type
+            for placement in state.placed_cards
+        )
 
     @staticmethod
     def _concretize_effect(effect: Effect, target_id: str) -> Effect:
@@ -286,8 +545,213 @@ class PhaseHandler(ABC):
             amount=effect.amount,
             chooser=effect.chooser,
             value=effect.value,
+            condition=PhaseHandler._materialize_effect_condition(effect.condition, target_id),
+        )
+
+    @staticmethod
+    def _materialize_effect_condition(
+        condition: Condition | None,
+        target_id: str,
+    ) -> Condition | None:
+        if condition is None:
+            return None
+        return Condition(
+            condition_type=condition.condition_type,
+            params=PhaseHandler._materialize_condition_refs(condition.params, target_id),
+        )
+
+    @staticmethod
+    def _materialize_condition_refs(value: Any, target_id: str) -> Any:
+        if isinstance(value, dict):
+            if value.get("ref") in {"other", "condition_target"}:
+                return target_id
+            return {
+                key: PhaseHandler._materialize_condition_refs(item, target_id)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [PhaseHandler._materialize_condition_refs(item, target_id) for item in value]
+        return value
+
+    @staticmethod
+    def _concretize_effect_value(effect: Effect, value: str) -> Effect:
+        return Effect(
+            effect_type=effect.effect_type,
+            target=effect.target,
+            token_type=effect.token_type,
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=value,
             condition=effect.condition,
         )
+
+    @staticmethod
+    def _concretize_effect_token(effect: Effect, token_name: str) -> Effect:
+        value = effect.value
+        if value == "choose_token_type" or (
+            isinstance(value, dict) and value.get("choice") == "choose_token_type"
+        ):
+            value = None
+        return Effect(
+            effect_type=effect.effect_type,
+            target=effect.target,
+            token_type=TokenType(token_name),
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=value,
+            condition=effect.condition,
+        )
+
+    @staticmethod
+    def _concretize_effect_mode(effect: Effect, selected: str) -> Effect:
+        effect_type = EffectType.PLACE_TOKEN if selected == "place" else EffectType.REMOVE_TOKEN
+        return Effect(
+            effect_type=effect_type,
+            target=effect.target,
+            token_type=effect.token_type,
+            amount=effect.amount,
+            chooser=effect.chooser,
+            value=None,
+            condition=effect.condition,
+        )
+
+    def _apply_effect_choice(
+        self,
+        effect: Effect,
+        *,
+        choice_kind: str,
+        selected: str,
+    ) -> Effect:
+        if choice_kind == "target":
+            return self._concretize_effect(effect, selected)
+        if choice_kind == "value":
+            return self._concretize_effect_value(effect, selected)
+        if choice_kind == "token":
+            return self._concretize_effect_token(effect, selected)
+        if choice_kind == "mode":
+            return self._concretize_effect_mode(effect, selected)
+        raise ValueError(f"unknown effect choice kind: {choice_kind}")
+
+    @staticmethod
+    def _resolve_token_choice_options(
+        state: GameState,
+        *,
+        owner_id: str,
+        effect: Effect,
+    ) -> list[str] | None:
+        value = effect.value
+        options: list[str] | None = None
+        if value == "choose_token_type":
+            options = [token.value for token in TokenType]
+        elif isinstance(value, dict) and value.get("choice") == "choose_token_type":
+            options = value.get("options", [])
+            if not isinstance(options, list):
+                return []
+            options = [
+                token_name
+                for token_name in options
+                if isinstance(token_name, str) and token_name in {token.value for token in TokenType}
+            ]
+        if options is None:
+            return None
+        if isinstance(value, dict) and value.get("only_available_on_self"):
+            owner = state.characters.get(owner_id)
+            if owner is None:
+                return []
+            options = [
+                token_name
+                for token_name in options
+                if owner.tokens.get(TokenType(token_name)) > 0
+            ]
+        return options
+
+    @staticmethod
+    def _resolve_value_choice_options(
+        state: GameState,
+        effect: Effect,
+    ) -> list[str] | None:
+        value = effect.value
+        if not isinstance(value, dict):
+            return None
+        choice = value.get("choice")
+        if choice == "choose_ex_delta":
+            options = value.get("options", ["1", "-1"])
+            return [str(item) for item in options if str(item) in {"1", "-1"}]
+        if choice == "choose_incident":
+            return [schedule.incident_id for schedule in state.script.incidents]
+        if choice == "choose_occurred_incident":
+            return [
+                schedule.incident_id
+                for schedule in state.script.incidents
+                if schedule.occurred or schedule.incident_id in state.incidents_occurred_this_loop
+            ]
+        if choice == "choose_return_card":
+            return [
+                str(index)
+                for index, placement in enumerate(state.placed_cards)
+                if not placement.face_down
+            ]
+        return None
+
+    @staticmethod
+    def _materialize_condition_target_effect(
+        state: GameState,
+        effects: list[Effect],
+        index: int,
+        effect: Effect,
+    ) -> Effect:
+        if parse_target_selector(effect.target).ref != "condition_target":
+            return effect
+        previous_target = PhaseHandler._previous_character_target(state, effects, index)
+        if previous_target is None:
+            return effect
+        return PhaseHandler._concretize_effect(effect, previous_target)
+
+    @staticmethod
+    def _previous_character_target(
+        state: GameState,
+        effects: list[Effect],
+        index: int,
+    ) -> str | None:
+        for previous in reversed(effects[:index]):
+            if isinstance(previous.target, str) and previous.target in state.characters:
+                return previous.target
+        return None
+
+    def _resolve_move_destination_options(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+        effect: Effect,
+    ) -> list[str]:
+        mover_ids = self._resolve_move_effect_owners(state, owner_id=owner_id, effect=effect)
+        if len(mover_ids) != 1:
+            return []
+        return state.available_enterable_areas(
+            mover_ids[0],
+            self.ability_resolver.resolve_targets(
+                state,
+                owner_id=owner_id,
+                selector=effect.value,
+                alive_only=False,
+            ),
+        )
+
+    def _resolve_move_effect_owners(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+        effect: Effect,
+    ) -> list[str]:
+        target = effect.target
+        if selector_is_self_ref(target):
+            return [owner_id] if owner_id in state.characters else []
+        literal = selector_literal_value(target)
+        if literal in state.characters:
+            return [literal]
+        return []
 
     @staticmethod
     def _resolution_result_to_signal(result: Any, *, default_reason: str) -> ForceLoopEnd | None:
@@ -400,9 +864,12 @@ class LoopStartHandler(PhaseHandler):
                 continue
             candidate_areas = list(character_def.initial_area_candidates) or [character_def.initial_area]
             option_values = [area.value for area in candidate_areas]
+            option_selectors = [area_choice_selector(area.value) for area in candidate_areas]
 
             def _on_choice(choice: Any, *, target_id: str = character_id, allowed: set[str] = set(option_values)) -> PhaseSignal:
-                selected_area = str(choice)
+                selected_area = selector_area_id(choice)
+                if selected_area is None and isinstance(choice, str):
+                    selected_area = choice
                 if selected_area not in allowed:
                     raise ValueError(f"invalid initial area choice for {target_id}: {selected_area!r}")
                 area = AreaId(selected_area)
@@ -415,7 +882,7 @@ class LoopStartHandler(PhaseHandler):
             return WaitForInput(
                 input_type="choose_initial_area",
                 prompt=f"剧作家请选择 {character.name} 本轮初始区域",
-                options=option_values,
+                options=option_selectors,
                 player="mastermind",
                 callback=_on_choice,
             )
@@ -576,86 +1043,280 @@ class ActionResolveHandler(PhaseHandler):
         CardType.FORBID_INTRIGUE: TokenType.INTRIGUE,
         CardType.FORBID_MOVEMENT: None,
     }
+    _MOVEMENT_CARD_NORMALIZATION: dict[CardType, CardType] = {
+        CardType.MOVE_HORIZONTAL: CardType.MOVE_HORIZONTAL,
+        CardType.MOVE_HORIZONTAL_P: CardType.MOVE_HORIZONTAL,
+        CardType.MOVE_VERTICAL: CardType.MOVE_VERTICAL,
+        CardType.MOVE_VERTICAL_P: CardType.MOVE_VERTICAL,
+        CardType.MOVE_DIAGONAL: CardType.MOVE_DIAGONAL,
+    }
+    _MOVEMENT_PAIR_COMPOSITION: dict[frozenset[CardType], CardType] = {
+        frozenset({CardType.MOVE_HORIZONTAL, CardType.MOVE_VERTICAL}): CardType.MOVE_DIAGONAL,
+        frozenset({CardType.MOVE_HORIZONTAL, CardType.MOVE_DIAGONAL}): CardType.MOVE_VERTICAL,
+        frozenset({CardType.MOVE_VERTICAL, CardType.MOVE_DIAGONAL}): CardType.MOVE_HORIZONTAL,
+    }
 
     def execute(self, state: GameState) -> PhaseSignal:
+        placements = list(state.placed_cards)
+        for placement in placements:
+            placement.face_down = False
+
+        mandatory = self._collect_action_resolve_candidates(
+            state,
+            ability_type=AbilityType.MANDATORY,
+        )
+        return self._execute_mandatory_batch(
+            state,
+            mandatory,
+            next_signal_factory=lambda: self._request_optional_action_resolve_ability(state),
+        )
+
+    def _request_optional_action_resolve_ability(self, state: GameState) -> PhaseSignal:
+        candidates = self._collect_action_resolve_candidates(
+            state,
+            ability_type=AbilityType.OPTIONAL,
+        )
+        if not candidates:
+            return self._resolve_placed_cards(state)
+
+        options: list[Any] = ["pass", *candidates]
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            if choice == "pass":
+                return self._resolve_placed_cards(state)
+            if choice not in candidates:
+                raise ValueError("invalid action_resolve ability selection")
+            return self._resolve_candidate(
+                state,
+                choice,
+                next_signal_factory=lambda: self._request_optional_action_resolve_ability(state),
+            )
+
+        return WaitForInput(
+            input_type="choose_action_resolve_ability",
+            prompt="剧作家请选择行动结算阶段能力，或 pass",
+            options=options,
+            player="mastermind",
+            callback=_on_choice,
+        )
+
+    def _collect_action_resolve_candidates(
+        self,
+        state: GameState,
+        *,
+        ability_type: AbilityType,
+    ) -> list[AbilityCandidate]:
+        candidates = self.ability_resolver.collect_abilities(
+            state,
+            timing=AbilityTiming.ACTION_RESOLVE,
+            ability_type=ability_type,
+        )
+        return [
+            candidate
+            for candidate in candidates
+            if self._is_action_resolve_candidate_effective(state, candidate)
+        ]
+
+    def _is_action_resolve_candidate_effective(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+    ) -> bool:
+        if not candidate.ability.effects:
+            return True
+
+        owner_id = self._candidate_owner_id(candidate)
+        for effect in candidate.ability.effects:
+            if effect.effect_type != EffectType.NULLIFY_CARD:
+                return True
+
+            choice_request = self._resolve_effect_choice_options(state, owner_id=owner_id, effect=effect)
+            if choice_request is not None and bool(choice_request.options):
+                return True
+
+            target_ids = self.ability_resolver.resolve_targets(
+                state,
+                owner_id=owner_id,
+                selector=effect.target,
+                alive_only=False,
+            )
+            if any(
+                self._matches_nullify_card_target(state, target_id=target_id, effect=effect)
+                for target_id in target_ids
+            ):
+                return True
+
+        return False
+
+    def _resolve_placed_cards(self, state: GameState) -> PhaseSignal:
         placements = list(state.placed_cards)
         if not placements:
             return PhaseComplete()
 
-        # 翻牌
-        for p in placements:
-            p.face_down = False
-
-        # FORBID 预处理
         self._apply_forbids(placements)
 
-        # 标记 once_per_loop 已用（无论是否被无效化）
-        for p in placements:
-            if p.card.once_per_loop:
-                p.card.is_used_this_loop = True
+        for placement in placements:
+            if placement.card.once_per_loop:
+                placement.card.is_used_this_loop = True
 
-        # 移动牌先结算
-        for p in placements:
-            if p.nullified or not p.card.is_movement:
-                continue
-            dest = self._movement_destination(state, p.target_id, p.card.card_type)
-            if dest is None:
-                continue
-            effect = Effect(effect_type=EffectType.MOVE_CHARACTER, target=p.target_id, value=dest)
-            result = self.atomic_resolver.resolve(state, [effect])
-            if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
-                return ForceLoopEnd(reason="action_resolve")
+        composites = self._build_composite_action_cards(placements)
+        movement_effects = self._build_movement_effects(state, composites)
+        if movement_effects:
+            result = self.atomic_resolver.resolve(state, movement_effects, sequential=False)
+            signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
+            if signal is not None:
+                return signal
 
-        # 指示物牌结算
-        for p in placements:
-            if p.nullified or p.card.is_movement or p.card.card_type in self._FORBID_TOKEN:
-                continue
-            token_info = self._TOKEN_EFFECTS.get(p.card.card_type)
-            if token_info is None:
-                continue
-            token_type, delta = token_info
-            effect_type = EffectType.PLACE_TOKEN if delta > 0 else EffectType.REMOVE_TOKEN
-            effect = Effect(
-                effect_type=effect_type,
-                target=p.target_id,
-                token_type=token_type,
-                amount=abs(delta),
-            )
-            result = self.atomic_resolver.resolve(state, [effect])
-            if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
-                return ForceLoopEnd(reason="action_resolve")
+        non_movement_effects = self._build_non_movement_effects(composites)
+        if non_movement_effects:
+            result = self.atomic_resolver.resolve(state, non_movement_effects, sequential=False)
+            signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
+            if signal is not None:
+                return signal
 
         return PhaseComplete()
 
+    def _build_composite_action_cards(
+        self,
+        placements: list[CardPlacement],
+    ) -> list[CompositeActionCard]:
+        groups: dict[tuple[str, str], list[CardPlacement]] = {}
+        for placement in placements:
+            if placement.nullified:
+                continue
+            key = (placement.target_type, placement.target_id)
+            groups.setdefault(key, []).append(placement)
+
+        composites: list[CompositeActionCard] = []
+        for (target_type, target_id), grouped_placements in groups.items():
+            composites.append(
+                CompositeActionCard(
+                    target_type=target_type,
+                    target_id=target_id,
+                    placements=grouped_placements,
+                    movement_card_type=self._compose_movement_card_type(grouped_placements),
+                )
+            )
+        return composites
+
+    def _build_movement_effects(
+        self,
+        state: GameState,
+        composites: list[CompositeActionCard],
+    ) -> list[Effect]:
+        effects: list[Effect] = []
+        for composite in composites:
+            if composite.movement_card_type is None or composite.target_type != "character":
+                continue
+            dest = self._movement_destination(state, composite.target_id, composite.movement_card_type)
+            if dest is None:
+                continue
+            effects.append(
+                Effect(
+                    effect_type=EffectType.MOVE_CHARACTER,
+                    target=composite.target_id,
+                    value=dest,
+                )
+            )
+        return effects
+
+    def _build_non_movement_effects(
+        self,
+        composites: list[CompositeActionCard],
+    ) -> list[Effect]:
+        placements = [
+            placement
+            for composite in composites
+            for placement in composite.placements
+            if not placement.card.is_movement and placement.card.card_type not in self._FORBID_TOKEN
+        ]
+        hope_count = sum(1 for placement in placements if placement.card.card_type == CardType.HOPE_PLUS_1)
+
+        effects: list[Effect] = []
+        for placement in placements:
+            token_info = self._token_effect_for_card(
+                placement.card.card_type,
+                treat_hope_as_goodwill=hope_count > 1,
+            )
+            if token_info is None:
+                continue
+            token_type, delta = token_info
+            effects.append(
+                Effect(
+                    effect_type=EffectType.PLACE_TOKEN if delta > 0 else EffectType.REMOVE_TOKEN,
+                    target=placement.target_id,
+                    token_type=token_type,
+                    amount=abs(delta),
+                )
+            )
+        return effects
+
+    def _token_effect_for_card(
+        self,
+        card_type: CardType,
+        *,
+        treat_hope_as_goodwill: bool,
+    ) -> tuple[TokenType, int] | None:
+        if card_type == CardType.HOPE_PLUS_1 and treat_hope_as_goodwill:
+            return (TokenType.GOODWILL, 1)
+        return self._TOKEN_EFFECTS.get(card_type)
+
+    def _compose_movement_card_type(
+        self,
+        placements: list[CardPlacement],
+    ) -> Optional[CardType]:
+        movement_types = [
+            self._MOVEMENT_CARD_NORMALIZATION[placement.card.card_type]
+            for placement in placements
+            if placement.card.is_movement
+        ]
+        if not movement_types:
+            return None
+
+        composite = movement_types[0]
+        for movement_type in movement_types[1:]:
+            composite = self._combine_movement_card_types(composite, movement_type)
+        return composite
+
+    def _combine_movement_card_types(self, left: CardType, right: CardType) -> CardType:
+        if left == right:
+            return left
+        return self._MOVEMENT_PAIR_COMPOSITION[frozenset({left, right})]
+
     def _apply_forbids(self, placements: list[CardPlacement]) -> None:
         """
-        FORBID 预处理（规则§3.11）：
-        - 偶数张同目标同类型 FORBID → 互相抵消，全部标 nullified
-        - 奇数张 → 最后一张生效，将同目标对应牌标 nullified
+        FORBID 预处理：
+        - 禁止密谋是特殊结算：场上同时存在 2 张或以上时，这些禁止密谋全部失效
+        - 其余禁止牌：生效后无效化同一位置对应类型的行动牌
         """
-        from collections import defaultdict
-        forbid_groups: dict[tuple, list[CardPlacement]] = defaultdict(list)
-        for p in placements:
-            if p.card.card_type in self._FORBID_TOKEN:
-                forbid_groups[(p.card.card_type, p.target_id)].append(p)
+        forbid_intrigues = [
+            placement
+            for placement in placements
+            if not placement.nullified and placement.card.card_type == CardType.FORBID_INTRIGUE
+        ]
+        if len(forbid_intrigues) >= 2:
+            for placement in forbid_intrigues:
+                placement.nullified = True
 
-        for (forbid_type, target_id), fps in forbid_groups.items():
-            if len(fps) % 2 == 0:
-                for fp in fps:
-                    fp.nullified = True
-            else:
-                blocked_token = self._FORBID_TOKEN[forbid_type]
-                for p in placements:
-                    if p in fps or p.nullified or p.target_id != target_id:
-                        continue
-                    if blocked_token is None:
-                        # FORBID_MOVEMENT
-                        if p.card.is_movement:
-                            p.nullified = True
-                    else:
-                        token_info = self._TOKEN_EFFECTS.get(p.card.card_type)
-                        if token_info and token_info[0] == blocked_token:
-                            p.nullified = True
+        for forbid in placements:
+            if forbid.nullified:
+                continue
+            forbid_type = forbid.card.card_type
+            if forbid_type not in self._FORBID_TOKEN:
+                continue
+
+            blocked_token = self._FORBID_TOKEN[forbid_type]
+            for placement in placements:
+                if placement is forbid or placement.nullified or placement.target_id != forbid.target_id:
+                    continue
+                if blocked_token is None:
+                    if placement.card.is_movement:
+                        placement.nullified = True
+                    continue
+
+                token_info = self._TOKEN_EFFECTS.get(placement.card.card_type)
+                if token_info and token_info[0] == blocked_token:
+                    placement.nullified = True
 
     def _movement_destination(
         self, state: GameState, char_id: str, card_type: CardType
@@ -692,10 +1353,13 @@ class PlaywrightAbilityHandler(PhaseHandler):
         )
 
     def _request_optional_playwright_ability(self, state: GameState) -> PhaseSignal:
-        candidates = self.ability_resolver.collect_abilities(
+        candidates = self._filter_candidates_with_available_targets(
             state,
-            timing=AbilityTiming.PLAYWRIGHT_ABILITY,
-            ability_type=AbilityType.OPTIONAL,
+            self.ability_resolver.collect_abilities(
+                state,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                ability_type=AbilityType.OPTIONAL,
+            ),
         )
         if not candidates:
             return PhaseComplete()
@@ -729,7 +1393,10 @@ class ProtagonistAbilityHandler(PhaseHandler):
         return self._request_goodwill_ability(state)
 
     def _request_goodwill_ability(self, state: GameState) -> PhaseSignal:
-        candidates = self.ability_resolver.collect_goodwill_abilities(state)
+        candidates = self._filter_candidates_with_available_targets(
+            state,
+            self.ability_resolver.collect_goodwill_abilities(state),
+        )
         if not candidates:
             return PhaseComplete()
 
@@ -864,6 +1531,7 @@ class TurnEndHandler(PhaseHandler):
                     ability_type=AbilityType.OPTIONAL,
                 )
             )
+        candidates = self._filter_candidates_with_available_targets(state, candidates)
         if not candidates:
             return PhaseComplete()
 

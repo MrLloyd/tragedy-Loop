@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from engine.display_names import character_name, identity_name
+from engine.display_names import character_name, identity_name, incident_name
 from engine.event_bus import GameEvent, GameEventType
 from engine.game_controller import GameController
 from engine.models.enums import AreaId, CardType, GamePhase
@@ -237,6 +237,20 @@ def test_session_collects_identity_revealed_popup_message() -> None:
 
     assert session.view_state.revealed_identity_messages[-1] == (
         f"{character_name('male_student')}的身份是{identity_name('mastermind')}"
+    )
+
+
+def test_session_collects_incident_revealed_popup_message() -> None:
+    session, controller = _boot_with_script_setup()
+
+    controller.event_bus.emit(GameEvent(
+        GameEventType.INCIDENT_REVEALED,
+        {"incident_id": "murder", "perpetrator_id": "male_student", "day": 1},
+    ))
+    session._consume_event_log_updates()
+
+    assert session.view_state.revealed_incident_messages[-1] == (
+        f"{incident_name('murder')}事件的当事人是{character_name('male_student')}"
     )
 
 

@@ -16,6 +16,7 @@ from engine.game_state import GameState
 from engine.models.ability import Ability
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
+from engine.models.selectors import TargetSelector, parse_target_selector
 from engine.rules.persistent_effects import settle_persistent_effects
 from engine.rules.runtime_traits import active_traits as resolve_active_traits
 
@@ -296,48 +297,196 @@ class AbilityResolver:
         state: GameState,
         *,
         owner_id: str,
-        selector: str,
+        selector: Any,
         condition_target: str | None = None,
         alive_only: bool = True,
     ) -> list[str]:
-        """目标解析入口（P4-2 基础版）。"""
+        """目标解析统一入口。"""
+        spec = parse_target_selector(selector)
         owner = state.characters.get(owner_id)
-        if selector == "self":
+        if spec.ref == "self":
             return [owner_id] if owner is not None else []
-        if owner is None and selector.startswith("same_area_"):
+        if spec.ref == "none":
             return []
-        if selector == "same_area_any":
-            return [
-                ch.character_id
-                for ch in state.characters_in_area(owner.area, alive_only=alive_only)  # type: ignore[union-attr]
-            ]
-        if selector == "same_area_other":
-            return [
-                ch.character_id
-                for ch in state.characters_in_area(owner.area, alive_only=alive_only)  # type: ignore[union-attr]
-                if ch.character_id != owner_id
-            ]
-        if selector.startswith("same_area_identity:"):
-            identity_id = selector.split(":", 1)[1]
-            return [
-                ch.character_id
-                for ch in state.characters_in_area(owner.area, alive_only=alive_only)  # type: ignore[union-attr]
-                if ch.identity_id == identity_id
-            ]
-        if selector == "any_character":
-            if alive_only:
-                return [ch.character_id for ch in state.alive_characters()]
-            return [ch.character_id for ch in state.characters.values() if not ch.is_removed]
-        if selector == "any_board":
-            return [aid.value for aid in state.board.areas]
-        if selector == "condition_target":
+        if spec.ref == "condition_target":
             return [condition_target] if condition_target else []
-        if selector == "hospital_all":
+        if spec.ref == "literal":
+            return [spec.value] if spec.value else []
+        if spec.ref == "last_loop_goodwill_characters":
+            last_snapshot = state.get_last_loop_snapshot()
+            if last_snapshot is None:
+                return []
             return [
-                ch.character_id
-                for ch in state.characters_in_area(AreaId.HOSPITAL, alive_only=alive_only)
+                character_id
+                for character_id, snapshot in last_snapshot.character_snapshots.items()
+                if snapshot.tokens.goodwill > 0 and character_id in state.characters
             ]
-        return [selector]
+        if spec.ref == "another_character":
+            return []
+        if spec.subject in {"character", "other_character", "dead_character"}:
+            return self._resolve_character_targets(
+                state,
+                owner_id=owner_id,
+                owner=owner,
+                spec=spec,
+                alive_only=alive_only,
+            )
+        if spec.subject == "board":
+            return self._resolve_board_targets(state=state, owner=owner, spec=spec)
+        if spec.subject == "character_or_board":
+            if owner is None and spec.scope != "any_area":
+                return []
+            return [
+                *self._resolve_character_targets(
+                    state,
+                    owner_id=owner_id,
+                    owner=owner,
+                    spec=TargetSelector(
+                        scope=spec.scope,
+                        subject="character",
+                        mode=spec.mode,
+                        filters=spec.filters,
+                        area=spec.area,
+                    ),
+                    alive_only=alive_only,
+                ),
+                *self._resolve_board_targets(
+                    state=state,
+                    owner=owner,
+                    spec=TargetSelector(
+                        scope=spec.scope,
+                        subject="board",
+                        mode=spec.mode,
+                        filters=spec.filters,
+                        area=spec.area,
+                    ),
+                ),
+            ]
+        return []
+
+    def _resolve_character_targets(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+        owner: Any,
+        spec: TargetSelector,
+        alive_only: bool,
+    ) -> list[str]:
+        if spec.scope != "any_area" and owner is None:
+            return []
+        area_ids = self._resolve_scope_area_ids(state=state, owner=owner, spec=spec)
+        targets: list[str] = []
+        for ch in state.characters.values():
+            if area_ids is not None and ch.area not in area_ids:
+                continue
+            if not self._matches_character_selector(
+                character=ch,
+                owner_id=owner_id,
+                spec=spec,
+                alive_only=alive_only,
+            ):
+                continue
+            targets.append(ch.character_id)
+        return targets
+
+    def _resolve_board_targets(
+        self,
+        *,
+        state: GameState,
+        owner: Any,
+        spec: TargetSelector,
+    ) -> list[str]:
+        if spec.scope in {"same_area", "initial_area", "adjacent_area", "diagonal_area"} and owner is None:
+            return []
+        if spec.scope == "same_area":
+            return [owner.area.value] if owner is not None else []
+        if spec.scope == "initial_area":
+            return [owner.initial_area.value] if owner is not None else []
+        if spec.scope == "any_area":
+            return [area_id.value for area_id in state.board.areas]
+        if spec.scope == "fixed_area":
+            return [spec.area] if spec.area else []
+        if owner is None:
+            return []
+        current_area = owner.area
+        if spec.scope == "adjacent_area":
+            if current_area == AreaId.FARAWAY:
+                return []
+            return [area_id.value for area_id in state.board.get_all_adjacent(current_area)]
+        if spec.scope == "diagonal_area":
+            if current_area == AreaId.FARAWAY:
+                return []
+            diagonal = state.board.get_diagonal_adjacent(current_area)
+            return [diagonal.value] if diagonal is not None else []
+        return []
+
+    def _resolve_scope_area_ids(
+        self,
+        *,
+        state: GameState,
+        owner: Any,
+        spec: TargetSelector,
+    ) -> set[AreaId] | None:
+        if spec.scope == "any_area":
+            return None
+        if owner is None:
+            return set()
+        if spec.scope == "same_area":
+            return {owner.area}
+        if spec.scope == "initial_area":
+            return {owner.initial_area}
+        if spec.scope == "fixed_area":
+            if spec.area is None:
+                return set()
+            try:
+                return {AreaId(spec.area)}
+            except ValueError:
+                return set()
+        if owner.area == AreaId.FARAWAY:
+            return set()
+        if spec.scope == "adjacent_area":
+            return set(state.board.get_all_adjacent(owner.area))
+        if spec.scope == "diagonal_area":
+            diagonal = state.board.get_diagonal_adjacent(owner.area)
+            return {diagonal} if diagonal is not None else set()
+        return set()
+
+    def _matches_character_selector(
+        self,
+        *,
+        character: Any,
+        owner_id: str,
+        spec: TargetSelector,
+        alive_only: bool,
+    ) -> bool:
+        if character.is_removed:
+            return False
+        if spec.subject == "other_character" and character.character_id == owner_id:
+            return False
+
+        if spec.subject == "dead_character":
+            if character.is_alive:
+                return False
+        elif alive_only and not character.is_alive:
+            return False
+
+        if spec.filters.identity_id is not None and character.identity_id != spec.filters.identity_id:
+            return False
+        if spec.filters.attribute is not None:
+            try:
+                attribute = Attribute(spec.filters.attribute)
+            except ValueError:
+                return False
+            if attribute not in character.attributes:
+                return False
+        if spec.filters.limit_reached and not self._character_reached_paranoia_limit(character):
+            return False
+        return True
+
+    @staticmethod
+    def _character_reached_paranoia_limit(character: Any) -> bool:
+        return character.tokens.paranoia >= character.paranoia_limit
 
     def active_traits(self, state: GameState, character_id: str) -> set[Trait]:
         """角色当前生效特性：基础特性 + 当前身份特性 + 独立派生层。"""
@@ -385,23 +534,43 @@ class AbilityResolver:
             return state.is_final_day
 
         if cond_type == "character_alive":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             target = state.characters.get(target_id)
             return bool(target is not None and target.is_alive and not target.is_removed)
 
         if cond_type == "character_dead":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             target = state.characters.get(target_id)
             return bool(target is not None and (not target.is_alive or target.is_removed))
 
         if cond_type == "identity_is":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             expected = str(params.get("value", ""))
             target = state.characters.get(target_id)
             return bool(target is not None and target.identity_id == expected)
 
         if cond_type == "original_identity_is":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             expected = str(params.get("value", ""))
             target = state.characters.get(target_id)
             return bool(target is not None and target.original_identity_id == expected)
@@ -412,12 +581,22 @@ class AbilityResolver:
             return bool(target is not None and target.identity_id == expected)
 
         if cond_type == "identity_revealed":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             target = state.characters.get(target_id)
             return bool(target is not None and target.revealed)
 
         if cond_type == "has_trait":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             trait_name = params.get("trait")
             if not isinstance(trait_name, str):
                 return False
@@ -428,7 +607,12 @@ class AbilityResolver:
             return trait in self.active_traits(state, target_id)
 
         if cond_type == "has_attribute":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             attr_name = params.get("attribute")
             if not isinstance(attr_name, str):
                 return False
@@ -442,7 +626,12 @@ class AbilityResolver:
             return attribute in target.attributes
 
         if cond_type == "area_is":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             expected_area = str(params.get("value", ""))
             target = state.characters.get(target_id)
             return bool(target is not None and target.area.value == expected_area)
@@ -460,7 +649,12 @@ class AbilityResolver:
             return self._evaluate_same_area_identity_token_check(state, params, owner_id=owner_id)
 
         if cond_type == "same_area_count":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             target = state.characters.get(target_id)
             if target is None:
                 return False
@@ -479,8 +673,16 @@ class AbilityResolver:
             value = int(params.get("value", 0))
             return _compare_number(state.ex_gauge, operator, value)
 
+        if cond_type == "module_has_ex_gauge":
+            return bool(state.module_def is not None and state.module_def.has_ex_gauge)
+
         if cond_type == "paranoia_limit_check":
-            target_id = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+            )
             target = state.characters.get(target_id)
             if target is None:
                 return False
@@ -558,7 +760,7 @@ class AbilityResolver:
         if character_id == "shrine_maiden" and slot == 0:
             return Condition(
                 condition_type="area_is",
-                params={"target": "self", "value": AreaId.SHRINE.value},
+                params={"target": {"ref": "self"}, "value": AreaId.SHRINE.value},
             )
         return None
 
@@ -568,7 +770,10 @@ class AbilityResolver:
             ("female_student", 0): [
                 Effect(
                     effect_type=EffectType.REMOVE_TOKEN,
-                    target="same_area_other",
+                    target={
+                        "scope": "same_area",
+                        "subject": "other_character",
+                    },
                     token_type=TokenType.PARANOIA,
                     amount=1,
                 )
@@ -576,7 +781,10 @@ class AbilityResolver:
             ("male_student", 0): [
                 Effect(
                     effect_type=EffectType.REMOVE_TOKEN,
-                    target="same_area_other",
+                    target={
+                        "scope": "same_area",
+                        "subject": "other_character",
+                    },
                     token_type=TokenType.PARANOIA,
                     amount=1,
                 )
@@ -584,7 +792,10 @@ class AbilityResolver:
             ("idol", 0): [
                 Effect(
                     effect_type=EffectType.REMOVE_TOKEN,
-                    target="same_area_other",
+                    target={
+                        "scope": "same_area",
+                        "subject": "other_character",
+                    },
                     token_type=TokenType.PARANOIA,
                     amount=1,
                 )
@@ -592,7 +803,10 @@ class AbilityResolver:
             ("idol", 1): [
                 Effect(
                     effect_type=EffectType.PLACE_TOKEN,
-                    target="same_area_other",
+                    target={
+                        "scope": "same_area",
+                        "subject": "other_character",
+                    },
                     token_type=TokenType.GOODWILL,
                     amount=1,
                 )
@@ -600,13 +814,16 @@ class AbilityResolver:
             ("office_worker", 0): [
                 Effect(
                     effect_type=EffectType.REVEAL_IDENTITY,
-                    target="self",
+                    target={"ref": "self"},
                 )
             ],
             ("shrine_maiden", 0): [
                 Effect(
                     effect_type=EffectType.REMOVE_TOKEN,
-                    target="same_area_board",
+                    target={
+                        "scope": "same_area",
+                        "subject": "board",
+                    },
                     token_type=TokenType.INTRIGUE,
                     amount=1,
                 )
@@ -614,7 +831,10 @@ class AbilityResolver:
             ("shrine_maiden", 1): [
                 Effect(
                     effect_type=EffectType.REVEAL_IDENTITY,
-                    target="same_area_any",
+                    target={
+                        "scope": "same_area",
+                        "subject": "character",
+                    },
                 )
             ],
         }
@@ -628,7 +848,12 @@ class AbilityResolver:
         owner_id: str,
         other_id: str = "",
     ) -> bool:
-        target = self._resolve_target_ref(params.get("target", owner_id), owner_id=owner_id, other_id=other_id)
+        target = self._resolve_target_ref(
+            state,
+            params.get("target", owner_id),
+            owner_id=owner_id,
+            other_id=other_id,
+        )
         token_name = params.get("token")
         if not isinstance(token_name, str):
             return False
@@ -748,14 +973,31 @@ class AbilityResolver:
                     return Condition(condition_type=condition_type, params=params)
         return None
 
-    @staticmethod
-    def _resolve_target_ref(raw_target: object, *, owner_id: str, other_id: str = "") -> str:
-        target = str(raw_target)
-        if target == "self":
+    def _resolve_target_ref(
+        self,
+        state: GameState,
+        raw_target: object,
+        *,
+        owner_id: str,
+        other_id: str = "",
+    ) -> str:
+        selector = parse_target_selector(raw_target)
+        if selector.ref == "self":
             return owner_id
-        if target == "other":
+        if selector.ref == "other":
             return other_id
-        return target
+        if selector.ref == "literal":
+            return selector.value or ""
+        if selector.ref == "none":
+            return ""
+        resolved = self.resolve_targets(
+            state,
+            owner_id=owner_id,
+            selector=raw_target,
+            condition_target=other_id,
+            alive_only=False,
+        )
+        return resolved[0] if len(resolved) == 1 else ""
 
 
 def _compare_number(left: int, operator: str, right: int) -> bool:

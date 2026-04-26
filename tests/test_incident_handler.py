@@ -5,9 +5,10 @@ from __future__ import annotations
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, EffectType
+from engine.models.enums import AreaId, EffectType, TokenType
 from engine.models.effects import Condition, Effect
 from engine.models.incident import IncidentDef, IncidentSchedule
+from engine.models.selectors import area_choice_selector, character_choice_selector
 from engine.phases.phase_base import ForceLoopEnd, IncidentHandler, PhaseComplete, WaitForInput
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
@@ -171,12 +172,46 @@ def test_incident_protagonist_death_returns_force_loop_end() -> None:
     assert signal.reason == "fatal_incident"
 
 
+def test_ai_incident_check_counts_all_tokens_as_paranoia() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="spiritual_contamination",
+        name="邪气污染",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target="shrine",
+                token_type=TokenType.INTRIGUE,
+                amount=2,
+            )
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=0,
+        paranoia_limit=4,
+        incident_id="spiritual_contamination",
+        perpetrator_id="ai",
+        incident_def=incident_def,
+    )
+    state.characters["ai"].tokens.intrigue = 4
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 2
+
+
 # ---------------------------------------------------------------------------
-# 测试 6：same_area_all 目标 — 杀死同区域全部存活角色
+# 测试 6：结构化同区域全体目标 — 杀死同区域全部存活角色
 # ---------------------------------------------------------------------------
 
 def test_incident_same_area_all_kills_all_in_area() -> None:
-    kill_all = Effect(effect_type=EffectType.KILL_CHARACTER, target="same_area_all")
+    kill_all = Effect(
+        effect_type=EffectType.KILL_CHARACTER,
+        target={"scope": "same_area", "subject": "character", "mode": "all"},
+    )
     incident_def = IncidentDef(
         incident_id="mass_incident",
         name="群体事件",
@@ -367,7 +402,13 @@ def test_murder_uses_scripted_character_choice_and_excludes_perpetrator() -> Non
         )
     state.characters["perp"].tokens.paranoia = 2
     state.script.incidents = [
-        IncidentSchedule("murder", day=1, perpetrator_id="perp", target_character_ids=["victim"])
+        IncidentSchedule(
+            "murder",
+            day=1,
+            perpetrator_id="perp",
+            target_selectors=[character_choice_selector("victim")],
+            target_character_ids=["victim"],
+        )
     ]
 
     signal = handler.execute(state)
@@ -552,6 +593,7 @@ def test_incident_resolver_can_use_supplied_area_and_token_choices() -> None:
             "disappearance",
             day=1,
             perpetrator_id="perp",
+            target_selectors=[area_choice_selector("school")],
             target_area_ids=["school"],
         ),
     )
@@ -573,6 +615,47 @@ def test_incident_resolver_can_use_supplied_area_and_token_choices() -> None:
     )
     assert butterfly.has_phenomenon is True
     assert state.characters["target"].tokens.intrigue == 1
+
+
+def test_disappearance_runtime_choice_excludes_forbidden_areas() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.current_day = 1
+    state.characters["perp"] = CharacterState(
+        character_id="perp",
+        name="当事人",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=2,
+        base_forbidden_areas=[AreaId.HOSPITAL, AreaId.CITY],
+        forbidden_areas=[AreaId.HOSPITAL, AreaId.CITY],
+    )
+    state.characters["perp"].tokens.paranoia = 2
+
+    schedule = IncidentSchedule(
+        "disappearance",
+        day=1,
+        perpetrator_id="perp",
+        target_selectors=[area_choice_selector(AreaId.HOSPITAL.value)],
+        target_area_ids=[AreaId.HOSPITAL.value],
+    )
+    incident_def = state.incident_defs["disappearance"]
+
+    assert resolver.next_runtime_choice(state, schedule, incident_def) == (
+        "area",
+        [AreaId.SCHOOL.value, AreaId.SHRINE.value],
+    )
+
+    disappearance = resolver.resolve_schedule(state, schedule)
+
+    assert disappearance.has_phenomenon is False
+    assert state.characters["perp"].area == AreaId.SHRINE
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 0
+    assert state.board.areas[AreaId.HOSPITAL].tokens.intrigue == 0
 
 
 def test_disappearance_without_area_choice_occurs_but_has_no_phenomenon() -> None:

@@ -85,6 +85,7 @@ class CharacterState:
     paranoia_limit: int = 2                 # 不安限度
 
     # --- 区域限制 ---
+    base_forbidden_areas: list[AreaId] = field(default_factory=list)
     forbidden_areas: list[AreaId] = field(default_factory=list)
 
     # --- EX 牌（MZ/MC/HSA/AHR/LL 预留） ---
@@ -121,6 +122,7 @@ class CharacterState:
         self.is_removed = False
         self.tokens.clear()
         self.area = self.initial_area
+        self.forbidden_areas = list(self.base_forbidden_areas)
         self.goodwill_abilities_used.clear()
         self.ex_cards.clear()
         self.curse_state = None
@@ -128,6 +130,25 @@ class CharacterState:
         self.identity_change_reason = None
         self.derived_traits.clear()
         self.suppressed_traits.clear()
+
+    def can_enter_area(self, area: AreaId) -> bool:
+        return area not in self.forbidden_areas
+
+    def clear_forbidden_areas(self) -> None:
+        self.forbidden_areas.clear()
+
+    def set_forbidden_areas(self, areas: list[AreaId]) -> None:
+        deduped: list[AreaId] = []
+        for area in areas:
+            if area not in deduped:
+                deduped.append(area)
+        self.forbidden_areas = deduped
+
+    def remove_forbidden_area(self, area: AreaId) -> bool:
+        if area not in self.forbidden_areas:
+            return False
+        self.forbidden_areas = [item for item in self.forbidden_areas if item != area]
+        return True
 
     def snapshot(self) -> CharacterState:
         """深拷贝，用于原子结算的读阶段"""

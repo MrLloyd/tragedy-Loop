@@ -9,86 +9,19 @@ from typing import Any
 from engine.models.enums import (
     AbilityTiming,
     AbilityType,
-    AreaId,
     EffectType,
     TokenType,
     Trait,
 )
-from engine.validation.common import KNOWN_CONDITION_TYPES, ValidationIssue, enum_values
+from engine.validation.common import ValidationIssue, enum_values
+from engine.validation.conditions import validate_condition as _validate_condition
+from engine.validation.selectors import validate_selector
 
 _TIMING = enum_values(AbilityTiming)
 _ABILITY_TYPE = enum_values(AbilityType)
 _EFFECT_TYPE = enum_values(EffectType)
 _TOKEN_TYPE = enum_values(TokenType)
 _TRAIT = enum_values(Trait)
-_AREA = enum_values(AreaId)
-
-
-def _validate_condition(
-    cond: Any,
-    path: str,
-    issues: list[ValidationIssue],
-) -> None:
-    if not isinstance(cond, dict):
-        issues.append(ValidationIssue(path, "condition must be an object"))
-        return
-    ct = cond.get("condition_type")
-    if ct not in KNOWN_CONDITION_TYPES:
-        issues.append(
-            ValidationIssue(
-                f"{path}.condition_type",
-                f"unknown condition_type: {ct!r}",
-            )
-        )
-    params = cond.get("params")
-    if params is not None and not isinstance(params, dict):
-        issues.append(ValidationIssue(f"{path}.params", "must be an object"))
-        return
-    if ct in {"all_of", "any_of"} and isinstance(params, dict):
-        nested = params.get("conditions")
-        if not isinstance(nested, list):
-            issues.append(ValidationIssue(f"{path}.params.conditions", "must be an array"))
-        else:
-            for idx, item in enumerate(nested):
-                _validate_condition(item, f"{path}.params.conditions[{idx}]", issues)
-    if ct == "token_check" and isinstance(params, dict):
-        tgt = params.get("target")
-        if isinstance(tgt, str) and tgt not in _AREA and tgt not in {"self", "other"}:
-            issues.append(
-                ValidationIssue(
-                    f"{path}.params.target",
-                    f"invalid area or token target: {tgt!r}",
-                )
-            )
-        tok = params.get("token")
-        if isinstance(tok, str) and tok not in _TOKEN_TYPE:
-            issues.append(
-                ValidationIssue(
-                    f"{path}.params.token",
-                    f"invalid TokenType: {tok!r}",
-                )
-            )
-    if ct in {
-        "identity_token_check",
-        "identity_initial_area_board_token_check",
-        "same_area_identity_token_check",
-    } and isinstance(params, dict):
-        identity_id = params.get("identity_id")
-        if not isinstance(identity_id, str) or not identity_id.strip():
-            issues.append(
-                ValidationIssue(
-                    f"{path}.params.identity_id",
-                    "must be non-empty string",
-                )
-            )
-        tok = params.get("token")
-        if isinstance(tok, str) and tok not in _TOKEN_TYPE:
-            issues.append(
-                ValidationIssue(
-                    f"{path}.params.token",
-                    f"invalid TokenType: {tok!r}",
-                )
-            )
 
 
 def _validate_effects(
@@ -109,6 +42,10 @@ def _validate_effects(
             issues.append(
                 ValidationIssue(f"{ep}.effect_type", f"invalid EffectType: {et!r}")
             )
+        if "condition" in eff and eff["condition"] is not None:
+            _validate_condition(eff["condition"], f"{ep}.condition", issues)
+        if "target" in eff:
+            validate_selector(eff.get("target"), f"{ep}.target", issues)
         if et == EffectType.PLACE_TOKEN.value:  # "place_token"
             tt = eff.get("token_type")
             if tt not in _TOKEN_TYPE and eff.get("value") != "choose_token_type":
@@ -118,6 +55,8 @@ def _validate_effects(
                         f"place_token requires valid token_type, got {tt!r}",
                     )
                 )
+        if et == EffectType.MOVE_CHARACTER.value and isinstance(eff.get("value"), dict):
+            validate_selector(eff.get("value"), f"{ep}.value", issues)
 
 
 def _validate_abilities(
@@ -145,9 +84,19 @@ def _validate_abilities(
         tm = ab.get("timing")
         if tm not in _TIMING:
             issues.append(ValidationIssue(f"{ap}.timing", f"invalid AbilityTiming: {tm!r}"))
+        seq = ab.get("sequential")
+        if seq is not None and not isinstance(seq, bool):
+            issues.append(ValidationIssue(f"{ap}.sequential", f"expected bool, got {seq!r}"))
         if "condition" in ab and ab["condition"] is not None:
             _validate_condition(ab["condition"], f"{ap}.condition", issues)
         _validate_effects(ab.get("effects"), f"{ap}.effects", issues)
+        if at == AbilityType.MANDATORY.value and ab.get("sequential") is True:
+            issues.append(
+                ValidationIssue(
+                    f"{ap}.sequential",
+                    "mandatory ability must not set sequential=true",
+                )
+            )
 
 
 def _validate_derived_identities(

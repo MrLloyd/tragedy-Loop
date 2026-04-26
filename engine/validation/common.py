@@ -39,6 +39,7 @@ KNOWN_CONDITION_TYPES = frozenset(
         "other_identity_is",
         "identity_revealed",
         "ex_gauge_check",
+        "module_has_ex_gauge",
         "has_trait",
         "area_is",
         "world_line_check",

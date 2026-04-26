@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from engine.models.effects import Condition, Effect
 
@@ -54,6 +54,7 @@ class IncidentSchedule:
     day: int                     # 发生在第几天
     perpetrator_id: str          # 当事人角色 ID（非公开）
     perpetrator_area: Optional[str] = None  # 群众事件指定版图
+    target_selectors: list[Any] = field(default_factory=list)      # 发动时按顺序已选择的 selector 目标
     target_character_ids: list[str] = field(default_factory=list)  # 发动时已选择/调试注入的角色目标
     target_area_ids: list[str] = field(default_factory=list)       # 发动时已选择/调试注入的版图目标
     chosen_token_types: list[str] = field(default_factory=list)    # 发动时已选择/调试注入的指示物类型

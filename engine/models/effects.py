@@ -30,7 +30,7 @@ class Condition:
     #   "incident_occurred"     — 某事件是否发生过
 
     params: dict[str, Any] = field(default_factory=dict)
-    # 例：{"target": "self", "token": "intrigue", "operator": ">=", "value": 2}
+    # 例：{"target": {"ref": "self"}, "token": "intrigue", "operator": ">=", "value": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -43,18 +43,16 @@ class Effect:
     effect_type: EffectType
 
     # 目标选择
-    target: str = "self"
+    target: Any = "self"
     # 常用 target：
-    #   "self"              — 持有该能力的角色
-    #   "same_area_other"   — 同区域其他角色（需选择）
-    #   "same_area_any"     — 同区域任意角色（需选择）
-    #   "same_area_all"     — 同区域全部角色
-    #   "any_character"     — 任意角色（需选择）
-    #   "any_board"         — 任意版图（需选择）
-    #   "same_area_board"   — 该角色所在版图
-    #   "condition_target"  — 条件判定中确定的目标
-    #   "initial_area_board" — 初始区域版图
-    #   具体 character_id   — 指定角色
+    #   {"ref": "self"}                                  — 持有该能力的角色
+    #   {"scope": "same_area", "subject": "character"}   — 同区域任意存活角色（需选择）
+    #   {"scope": "same_area", "subject": "other_character"} — 同区域其他存活角色
+    #   {"scope": "same_area", "subject": "dead_character"}  — 同区域尸体
+    #   {"scope": "same_area", "subject": "board"}       — 所在版图
+    #   {"scope": "any_area", "subject": "board"}        — 任意版图（需选择）
+    #   {"ref": "condition_target"}                      — 条件判定中确定的目标
+    #   也允许直接写具体 character_id / area_id
 
     # 效果参数
     token_type: Optional[TokenType] = None
@@ -64,4 +62,3 @@ class Effect:
 
     # 条件（可选，效果自身的额外条件）
     condition: Optional[Condition] = None
-

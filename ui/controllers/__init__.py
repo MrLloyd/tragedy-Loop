@@ -6,6 +6,7 @@ from ui.controllers.new_game_controller import (
     NewGameDraft,
     default_phase5_draft,
 )
+from ui.controllers.test_mode_game_session import TestModeGameSessionController
 from ui.controllers.test_mode_controller import (
     TestCharacterDraft,
     TestModeController,
@@ -19,6 +20,7 @@ __all__ = [
     "IncidentDraft",
     "NewGameController",
     "NewGameDraft",
+    "TestModeGameSessionController",
     "TestCharacterDraft",
     "TestModeController",
     "TestModeDraft",

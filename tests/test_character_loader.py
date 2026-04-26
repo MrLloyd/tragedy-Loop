@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from engine.models.enums import AreaId, Attribute
+from engine.models.enums import AreaId, Attribute, EffectType
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.rules.character_loader import (
@@ -29,6 +32,76 @@ def test_load_character_defs_reads_character_templates() -> None:
     assert ai.goodwill_abilities[0].ability_id == "goodwill:ai:1"
 
 
+@pytest.mark.parametrize(
+    ("character_id", "ability_ids", "requirements", "once_per_loop"),
+    [
+        ("ai", ["goodwill:ai:1"], [3], [True]),
+        ("streamer", ["goodwill:streamer:1"], [3], [False]),
+        ("servant", ["goodwill:servant:1"], [4], [True]),
+        ("sister", ["goodwill:sister:1"], [5], [True]),
+        ("informant", ["goodwill:informant:1"], [5], [True]),
+        ("copycat", ["goodwill:copycat:1"], [3], [False]),
+    ],
+)
+def test_data_only_structured_goodwill_migrations_preserve_legacy_empty_runtime(
+    character_id: str,
+    ability_ids: list[str],
+    requirements: list[int],
+    once_per_loop: list[bool],
+) -> None:
+    defs = load_character_defs()
+    char_def = defs[character_id]
+
+    assert [ability.ability_id for ability in char_def.goodwill_abilities] == ability_ids
+    assert [ability.goodwill_requirement for ability in char_def.goodwill_abilities] == requirements
+    assert [ability.once_per_loop for ability in char_def.goodwill_abilities] == once_per_loop
+    assert all(ability.effects == [] for ability in char_def.goodwill_abilities)
+    assert all(ability.condition is None for ability in char_def.goodwill_abilities)
+    assert all(ability.can_be_refused is True for ability in char_def.goodwill_abilities)
+
+
+def test_structured_reveal_goodwill_characters_drop_legacy_fields_in_json() -> None:
+    raw = json.loads((Path(__file__).resolve().parent.parent / "data" / "characters.json").read_text(encoding="utf-8"))
+    by_id = {
+        entry["character_id"]: entry
+        for entry in raw["characters"]
+    }
+    legacy_keys = {
+        "goodwill_ability_texts",
+        "goodwill_ability_goodwill_requirements",
+        "goodwill_ability_once_per_loop",
+    }
+
+    for character_id in (
+        "office_worker",
+        "temp_worker_alt",
+        "outsider",
+        "shrine_maiden",
+        "cult_leader",
+        "teacher",
+        "appraiser",
+    ):
+        assert legacy_keys.isdisjoint(by_id[character_id])
+
+
+def test_appraiser_structured_goodwill_reveal_targets_dead_characters() -> None:
+    defs = load_character_defs()
+    appraiser = defs["appraiser"]
+
+    reveal = next(
+        ability
+        for ability in appraiser.goodwill_abilities
+        if ability.ability_id == "goodwill:appraiser:2"
+    )
+
+    assert len(reveal.effects) == 1
+    assert reveal.effects[0].effect_type == EffectType.REVEAL_IDENTITY
+    assert reveal.effects[0].target == {
+        "scope": "any_area",
+        "subject": "dead_character",
+    }
+
+
 def test_instantiate_character_state_applies_template_and_identity_alias() -> None:
     defs = load_character_defs()
     setup = CharacterSetup(character_id="ai", identity_id="commoner")
@@ -44,6 +117,28 @@ def test_instantiate_character_state_applies_template_and_identity_alias() -> No
     assert len(state.goodwill_ability_once_per_loop) == 2
     assert len(state.goodwill_abilities) == 1
     assert state.goodwill_abilities[0].goodwill_requirement == 3
+
+
+def test_instantiate_character_state_keeps_base_and_current_forbidden_areas() -> None:
+    defs = load_character_defs()
+    setup = CharacterSetup(character_id="office_worker", identity_id="平民")
+    state = instantiate_character_state(setup, defs)
+
+    assert state.base_forbidden_areas == [AreaId.SCHOOL]
+    assert state.forbidden_areas == [AreaId.SCHOOL]
+
+
+def test_character_forbidden_areas_reset_for_new_loop() -> None:
+    defs = load_character_defs()
+    setup = CharacterSetup(character_id="office_worker", identity_id="平民")
+    state = instantiate_character_state(setup, defs)
+
+    state.clear_forbidden_areas()
+    assert state.forbidden_areas == []
+
+    state.reset_for_new_loop()
+
+    assert state.forbidden_areas == [AreaId.SCHOOL]
 
 
 def test_build_game_state_from_module_supports_test_instance_import() -> None:

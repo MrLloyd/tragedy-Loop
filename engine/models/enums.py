@@ -104,8 +104,10 @@ class EffectType(Enum):
     REVIVE_CHARACTER = "revive_character"   # 复活角色
     MOVE_CHARACTER = "move_character"       # 移动角色
     REMOVE_CHARACTER = "remove_character"   # 从游戏中移除角色
+    LIFT_FORBIDDEN_AREAS = "lift_forbidden_areas"  # 解除禁行区域
 
     # 终局效果
+    PROTAGONIST_PROTECT = "protagonist_protect"    # 本轮回中主人公不会死亡
     PROTAGONIST_DEATH = "protagonist_death"      # 主人公死亡
     PROTAGONIST_FAILURE = "protagonist_failure"   # 主人公失败
     FORCE_LOOP_END = "force_loop_end"            # 强制结束本轮回
@@ -131,6 +133,9 @@ class EffectType(Enum):
 
     # 身份变更
     CHANGE_IDENTITY = "change_identity"    # 身份变更（妄想扩大病毒等）
+
+    # 事件控制
+    SUPPRESS_INCIDENT = "suppress_incident"  # 本轮回中事件不发生
 
     # 无效果
     NO_EFFECT = "no_effect"                # 事件发生但无现象

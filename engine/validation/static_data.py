@@ -8,6 +8,8 @@ from typing import Any
 
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CardType, EffectType, TokenType
 from engine.validation.common import ValidationIssue, enum_values
+from engine.validation.conditions import validate_condition as _validate_condition
+from engine.validation.selectors import validate_selector
 
 _AREA_VALUES = enum_values(AreaId)
 _CARD_VALUES = enum_values(CardType)
@@ -319,6 +321,9 @@ def _validate_goodwill_ability(
         if value is not None and not isinstance(value, bool):
             issues.append(ValidationIssue(f"{path_prefix}.{key}", f"expected bool, got {value!r}"))
 
+    if "condition" in ability and ability["condition"] is not None:
+        _validate_condition(ability["condition"], f"{path_prefix}.condition", issues)
+
     effects = ability.get("effects", [])
     if not isinstance(effects, list):
         issues.append(ValidationIssue(f"{path_prefix}.effects", "must be an array"))
@@ -338,12 +343,18 @@ def _validate_goodwill_effect(
     effect_type = effect.get("effect_type")
     if effect_type not in _EFFECT_VALUES:
         issues.append(ValidationIssue(f"{path_prefix}.effect_type", f"invalid EffectType: {effect_type!r}"))
+    if "condition" in effect and effect["condition"] is not None:
+        _validate_condition(effect["condition"], f"{path_prefix}.condition", issues)
+    if "target" in effect:
+        validate_selector(effect.get("target"), f"{path_prefix}.target", issues)
     token_type = effect.get("token_type")
     if token_type is not None and token_type not in _TOKEN_VALUES:
         issues.append(ValidationIssue(f"{path_prefix}.token_type", f"invalid TokenType: {token_type!r}"))
     amount = effect.get("amount", 0)
     if not isinstance(amount, int):
         issues.append(ValidationIssue(f"{path_prefix}.amount", f"expected int, got {amount!r}"))
+    if effect_type == EffectType.MOVE_CHARACTER.value and isinstance(effect.get("value"), dict):
+        validate_selector(effect.get("value"), f"{path_prefix}.value", issues)
 
 
 def load_board_layout_keys(path: Path) -> frozenset[str] | None:

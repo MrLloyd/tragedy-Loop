@@ -13,12 +13,23 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from engine.event_bus import GameEvent, GameEventType
 from engine.models.effects import Effect
 from engine.models.enums import Outcome, TokenType
 from engine.models.incident import IncidentPublicResult
+from engine.models.selectors import (
+    area_choice_selector,
+    character_choice_selector,
+    parse_target_selector,
+    selector_area_id,
+    selector_character_id,
+    selector_is_character_choice,
+    selector_is_self_ref,
+    selector_literal_value,
+    selector_requires_choice,
+)
 from engine.resolvers.ability_resolver import AbilityResolver
 
 if TYPE_CHECKING:
@@ -43,13 +54,6 @@ class IncidentResolution:
 class IncidentResolver:
     """事件专属结算入口。"""
 
-    _CHARACTER_CHOICE_SELECTORS = frozenset({
-        "any_character",
-        "same_area_any",
-        "same_area_other",
-        "another_character",
-        "any_other_character",
-    })
     _TOKEN_CHOICE_VALUES = (
         TokenType.GOODWILL,
         TokenType.PARANOIA,
@@ -132,6 +136,9 @@ class IncidentResolver:
         if schedule.occurred:
             return False
 
+        if schedule.perpetrator_id in state.suppressed_incident_perpetrators:
+            return False
+
         perpetrator = state.characters.get(schedule.perpetrator_id)
         if perpetrator is None or not perpetrator.is_alive:
             return False
@@ -151,6 +158,8 @@ class IncidentResolver:
     def _incident_check_value(self, state: GameState, schedule: IncidentSchedule) -> int:
         """事件触发判定值；默认使用当事人不安，后续可替换为密谋等机制。"""
         perpetrator = state.characters[schedule.perpetrator_id]
+        if perpetrator.character_id == "ai":
+            return perpetrator.tokens.total()
         return perpetrator.tokens.paranoia
 
     def _incident_threshold(
@@ -206,13 +215,14 @@ class IncidentResolver:
         schedule: IncidentSchedule,
         incident_def: IncidentDef,
     ) -> tuple[str, list[str]] | None:
+        target_selectors: deque[Any] = deque(schedule.target_selectors)
         character_choices: deque[str] = deque(schedule.target_character_ids)
         area_choices: deque[str] = deque(schedule.target_area_ids)
         token_choices: deque[str] = deque(schedule.chosen_token_types)
         chosen_characters: list[str] = []
 
         for effect in incident_def.effects:
-            if effect.target in self._CHARACTER_CHOICE_SELECTORS:
+            if selector_is_character_choice(effect.target):
                 candidates = self._resolve_character_candidates(
                     state,
                     schedule,
@@ -220,20 +230,30 @@ class IncidentResolver:
                     selector=effect.target,
                     chosen_characters=chosen_characters,
                 )
-                selected_character = self._consume_matching_choice(character_choices, candidates)
+                selected_character = self._consume_matching_target_choice(
+                    target_selectors,
+                    legacy_choices=character_choices,
+                    candidates=candidates,
+                    choice_kind="character",
+                )
                 if selected_character is not None:
                     chosen_characters.append(selected_character)
                 elif candidates:
                     return "character", sorted(candidates)
 
-            if effect.effect_type.name == "MOVE_CHARACTER" and effect.value == "any_board":
-                candidates = self.condition_resolver.resolve_targets(
+            if effect.effect_type.name == "MOVE_CHARACTER" and selector_requires_choice(effect.value):
+                candidates = self._resolve_move_area_candidates(
                     state,
-                    owner_id=schedule.perpetrator_id,
-                    selector="any_board",
-                    alive_only=False,
+                    schedule,
+                    effect,
+                    chosen_characters=chosen_characters,
                 )
-                selected_area = self._consume_matching_choice(area_choices, candidates)
+                selected_area = self._consume_matching_target_choice(
+                    target_selectors,
+                    legacy_choices=area_choices,
+                    candidates=candidates,
+                    choice_kind="area",
+                )
                 if selected_area is None and candidates:
                     return "area", sorted(candidates)
 
@@ -251,6 +271,7 @@ class IncidentResolver:
         schedule: IncidentSchedule,
         effects: list[Effect],
     ) -> list[Effect]:
+        target_selectors: deque[Any] = deque(schedule.target_selectors)
         character_choices: deque[str] = deque(schedule.target_character_ids)
         area_choices: deque[str] = deque(schedule.target_area_ids)
         token_choices: deque[str] = deque(schedule.chosen_token_types)
@@ -266,23 +287,30 @@ class IncidentResolver:
                 state,
                 schedule,
                 effect,
+                target_selectors=target_selectors,
                 character_choices=character_choices,
                 chosen_characters=chosen_characters,
             )
+            resolved_target_character = updated.target if isinstance(updated.target, str) and updated.target in state.characters else None
             updated.value = self._resolve_effect_value(
                 state,
                 schedule,
                 effect,
+                target_selectors=target_selectors,
                 area_choices=area_choices,
                 chosen_token_type=chosen_token_type,
+                chosen_characters=[
+                    *chosen_characters,
+                    *([resolved_target_character] if resolved_target_character is not None else []),
+                ],
             )
             if chosen_token_type is not None:
                 updated.token_type = chosen_token_type
-            if effect.target in {"any_character", "same_area_any", "another_character", "any_other_character"}:
+            if selector_is_character_choice(effect.target):
                 updated.condition = None
             concretized.append(updated)
-            if updated.target in state.characters:
-                chosen_characters.append(updated.target)
+            if resolved_target_character is not None:
+                chosen_characters.append(resolved_target_character)
 
         return concretized
 
@@ -292,11 +320,12 @@ class IncidentResolver:
         schedule: IncidentSchedule,
         effect: Effect,
         *,
+        target_selectors: deque[Any],
         character_choices: deque[str],
         chosen_characters: list[str],
-    ) -> str:
+    ) -> Any:
         selector = effect.target
-        if selector not in self._CHARACTER_CHOICE_SELECTORS:
+        if not selector_is_character_choice(selector):
             return selector
 
         candidates = self._resolve_character_candidates(
@@ -307,13 +336,18 @@ class IncidentResolver:
             chosen_characters=chosen_characters,
         )
         if not candidates:
-            return "__no_target__"
+            return {"ref": "none"}
 
-        selected_character = self._consume_matching_choice(character_choices, candidates)
+        selected_character = self._consume_matching_target_choice(
+            target_selectors,
+            legacy_choices=character_choices,
+            candidates=candidates,
+            choice_kind="character",
+        )
         if selected_character is not None:
             return selected_character
 
-        return "__no_target__"
+        return {"ref": "none"}
 
     def _resolve_effect_value(
         self,
@@ -321,19 +355,31 @@ class IncidentResolver:
         schedule: IncidentSchedule,
         effect: Effect,
         *,
+        target_selectors: deque[Any],
         area_choices: deque[str],
         chosen_token_type: TokenType | None,
+        chosen_characters: list[str],
     ) -> object:
-        if effect.effect_type.name == "MOVE_CHARACTER" and effect.value == "any_board":
-            candidates = self.condition_resolver.resolve_targets(
+        if effect.effect_type.name == "MOVE_CHARACTER" and selector_requires_choice(effect.value):
+            candidates = self._resolve_move_area_candidates(
                 state,
-                owner_id=schedule.perpetrator_id,
-                selector="any_board",
-                alive_only=False,
+                schedule,
+                    effect,
+                    chosen_characters=chosen_characters,
+                )
+            scripted_choice = self._peek_matching_target_choice(
+                target_selectors,
+                legacy_choices=area_choices,
+                candidates=candidates,
+                choice_kind="area",
             )
-            scripted_choice = area_choices[0] if area_choices else None
-            if scripted_choice in candidates:
-                area_choices.popleft()
+            if scripted_choice is not None:
+                self._consume_matching_target_choice(
+                    target_selectors,
+                    legacy_choices=area_choices,
+                    candidates=candidates,
+                    choice_kind="area",
+                )
                 return scripted_choice
             return sorted(candidates)[0] if candidates else effect.value
         if chosen_token_type is not None:
@@ -359,31 +405,16 @@ class IncidentResolver:
         chosen_characters: list[str],
     ) -> list[str]:
         owner_id = schedule.perpetrator_id
-        if selector == "another_character":
+        if parse_target_selector(selector).ref == "another_character":
             if not chosen_characters:
                 return []
             base_candidates = self.condition_resolver.resolve_targets(
                 state,
                 owner_id=owner_id,
-                selector="any_character",
+                selector={"scope": "any_area", "subject": "character"},
             )
             if chosen_characters:
                 base_candidates = [cid for cid in base_candidates if cid != chosen_characters[-1]]
-        elif selector == "same_area_other":
-            base_candidates = self.condition_resolver.resolve_targets(
-                state,
-                owner_id=owner_id,
-                selector="same_area_other",
-            )
-        elif selector == "any_other_character":
-            base_candidates = [
-                cid for cid in self.condition_resolver.resolve_targets(
-                    state,
-                    owner_id=owner_id,
-                    selector="any_character",
-                )
-                if cid != owner_id
-            ]
         else:
             base_candidates = self.condition_resolver.resolve_targets(
                 state,
@@ -403,6 +434,56 @@ class IncidentResolver:
             result.append(candidate)
         return result
 
+    def _resolve_move_area_candidates(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        effect: Effect,
+        *,
+        chosen_characters: list[str],
+    ) -> list[str]:
+        mover_ids = self._resolve_move_target_characters(
+            state,
+            schedule,
+            effect,
+            chosen_characters=chosen_characters,
+        )
+        if len(mover_ids) != 1:
+            return []
+        all_areas = self.condition_resolver.resolve_targets(
+            state,
+            owner_id=schedule.perpetrator_id,
+            selector=effect.value,
+            alive_only=False,
+        )
+        return state.available_enterable_areas(mover_ids[0], all_areas)
+
+    def _resolve_move_target_characters(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        effect: Effect,
+        *,
+        chosen_characters: list[str],
+    ) -> list[str]:
+        if selector_is_self_ref(effect.target):
+            return [schedule.perpetrator_id]
+        literal = selector_literal_value(effect.target)
+        if literal in state.characters:
+            return [literal]
+        if selector_is_character_choice(effect.target):
+            resolved = self._resolve_effect_target(
+                state,
+                schedule,
+                effect,
+                target_selectors=deque(schedule.target_selectors),
+                character_choices=deque(schedule.target_character_ids),
+                chosen_characters=chosen_characters,
+            )
+            if resolved in state.characters:
+                return [resolved]
+        return []
+
     @staticmethod
     def _consume_matching_choice(
         choices: deque[str],
@@ -412,4 +493,43 @@ class IncidentResolver:
             choice = choices.popleft()
             if choice in candidates:
                 return choice
+        return None
+
+    @staticmethod
+    def _peek_matching_target_choice(
+        target_selectors: deque[Any],
+        *,
+        legacy_choices: deque[str],
+        candidates: list[str],
+        choice_kind: str,
+    ) -> str | None:
+        if target_selectors:
+            value = IncidentResolver._selector_choice_value(target_selectors[0], choice_kind)
+            if value in candidates:
+                return value
+            return None
+        return legacy_choices[0] if legacy_choices and legacy_choices[0] in candidates else None
+
+    @staticmethod
+    def _consume_matching_target_choice(
+        target_selectors: deque[Any],
+        *,
+        legacy_choices: deque[str],
+        candidates: list[str],
+        choice_kind: str,
+    ) -> str | None:
+        if target_selectors:
+            value = IncidentResolver._selector_choice_value(target_selectors[0], choice_kind)
+            if value in candidates:
+                target_selectors.popleft()
+                return value
+            return None
+        return IncidentResolver._consume_matching_choice(legacy_choices, candidates)
+
+    @staticmethod
+    def _selector_choice_value(raw: Any, choice_kind: str) -> str | None:
+        if choice_kind == "character":
+            return selector_character_id(raw)
+        if choice_kind == "area":
+            return selector_area_id(raw)
         return None
