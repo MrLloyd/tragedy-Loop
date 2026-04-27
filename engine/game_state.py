@@ -229,7 +229,7 @@ class GameState:
         for ch in self.characters.values():
             if ch.area != area:
                 continue
-            if alive_only and not ch.is_alive:
+            if alive_only and not ch.is_active():
                 continue
             if ch.is_removed:
                 continue
@@ -237,8 +237,7 @@ class GameState:
         return result
 
     def alive_characters(self) -> list[CharacterState]:
-        return [ch for ch in self.characters.values()
-                if ch.is_alive and not ch.is_removed]
+        return [ch for ch in self.characters.values() if ch.is_active()]
 
     def get_character(self, character_id: str) -> CharacterState:
         return self.characters[character_id]
@@ -270,7 +269,7 @@ class GameState:
 
     def move_character(self, character_id: str, destination: AreaId | str) -> bool:
         character = self.characters.get(character_id)
-        if character is None or not character.is_alive or character.is_removed:
+        if character is None or not character.is_active():
             return False
         target_area = AreaId(destination) if isinstance(destination, str) else destination
         if character.area == target_area:

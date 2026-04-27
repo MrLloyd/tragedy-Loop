@@ -133,16 +133,41 @@ class IncidentResolver:
         schedule: IncidentSchedule,
         incident_def: IncidentDef | None = None,
     ) -> bool:
-        if schedule.occurred:
+        if self._incident_is_blocked(state, schedule):
             return False
+
+        if self._incident_is_forced(state, schedule, incident_def):
+            return True
+
+        return self._passes_normal_incident_check(state, schedule, incident_def)
+
+    def _incident_is_blocked(self, state: GameState, schedule: IncidentSchedule) -> bool:
+        if schedule.occurred:
+            return True
 
         if schedule.perpetrator_id in state.suppressed_incident_perpetrators:
-            return False
+            return True
 
         perpetrator = state.characters.get(schedule.perpetrator_id)
-        if perpetrator is None or not perpetrator.is_alive:
-            return False
+        if perpetrator is None or not perpetrator.is_active():
+            return True
 
+        return False
+
+    def _incident_is_forced(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef | None,
+    ) -> bool:
+        return False
+
+    def _passes_normal_incident_check(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef | None = None,
+    ) -> bool:
         if self._incident_check_value(state, schedule) < self._incident_threshold(state, schedule, incident_def):
             return False
 

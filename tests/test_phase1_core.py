@@ -120,6 +120,42 @@ def test_game_state_available_enterable_areas_filters_forbidden_areas() -> None:
     ) == [AreaId.SCHOOL.value, AreaId.SHRINE.value]
 
 
+def test_character_state_activity_helpers_distinguish_removed_from_dead() -> None:
+    alive = CharacterState(
+        character_id="alive",
+        name="存活者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    corpse = CharacterState(
+        character_id="corpse",
+        name="尸体",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+        is_alive=False,
+    )
+    removed = CharacterState(
+        character_id="removed",
+        name="移除者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+        is_removed=True,
+    )
+
+    assert alive.is_active() is True
+    assert alive.is_dead() is False
+    assert corpse.is_active() is False
+    assert corpse.is_dead() is True
+    assert removed.is_active() is False
+    assert removed.is_dead() is False
+
+
 def test_atomic_resolver_move_character_respects_forbidden_areas() -> None:
     bus = EventBus()
     resolver = AtomicResolver(bus, DeathResolver())

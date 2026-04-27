@@ -35,7 +35,7 @@ class DeathResolver:
             character: 目标角色
             state: 游戏状态（可能需要全局信息）
         """
-        if not character.is_alive:
+        if not character.is_active():
             return DeathResult.PREVENTED_BY_GUARD  # 已经是尸体，忽略
 
 

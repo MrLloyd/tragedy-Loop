@@ -116,6 +116,12 @@ class CharacterState:
     derived_traits: set[Trait] = field(default_factory=set)
     suppressed_traits: set[Trait] = field(default_factory=set)
 
+    def is_active(self) -> bool:
+        return self.is_alive and not self.is_removed
+
+    def is_dead(self) -> bool:
+        return (not self.is_alive) and (not self.is_removed)
+
     def reset_for_new_loop(self) -> None:
         """轮回重置：复活、清指示物、回初始位置"""
         self.is_alive = True

@@ -94,7 +94,7 @@ def _validate_action_target(state: GameState, intent: PlacementIntent) -> None:
         ch = state.characters.get(intent.target_id)
         if ch is None:
             raise ValueError(f"target character {intent.target_id} not found")
-        if not ch.is_alive:
+        if not ch.is_active():
             raise ValueError(f"target character {intent.target_id} is not alive")
         if has_trait(state, intent.target_id, Trait.NO_ACTION_CARDS):
             raise ValueError(f"target character {intent.target_id} cannot receive action cards")
@@ -470,6 +470,16 @@ class PhaseHandler(ABC):
         owner_id: str,
         effect: Effect,
     ) -> EffectChoiceRequest | None:
+        if (
+            effect.condition is not None
+            and not selector_requires_choice(effect.target)
+            and not self.ability_resolver.evaluate_condition(
+                state,
+                effect.condition,
+                owner_id=owner_id,
+            )
+        ):
+            return None
         if selector_requires_choice(effect.target):
             choices = self.ability_resolver.resolve_targets(
                 state,
@@ -686,10 +696,16 @@ class PhaseHandler(ABC):
                 if schedule.occurred or schedule.incident_id in state.incidents_occurred_this_loop
             ]
         if choice == "choose_return_card":
+            leader_role = PlayerRole(f"protagonist_{state.leader_index}")
             return [
                 str(index)
                 for index, placement in enumerate(state.placed_cards)
-                if not placement.face_down
+                if (
+                    not placement.face_down
+                    and placement.owner == leader_role
+                    and placement.card.once_per_loop
+                    and placement.card.is_used_this_loop
+                )
             ]
         return None
 
@@ -1323,7 +1339,7 @@ class ActionResolveHandler(PhaseHandler):
     ) -> Optional[str]:
         """根据角色当前区域与牌类型，计算移动目标区域 ID"""
         ch = state.characters.get(char_id)
-        if ch is None or not ch.is_alive:
+        if ch is None or not ch.is_active():
             return None
         board = state.board
         if card_type in (CardType.MOVE_HORIZONTAL, CardType.MOVE_HORIZONTAL_P):
@@ -1353,13 +1369,17 @@ class PlaywrightAbilityHandler(PhaseHandler):
         )
 
     def _request_optional_playwright_ability(self, state: GameState) -> PhaseSignal:
-        candidates = self._filter_candidates_with_available_targets(
-            state,
-            self.ability_resolver.collect_abilities(
+        optional_candidates = [
+            *self.ability_resolver.collect_abilities(
                 state,
                 timing=AbilityTiming.PLAYWRIGHT_ABILITY,
                 ability_type=AbilityType.OPTIONAL,
             ),
+            *self.ability_resolver.collect_playwright_goodwill_abilities(state),
+        ]
+        candidates = self._filter_candidates_with_available_targets(
+            state,
+            optional_candidates,
         )
         if not candidates:
             return PhaseComplete()

@@ -475,7 +475,7 @@ class AtomicResolver:
                 cid = mutation.target_id
                 if cid in state.characters:
                     ch = state.characters[cid]
-                    if ch.is_alive:
+                    if ch.is_active():
                         result = self.death_resolver.process_death(ch, state)
                         mutation.details["death_result"] = result
 
@@ -736,7 +736,7 @@ class AtomicResolver:
                         sequential=candidate.ability.sequential,
                     ))
                 for owner in state.characters.values():
-                    if owner.character_id == cid or owner.is_removed or not owner.is_alive:
+                    if owner.character_id == cid or not owner.is_active():
                         continue
                     identity_def = state.identity_defs.get(owner.identity_id)
                     if identity_def is None:

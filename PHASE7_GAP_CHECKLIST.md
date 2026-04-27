@@ -1,6 +1,6 @@
 # Phase 7 测试与角色实现清单
 
-日期：2026-04-26
+日期：2026-04-27
 
 范围：`First Steps` / `Basic Tragedy X`
 
@@ -135,56 +135,70 @@
 
 1. 实现仅改变标记物的能力，按结构化能力直接接线；如果需要补充新的原语、选择器、条件或额外运行时机制，先请示后再继续。
 
-#### 已结构化且已实现
+#### 角色友好能力逐项状态
 
 - [x] 在“带友好能力文本”的 `34` 个角色中，`33` 个已迁入 `goodwill_abilities`；当前仅 `hermit` 仍未迁入结构化字段
-- [x] 已实现并完成回归的“仅改变标记物”友好能力：
-  - `idol` 友好1 / 友好2
-  - `soldier` 友好1
-  - `detective` 友好2
-  - `ojousama` 友好1
-  - `female_student` 友好1
-  - `media_person` 友好1 / 友好2
-  - `shrine_maiden` 友好1
-  - `nurse` 友好1
-  - `cult_leader` 友好1
-  - `teacher` 友好1
-  - `male_student` 友好1
-  - `deity` 友好2
-  - `transfer_student` 友好1
-- [x] 已实现并完成回归的“公开身份”友好能力：
-  - `office_worker` 友好1（固定 `self`）
-  - `temp_worker_alt` 友好1（公开 `self` + selector 选同区域角色）
-  - `outsider` 友好1（固定 `self`，第2轮后可用，不可拒绝）
-  - `shrine_maiden` 友好2
-  - `cult_leader` 友好2
-  - `teacher` 友好2
-  - `appraiser` 友好2（尸体 selector）
-- [x] 已实现并完成回归的“公开当事人”友好能力：
-  - `detective` 友好1（仅可选择“本轮已发生事件”；统一输出 `XXX事件的当事人是XXX`；UI 与公开身份一致弹框显示）
-  - `deity` 友好1（可选择任意事件；统一输出 `XXX事件的当事人是XXX`；UI 与公开身份一致弹框显示）
-- [x] 已实现并完成回归的“移动”友好能力：
-  - `phantom` 友好1（先用 selector 选择同区域角色，再选择任意版图；最终统一走 `GameState.move_character()`）
-  - `little_girl` 友好2（先用 selector 核实相邻版图候选；当前在学校时仅可选 `shrine / city`；最终统一走 `GameState.move_character()`）
-- [x] 已实现并完成回归的“死亡 / 复活”友好能力：
-  - `alien` 友好1（selector 选择同区域其他活体角色；最终统一走 `DeathResolver.process_death()`）
-  - `alien` 友好2（selector 仅可选择尸体；通过 `revive_character` effect 复活并恢复为存活状态）
-- [ ] 本批暂不计入：
-  - `higher_being` 友好1
-  - `doctor` 友好1
-  - 原因：不属于当前“仅改变标记物”批次
+- [x] 下面按 `ability_id` 记录能力状态；后续逐个能力开发时，默认以本表为认领入口
 
-#### 已结构化但未实现
+##### 已实现并纳入当前完成统计
 
-- [ ] 已完成 data-only 结构化录入、但运行时仍保持空 `effects` 的角色：
-  - `ai`、`streamer`、`servant`、`sister`
-  - `informant`、`copycat`
-- [ ] 说明
-  - 上述角色当前仅完成 `goodwill_abilities` 数据落位
-  - 旧文本 / goodwill 门槛 / 次数限制已迁入结构化字段
-  - 但实际运行时语义尚未接线，因此不能视为“已实现”
-- [ ] 单角色剩余缺口
-  - `appraiser`：友好1 仍待 `MOVE_TOKEN`；友好2（公开尸体身份）已实现并完成回归
+| 状态 | 能力 | 角色 / 友好能力 | 已接线语义 |
+|------|------|-----------------|------------|
+| [x] | `goodwill:idol:1` | `idol` 友好1 | 移除同区域另 1 名角色身上 1 枚不安 |
+| [x] | `goodwill:idol:2` | `idol` 友好2 | 往同区域另 1 名角色身上放置 1 枚友好 |
+| [x] | `goodwill:higher_being:1` | `higher_being` 友好1 | 往同区域任意 1 名角色身上放置 1 枚希望 / 绝望；带无视友好身份且友好达标时，剧作家阶段也可使用 |
+| [x] | `goodwill:soldier:1` | `soldier` 友好1 | 往同区域任意 1 名角色身上放置 2 枚不安 |
+| [x] | `goodwill:soldier:2` | `soldier` 友好2 | 本轮回中主人公不会死亡，走 `protagonist_protect` |
+| [x] | `goodwill:detective:1` | `detective` 友好1 | 公开 1 个本轮已发生事件的当事人，统一公告文本 |
+| [x] | `goodwill:detective:2` | `detective` 友好2 | 往同区域任意 1 名角色身上放置 1 枚护卫 |
+| [x] | `goodwill:doctor:1` | `doctor` 友好1 | 放置 / 移除同区域另外 1 名角色身上 1 枚不安；带无视友好身份且友好达标时，剧作家阶段也可使用 |
+| [x] | `goodwill:ojousama:1` | `ojousama` 友好1 | 位于学校 / 都市时，往同区域任意 1 名角色身上放置 1 枚友好 |
+| [x] | `goodwill:female_student:1` | `female_student` 友好1 | 移除同区域另外 1 名角色身上 1 枚不安 |
+| [x] | `goodwill:media_person:1` | `media_person` 友好1 | 往另外 1 名角色身上放置 1 枚不安 |
+| [x] | `goodwill:media_person:2` | `media_person` 友好2 | 往同区域任意角色或版图放置 1 枚密谋 |
+| [x] | `goodwill:little_girl:1` | `little_girl` 友好1 | 本轮回解除自身禁行区域 |
+| [x] | `goodwill:little_girl:2` | `little_girl` 友好2 | 移动至相邻版图，最终走 `GameState.move_character()` |
+| [x] | `goodwill:outsider:1` | `outsider` 友好1 | 第 2 轮后公开自身身份，且不可拒绝 |
+| [x] | `goodwill:shrine_maiden:1` | `shrine_maiden` 友好1 | 位于神社时，移除神社 1 枚密谋 |
+| [x] | `goodwill:shrine_maiden:2` | `shrine_maiden` 友好2 | 公开同区域任意 1 名角色身份 |
+| [x] | `goodwill:phantom:1` | `phantom` 友好1 | 选择同区域角色并移动至任意版图，最终走 `GameState.move_character()` |
+| [x] | `goodwill:alien:1` | `alien` 友好1 | 选择同区域其他活体角色，走 `DeathResolver.process_death()` |
+| [x] | `goodwill:alien:2` | `alien` 友好2 | 选择同区域尸体并复活 |
+| [x] | `goodwill:henchman:1` | `henchman` 友好1 | 成功发动后，本轮回中该角色为当事人的事件不会发生 |
+| [x] | `goodwill:nurse:1` | `nurse` 友好1 | 移除同区域不安达限度的其他角色身上 1 枚不安，且不可拒绝 |
+| [x] | `goodwill:cult_leader:1` | `cult_leader` 友好1 | 往不安达限度角色身上放置 1 枚友好 |
+| [x] | `goodwill:cult_leader:2` | `cult_leader` 友好2 | 公开同区域不安达限度的其他角色身份 |
+| [x] | `goodwill:class_rep:1` | `class_rep` 友好1 | 当前队长可回收自己已打出且已用的一轮回一次手牌 |
+| [x] | `goodwill:teacher:1` | `teacher` 友好1 | 放置 / 移除同区域 1 名学生身上 1 枚不安 |
+| [x] | `goodwill:teacher:2` | `teacher` 友好2 | 公开同区域 1 名学生身份 |
+| [x] | `goodwill:male_student:1` | `male_student` 友好1 | 移除同区域另外 1 名角色身上 1 枚不安 |
+| [x] | `goodwill:deity:1` | `deity` 友好1 | 公开 1 个事件的当事人，统一公告文本 |
+| [x] | `goodwill:deity:2` | `deity` 友好2 | 移除同区域任意角色或版图上 1 枚密谋 |
+| [x] | `goodwill:office_worker:1` | `office_worker` 友好1 | 公开自身身份 |
+| [x] | `goodwill:temp_worker_alt:1` | `temp_worker_alt` 友好1 | 公开自身身份，并选择同区域角色放置 2 枚友好 |
+| [x] | `goodwill:transfer_student:1` | `transfer_student` 友好1 | 将同区域其他角色身上 1 枚密谋替换为友好 |
+| [x] | `goodwill:appraiser:2` | `appraiser` 友好2 | 选择 1 具尸体并公开身份 |
+
+##### 已结构化接线，待后续专项复核
+
+| 状态 | 能力 | 角色 / 友好能力 | 需要复核的点 |
+|------|------|-----------------|--------------|
+| [ ] | `goodwill:doctor:2` | `doctor` 友好2 | `lift_forbidden_areas` 已接线；待专项回归确认住院患者禁行解除 |
+| [ ] | `goodwill:vip:1` | `vip` 友好1 | `reveal_identity` 已接线；待专项回归确认“领地中另外 1 名角色”范围 |
+| [ ] | `goodwill:scholar:1` | `scholar` 友好1 | 已确认 FS / BTX 无 EX 槽分支；带 EX 槽模组的 +1 / -1 分支待后续专项回归 |
+| [ ] | `goodwill:phantom:2` | `phantom` 友好2 | `remove_character` 已接线；待专项回归确认离场状态与后续行动牌路由。后续统一采用三态入口：`ACTIVE / DEAD / REMOVED`，并由 `CharacterState.life_state()` 派生 `is_active()` / `is_dead()` |
+
+##### 已结构化但未实现
+
+| 状态 | 能力 | 角色 / 友好能力 | 当前缺口 |
+|------|------|-----------------|----------|
+| [ ] | `goodwill:ai:1` | `ai` 友好1 | 仍为空 `effects`；需实现公开信息表事件代结算，且不标记事件已发生 |
+| [ ] | `goodwill:streamer:1` | `streamer` 友好1 | 仍为空 `effects`；需放置友好、移除不安，并处理 Ex 牌转移 |
+| [ ] | `goodwill:servant:1` | `servant` 友好1 | 仍为空 `effects`；需本轮追加特性适用对象 |
+| [ ] | `goodwill:sister:1` | `sister` 友好1 | 仍为空 `effects`；需让同区域成人无视友好数量使用 1 个友好能力，且不可拒绝 |
+| [ ] | `goodwill:informant:1` | `informant` 友好1 | 仍为空 `effects`；需声明规则 X 并公开未声明规则 X |
+| [ ] | `goodwill:copycat:1` | `copycat` 友好1 | 仍为空 `effects`；需公开场上与自身身份相同的全部角色名 |
+| [ ] | `goodwill:appraiser:1` | `appraiser` 友好1 | 仍为空 `effects`；需在同区域另外 2 名角色之间移动任意 1 枚指示物 |
 
 #### 未结构化
 

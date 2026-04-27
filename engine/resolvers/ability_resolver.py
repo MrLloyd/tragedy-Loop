@@ -31,6 +31,20 @@ class AbilityCandidate:
     identity_id: Optional[str] = None
 
 
+_PLAYWRIGHT_GOODWILL_ABILITY_IDS = frozenset(
+    {
+        "goodwill:higher_being:1",
+        "goodwill:doctor:1",
+    }
+)
+_PLAYWRIGHT_GOODWILL_TRAITS = frozenset(
+    {
+        Trait.IGNORE_GOODWILL,
+        Trait.MUST_IGNORE_GOODWILL,
+    }
+)
+
+
 class AbilityResolver:
     """
     能力层基础框架。
@@ -55,7 +69,7 @@ class AbilityResolver:
 
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
-            if alive_only and (not ch.is_alive or ch.is_removed):
+            if alive_only and not ch.is_active():
                 continue
 
             if ch.goodwill_abilities:
@@ -116,6 +130,30 @@ class AbilityResolver:
                 result.append(candidate)
         return result
 
+    def collect_playwright_goodwill_abilities(
+        self,
+        state: GameState,
+        *,
+        ability_type: AbilityType | None = AbilityType.OPTIONAL,
+        alive_only: bool = True,
+    ) -> list[AbilityCandidate]:
+        """剧作家阶段可额外声明的友好能力入口。"""
+        if ability_type is not None and ability_type != AbilityType.OPTIONAL:
+            return []
+
+        result: list[AbilityCandidate] = []
+        for candidate in self.collect_goodwill_abilities(
+            state,
+            ability_type=AbilityType.OPTIONAL,
+            alive_only=alive_only,
+        ):
+            if candidate.ability.ability_id not in _PLAYWRIGHT_GOODWILL_ABILITY_IDS:
+                continue
+            if not self._has_playwright_goodwill_trait(state, candidate.source_id):
+                continue
+            result.append(candidate)
+        return result
+
     def _collect_identity_abilities(
         self,
         state: GameState,
@@ -127,7 +165,7 @@ class AbilityResolver:
         settle_persistent_effects(state)
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
-            if alive_only and (not ch.is_alive or ch.is_removed):
+            if alive_only and not ch.is_active():
                 continue
 
             identity_def = state.identity_defs.get(ch.identity_id)
@@ -213,7 +251,7 @@ class AbilityResolver:
         settle_persistent_effects(state)
         result: list[AbilityCandidate] = []
         for ch in state.characters.values():
-            if alive_only and (not ch.is_alive or ch.is_removed):
+            if alive_only and not ch.is_active():
                 continue
 
             identity_def = state.identity_defs.get(ch.identity_id)
@@ -299,19 +337,24 @@ class AbilityResolver:
         owner_id: str,
         selector: Any,
         condition_target: str | None = None,
+        other_id: str | None = None,
         alive_only: bool = True,
     ) -> list[str]:
         """目标解析统一入口。"""
         spec = parse_target_selector(selector)
         owner = state.characters.get(owner_id)
         if spec.ref == "self":
-            return [owner_id] if owner is not None else []
+            if owner is None or owner.is_removed:
+                return []
+            return [owner_id]
         if spec.ref == "none":
             return []
         if spec.ref == "condition_target":
-            return [condition_target] if condition_target else []
+            return self._resolve_ref_target(state, condition_target)
         if spec.ref == "literal":
-            return [spec.value] if spec.value else []
+            return self._resolve_ref_target(state, spec.value)
+        if spec.ref == "other":
+            return self._resolve_ref_target(state, other_id)
         if spec.ref == "last_loop_goodwill_characters":
             last_snapshot = state.get_last_loop_snapshot()
             if last_snapshot is None:
@@ -363,6 +406,15 @@ class AbilityResolver:
                 ),
             ]
         return []
+
+    @staticmethod
+    def _resolve_ref_target(state: GameState, target_id: str | None) -> list[str]:
+        if not target_id:
+            return []
+        character = state.characters.get(target_id)
+        if character is not None and character.is_removed:
+            return []
+        return [target_id]
 
     def _resolve_character_targets(
         self,
@@ -466,9 +518,9 @@ class AbilityResolver:
             return False
 
         if spec.subject == "dead_character":
-            if character.is_alive:
+            if not character.is_dead():
                 return False
-        elif alive_only and not character.is_alive:
+        elif alive_only and not character.is_active():
             return False
 
         if spec.filters.identity_id is not None and character.identity_id != spec.filters.identity_id:
@@ -499,6 +551,10 @@ class AbilityResolver:
             Trait.MUST_IGNORE_GOODWILL in traits
             or Trait.IGNORE_GOODWILL in traits
         )
+
+    def _has_playwright_goodwill_trait(self, state: GameState, character_id: str) -> bool:
+        traits = self.active_traits(state, character_id)
+        return bool(traits & _PLAYWRIGHT_GOODWILL_TRAITS)
 
     def evaluate_condition(
         self,
@@ -541,7 +597,7 @@ class AbilityResolver:
                 other_id=other_id,
             )
             target = state.characters.get(target_id)
-            return bool(target is not None and target.is_alive and not target.is_removed)
+            return bool(target is not None and target.is_active())
 
         if cond_type == "character_dead":
             target_id = self._resolve_target_ref(
@@ -551,7 +607,7 @@ class AbilityResolver:
                 other_id=other_id,
             )
             target = state.characters.get(target_id)
-            return bool(target is not None and (not target.is_alive or target.is_removed))
+            return bool(target is not None and target.is_dead())
 
         if cond_type == "identity_is":
             target_id = self._resolve_target_ref(

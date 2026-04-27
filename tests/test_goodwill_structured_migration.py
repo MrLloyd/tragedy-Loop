@@ -3,15 +3,18 @@ from __future__ import annotations
 from engine.event_bus import EventBus
 from engine.game_state import GameState
 from engine.models.ability import Ability
+from engine.models.cards import CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, PlayerRole, TokenType, Trait
+from engine.models.identity import IdentityDef
 from engine.models.script import CharacterSetup, IncidentSchedule
-from engine.phases.phase_base import PhaseComplete, ProtagonistAbilityHandler, WaitForInput
+from engine.phases.phase_base import IncidentHandler, PhaseComplete, PlaywrightAbilityHandler, ProtagonistAbilityHandler, WaitForInput
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
 from engine.rules.character_loader import instantiate_character_state, load_character_defs
+from engine.rules.module_loader import apply_loaded_module, load_module
 
 _CHARACTER_DEFS = load_character_defs()
 
@@ -39,6 +42,16 @@ def _choose_goodwill(signal: WaitForInput, ability_id: str):
     if isinstance(response, WaitForInput) and response.input_type == "respond_goodwill_ability":
         return response.callback("allow")
     return response
+
+
+def _choose_playwright_ability(signal: WaitForInput, ability_id: str):
+    choice = next(
+        option
+        for option in signal.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == ability_id
+    )
+    return signal.callback(choice)
 
 
 def test_resolve_targets_supports_extended_structured_selectors() -> None:
@@ -525,6 +538,224 @@ def test_generic_token_choice_survives_auto_target_resolution() -> None:
     assert isinstance(result, PhaseComplete)
     assert state.characters["higher_being"].tokens.get(TokenType.HOPE) == 1
     assert state.characters["higher_being"].tokens.get(TokenType.DESPAIR) == 0
+
+
+def test_playwright_can_use_higher_being_goodwill_when_ignore_goodwill() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, atomic)
+    state = GameState()
+    state.identity_defs["ignore_identity"] = IdentityDef(
+        identity_id="ignore_identity",
+        name="无视友好身份",
+        module="test",
+        traits={Trait.IGNORE_GOODWILL},
+    )
+    state.characters["higher_being"] = _instantiate("higher_being", identity_id="ignore_identity")
+    state.characters["higher_being"].tokens.add(TokenType.GOODWILL, 2)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_playwright_ability"
+
+    token_wait = _choose_playwright_ability(signal, "goodwill:higher_being:1")
+    assert isinstance(token_wait, WaitForInput)
+    assert set(token_wait.options) == {"hope", "despair"}
+
+    result = token_wait.callback("despair")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["higher_being"].tokens.get(TokenType.DESPAIR) == 1
+
+
+def test_playwright_can_use_doctor_goodwill_when_must_ignore_goodwill() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, atomic)
+    state = GameState()
+    state.identity_defs["must_ignore_identity"] = IdentityDef(
+        identity_id="must_ignore_identity",
+        name="必定无视友好身份",
+        module="test",
+        traits={Trait.MUST_IGNORE_GOODWILL},
+    )
+    state.characters["doctor"] = _instantiate("doctor", identity_id="must_ignore_identity")
+    state.characters["doctor"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=state.characters["doctor"].area,
+        initial_area=state.characters["doctor"].area,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["target"].tokens.add(TokenType.PARANOIA, 1)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_playwright_ability"
+
+    mode_wait = _choose_playwright_ability(signal, "goodwill:doctor:1")
+    assert isinstance(mode_wait, WaitForInput)
+    assert set(mode_wait.options) == {"place", "remove"}
+
+    result = mode_wait.callback("remove")
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert state.characters["target"].tokens.get(TokenType.PARANOIA) == 0
+
+
+def test_scholar_structured_goodwill_skips_ex_choice_without_ex_gauge() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    state.characters["scholar"] = _instantiate("scholar")
+    state.characters["scholar"].tokens.add(TokenType.GOODWILL, 3)
+    state.characters["scholar"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["scholar"].tokens.add(TokenType.INTRIGUE, 1)
+    state.ex_gauge = 0
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:scholar:1")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["scholar"].tokens.total() == 0
+    assert state.ex_gauge == 0
+
+
+def test_henchman_structured_goodwill_suppresses_only_own_incident_for_current_loop() -> None:
+    bus, atomic = _resolver_bundle()
+    ability_handler = ProtagonistAbilityHandler(bus, atomic)
+    incident_handler = IncidentHandler(bus, atomic)
+    state = GameState()
+    state.current_day = 1
+    state.characters["henchman"] = _instantiate("henchman")
+    state.characters["henchman"].tokens.add(TokenType.GOODWILL, 3)
+    state.characters["henchman"].tokens.add(
+        TokenType.PARANOIA,
+        state.characters["henchman"].paranoia_limit,
+    )
+    state.characters["other"] = CharacterState(
+        character_id="other",
+        name="其他角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=1,
+    )
+    state.characters["other"].tokens.add(TokenType.PARANOIA, 1)
+    state.script.incidents = [
+        IncidentSchedule("henchman_incident", day=1, perpetrator_id="henchman"),
+        IncidentSchedule("other_incident", day=1, perpetrator_id="other"),
+    ]
+
+    signal = ability_handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:henchman:1")
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert "henchman" in state.suppressed_incident_perpetrators
+
+    incident_signal = incident_handler.execute(state)
+    assert isinstance(incident_signal, PhaseComplete)
+    assert state.script.incidents[0].occurred is False
+    assert state.script.incidents[1].occurred is True
+    assert state.incidents_occurred_this_loop == ["other_incident"]
+
+
+def test_henchman_structured_goodwill_refuse_does_not_suppress_incident() -> None:
+    bus, atomic = _resolver_bundle()
+    ability_handler = ProtagonistAbilityHandler(bus, atomic)
+    incident_handler = IncidentHandler(bus, atomic)
+    state = GameState()
+    state.current_day = 1
+    state.characters["henchman"] = _instantiate("henchman")
+    state.characters["henchman"].tokens.add(TokenType.GOODWILL, 3)
+    state.characters["henchman"].tokens.add(
+        TokenType.PARANOIA,
+        state.characters["henchman"].paranoia_limit,
+    )
+    state.script.incidents = [
+        IncidentSchedule("henchman_incident", day=1, perpetrator_id="henchman"),
+    ]
+
+    signal = ability_handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    choice = next(
+        option
+        for option in signal.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == "goodwill:henchman:1"
+    )
+    refuse_wait = signal.callback(choice)
+    assert isinstance(refuse_wait, WaitForInput)
+    assert refuse_wait.input_type == "respond_goodwill_ability"
+
+    result = refuse_wait.callback("refuse")
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert "henchman" not in state.suppressed_incident_perpetrators
+
+    incident_signal = incident_handler.execute(state)
+    assert isinstance(incident_signal, PhaseComplete)
+    assert state.script.incidents[0].occurred is True
+
+
+def test_class_rep_structured_goodwill_returns_only_current_leader_once_per_loop_card() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.leader_index = 1
+    state.init_protagonist_hands()
+    state.characters["class_rep"] = _instantiate("class_rep")
+    state.characters["class_rep"].tokens.add(TokenType.GOODWILL, 2)
+
+    leader_once = state.protagonist_hands[1].cards[1]
+    leader_once.is_used_this_loop = True
+    leader_once_second = state.protagonist_hands[1].cards[3]
+    leader_once_second.is_used_this_loop = True
+    other_once = state.protagonist_hands[0].cards[1]
+    other_once.is_used_this_loop = True
+    mastermind_once = state.mastermind_hand.cards[0]
+    mastermind_once.is_used_this_loop = True
+    leader_hidden_once = state.protagonist_hands[1].cards[7]
+    leader_hidden_once.is_used_this_loop = True
+    leader_non_once = state.protagonist_hands[1].cards[0]
+
+    state.placed_cards = [
+        CardPlacement(leader_once, PlayerRole.PROTAGONIST_1, "board", AreaId.CITY.value, face_down=False),
+        CardPlacement(leader_once_second, PlayerRole.PROTAGONIST_1, "board", AreaId.SCHOOL.value, face_down=False),
+        CardPlacement(other_once, PlayerRole.PROTAGONIST_0, "board", AreaId.SCHOOL.value, face_down=False),
+        CardPlacement(mastermind_once, PlayerRole.MASTERMIND, "board", AreaId.HOSPITAL.value, face_down=False),
+        CardPlacement(leader_non_once, PlayerRole.PROTAGONIST_1, "board", AreaId.SHRINE.value, face_down=False),
+        CardPlacement(leader_hidden_once, PlayerRole.PROTAGONIST_1, "board", AreaId.CITY.value, face_down=True),
+    ]
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    card_wait = _choose_goodwill(signal, "goodwill:class_rep:1")
+    assert isinstance(card_wait, WaitForInput)
+    assert card_wait.options == ["0", "1"]
+
+    result = card_wait.callback("0")
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert leader_once.is_used_this_loop is False
+    assert leader_once in state.protagonist_hands[1].get_available()
+    assert all(placement.card is not leader_once for placement in state.placed_cards)
+
+
+def test_class_rep_structured_goodwill_is_hidden_without_returnable_card() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.leader_index = 1
+    state.init_protagonist_hands()
+    state.characters["class_rep"] = _instantiate("class_rep")
+    state.characters["class_rep"].tokens.add(TokenType.GOODWILL, 2)
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
 
 
 def test_media_person_structured_goodwill_can_target_board() -> None:

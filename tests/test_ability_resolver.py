@@ -204,6 +204,55 @@ def test_condition_targets_support_structured_selector_refs_and_fixed_area() -> 
     ) is True
 
 
+def test_character_alive_and_dead_conditions_use_character_state_methods() -> None:
+    state = _build_state_with_module()
+    state.characters["alive"] = CharacterState(
+        character_id="alive",
+        name="存活者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+    state.characters["corpse"] = CharacterState(
+        character_id="corpse",
+        name="尸体",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="friend",
+        original_identity_id="friend",
+        is_alive=False,
+    )
+    state.characters["removed"] = CharacterState(
+        character_id="removed",
+        name="移除者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="friend",
+        original_identity_id="friend",
+        is_removed=True,
+    )
+
+    resolver = AbilityResolver()
+
+    assert resolver.evaluate_condition(
+        state,
+        Condition("character_alive", {"target": "alive"}),
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition("character_dead", {"target": "corpse"}),
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition("character_alive", {"target": "removed"}),
+    ) is False
+    assert resolver.evaluate_condition(
+        state,
+        Condition("character_dead", {"target": "removed"}),
+    ) is False
+
+
 def test_has_trait_condition_reads_runtime_trait_layer() -> None:
     state = _build_state_with_module()
     state.characters["killer"] = CharacterState(
@@ -277,6 +326,86 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
     state.ability_runtime.usages_this_loop[resolver.ability_usage_key(abilities[0])] = 1
     abilities = resolver.collect_goodwill_abilities(state)
     assert len(abilities) == 0
+
+
+def _playwright_goodwill_state(
+    *,
+    character_id: str = "higher_being",
+    ability_id: str = "goodwill:higher_being:1",
+    traits: set[Trait],
+    goodwill: int,
+    requirement: int = 2,
+) -> GameState:
+    state = GameState()
+    state.identity_defs["test_identity"] = IdentityDef(
+        identity_id="test_identity",
+        name="测试身份",
+        module="test",
+        traits=traits,
+    )
+    state.characters[character_id] = CharacterState(
+        character_id=character_id,
+        name="测试角色",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="test_identity",
+        original_identity_id="test_identity",
+        goodwill_abilities=[
+            Ability(
+                ability_id=ability_id,
+                name="测试友好能力",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                goodwill_requirement=requirement,
+                can_be_refused=True,
+            )
+        ],
+    )
+    state.characters[character_id].tokens.add(TokenType.GOODWILL, goodwill)
+    return state
+
+
+def test_collect_playwright_goodwill_abilities_requires_whitelist_trait_and_goodwill() -> None:
+    resolver = AbilityResolver()
+
+    state = _playwright_goodwill_state(
+        traits={Trait.IGNORE_GOODWILL},
+        goodwill=2,
+    )
+    abilities = resolver.collect_playwright_goodwill_abilities(state)
+    assert [candidate.ability.ability_id for candidate in abilities] == ["goodwill:higher_being:1"]
+
+    normal_state = _playwright_goodwill_state(
+        traits=set(),
+        goodwill=2,
+    )
+    assert resolver.collect_playwright_goodwill_abilities(normal_state) == []
+
+    low_goodwill_state = _playwright_goodwill_state(
+        traits={Trait.IGNORE_GOODWILL},
+        goodwill=1,
+    )
+    assert resolver.collect_playwright_goodwill_abilities(low_goodwill_state) == []
+
+    non_whitelist_state = _playwright_goodwill_state(
+        ability_id="goodwill:media_person:1",
+        traits={Trait.IGNORE_GOODWILL},
+        goodwill=2,
+    )
+    assert resolver.collect_playwright_goodwill_abilities(non_whitelist_state) == []
+
+
+def test_collect_playwright_goodwill_abilities_accepts_must_ignore_goodwill() -> None:
+    state = _playwright_goodwill_state(
+        character_id="doctor",
+        ability_id="goodwill:doctor:1",
+        traits={Trait.MUST_IGNORE_GOODWILL},
+        goodwill=2,
+    )
+
+    abilities = AbilityResolver().collect_playwright_goodwill_abilities(state)
+
+    assert [candidate.ability.ability_id for candidate in abilities] == ["goodwill:doctor:1"]
 
 
 def test_legacy_goodwill_runtime_fallback_emits_selector_targets() -> None:
@@ -721,3 +850,84 @@ def test_resolve_targets_basic_selectors() -> None:
         condition_target="b",
     )
     assert condition_target == ["b"]
+
+
+def test_resolve_targets_direct_refs_exclude_removed_but_do_not_apply_alive_only() -> None:
+    state = _build_state_with_module()
+    state.characters["owner"] = CharacterState(
+        character_id="owner",
+        name="拥有者",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["removed_owner"] = CharacterState(
+        character_id="removed_owner",
+        name="被移除的拥有者",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+        is_removed=True,
+    )
+    state.characters["corpse"] = CharacterState(
+        character_id="corpse",
+        name="尸体",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+        is_alive=False,
+    )
+    state.characters["removed_target"] = CharacterState(
+        character_id="removed_target",
+        name="被移除目标",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        is_removed=True,
+    )
+
+    resolver = AbilityResolver()
+
+    assert resolver.resolve_targets(
+        state,
+        owner_id="removed_owner",
+        selector={"ref": "self"},
+    ) == []
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "other"},
+        other_id="removed_target",
+    ) == []
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "condition_target"},
+        condition_target="removed_target",
+    ) == []
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "literal", "value": "removed_target"},
+    ) == []
+
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "other"},
+        other_id="corpse",
+    ) == ["corpse"]
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "literal", "value": "corpse"},
+    ) == ["corpse"]
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"ref": "literal", "value": AreaId.SCHOOL.value},
+    ) == [AreaId.SCHOOL.value]

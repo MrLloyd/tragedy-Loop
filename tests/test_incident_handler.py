@@ -99,6 +99,45 @@ def test_incident_does_not_trigger_when_perpetrator_dead() -> None:
     assert not state.script.incidents[0].occurred
 
 
+def test_suppressed_incident_is_blocked_before_forced_occurrence(monkeypatch) -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = _make_state_with_incident(paranoia=0, paranoia_limit=2)
+    state.suppressed_incident_perpetrators.add("perp")
+    monkeypatch.setattr(resolver, "_incident_is_forced", lambda *_args, **_kwargs: True)
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is False
+    assert state.script.incidents[0].occurred is False
+    assert state.incidents_occurred_this_loop == []
+
+
+def test_forced_incident_can_bypass_normal_threshold(monkeypatch) -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = _make_state_with_incident(paranoia=0, paranoia_limit=2)
+    monkeypatch.setattr(resolver, "_incident_is_forced", lambda *_args, **_kwargs: True)
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.script.incidents[0].occurred is True
+    assert state.incidents_occurred_this_loop == ["test_incident"]
+
+
+def test_forced_incident_does_not_bypass_dead_perpetrator_blocker(monkeypatch) -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = _make_state_with_incident(paranoia=0, paranoia_limit=2, is_alive=False)
+    monkeypatch.setattr(resolver, "_incident_is_forced", lambda *_args, **_kwargs: True)
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is False
+    assert state.script.incidents[0].occurred is False
+
+
 # ---------------------------------------------------------------------------
 # 测试 3：满足条件，触发标记与事件发出
 # ---------------------------------------------------------------------------
