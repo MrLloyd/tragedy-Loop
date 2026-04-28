@@ -79,6 +79,8 @@ class NewGameScreenModel:
             identity_id=identity_id if identity_id is not None else original.identity_id,
             initial_area_id=original.initial_area_id,
             territory_area_id=original.territory_area_id,
+            entry_loop=original.entry_loop,
+            entry_day=original.entry_day,
         )
         self._draft = replace(self._draft, characters=characters)
 
@@ -90,6 +92,8 @@ class NewGameScreenModel:
             identity_id=original.identity_id,
             initial_area_id=initial_area_id,
             territory_area_id=original.territory_area_id,
+            entry_loop=original.entry_loop,
+            entry_day=original.entry_day,
         )
         self._draft = replace(self._draft, characters=characters)
 
@@ -101,6 +105,34 @@ class NewGameScreenModel:
             identity_id=original.identity_id,
             initial_area_id=original.initial_area_id,
             territory_area_id=territory_area_id,
+            entry_loop=original.entry_loop,
+            entry_day=original.entry_day,
+        )
+        self._draft = replace(self._draft, characters=characters)
+
+    def update_character_entry_loop(self, index: int, entry_loop: int) -> None:
+        characters = list(self._draft.characters)
+        original = characters[index]
+        characters[index] = CharacterDraft(
+            character_id=original.character_id,
+            identity_id=original.identity_id,
+            initial_area_id=original.initial_area_id,
+            territory_area_id=original.territory_area_id,
+            entry_loop=entry_loop,
+            entry_day=original.entry_day,
+        )
+        self._draft = replace(self._draft, characters=characters)
+
+    def update_character_entry_day(self, index: int, entry_day: int) -> None:
+        characters = list(self._draft.characters)
+        original = characters[index]
+        characters[index] = CharacterDraft(
+            character_id=original.character_id,
+            identity_id=original.identity_id,
+            initial_area_id=original.initial_area_id,
+            territory_area_id=original.territory_area_id,
+            entry_loop=original.entry_loop,
+            entry_day=entry_day,
         )
         self._draft = replace(self._draft, characters=characters)
 
@@ -177,6 +209,14 @@ class NewGameScreenModel:
         raw = raw_specs.get(character_id, {})
         return dict(raw) if isinstance(raw, dict) else {}
 
+    def character_can_set_entry_loop(self, character_id: str) -> bool:
+        allowed = self.available_ids("entry_loop_character_ids")
+        return character_id in allowed
+
+    def character_can_set_entry_day(self, character_id: str) -> bool:
+        allowed = self.available_ids("entry_day_character_ids")
+        return character_id in allowed
+
     def character_initial_area_options(self, character_id: str) -> tuple[list[tuple[str, str]], bool]:
         spec = self.character_initial_area_spec(character_id)
         mode = str(spec.get("mode", "fixed") or "fixed")
@@ -237,7 +277,7 @@ else:
         def __init__(self, model: NewGameScreenModel | None = None, parent: QWidget | None = None) -> None:
             super().__init__(parent)
             self.model = model or NewGameScreenModel()
-            self._character_inputs: list[tuple[QComboBox, QComboBox, QComboBox, QComboBox]] = []
+            self._character_inputs: list[tuple[QComboBox, QComboBox, QComboBox, QComboBox, QSpinBox, QSpinBox]] = []
             self._incident_inputs: list[tuple[QLabel, QComboBox, QComboBox]] = []
             self._rule_x_inputs: list[QComboBox] = []
 
@@ -317,7 +357,7 @@ else:
                     if self._combo_value(combo)
                 ],
             )
-            for index, (character_input, identity_input, initial_area_input, territory_area_input) in enumerate(self._character_inputs):
+            for index, (character_input, identity_input, initial_area_input, territory_area_input, entry_loop_input, entry_day_input) in enumerate(self._character_inputs):
                 self.model.update_character(
                     index,
                     character_id=self._combo_value(character_input),
@@ -331,6 +371,15 @@ else:
                     index,
                     territory_area_id=self._combo_value(territory_area_input),
                 )
+                character_id = self._combo_value(character_input)
+                if self.model.character_can_set_entry_loop(character_id):
+                    self.model.update_character_entry_loop(index, entry_loop_input.value())
+                else:
+                    self.model.update_character_entry_loop(index, 0)
+                if self.model.character_can_set_entry_day(character_id):
+                    self.model.update_character_entry_day(index, entry_day_input.value())
+                else:
+                    self.model.update_character_entry_day(index, 0)
             active_incident_inputs = self._incident_inputs[:self.model.draft.days_per_loop]
             for index, (_, incident_input, perpetrator_input) in enumerate(active_incident_inputs):
                 self.model.update_incident(
@@ -425,13 +474,14 @@ else:
                 (identity_id, identity_option_label(identity_id))
                 for identity_id in identity_ids
             ]
-            for index, (character_input, identity_input, _initial_area_input, _territory_area_input) in enumerate(self._character_inputs):
+            for index, (character_input, identity_input, _initial_area_input, _territory_area_input, _entry_loop_input, _entry_day_input) in enumerate(self._character_inputs):
                 current_character = draft.characters[index].character_id
                 current_identity = draft.characters[index].identity_id
                 self._set_combo_items(character_input, character_options, current_character)
                 self._set_combo_items(identity_input, identity_options, current_identity)
             self._refresh_character_initial_area_inputs()
             self._refresh_character_territory_area_inputs()
+            self._refresh_character_entry_inputs()
 
             incident_options = [
                 ("", "无事件"),
@@ -462,19 +512,39 @@ else:
             self.characters_grid.addWidget(QLabel("身份"), 0, 1)
             self.characters_grid.addWidget(QLabel("初始区域"), 0, 2)
             self.characters_grid.addWidget(QLabel("领地"), 0, 3)
+            self.characters_grid.addWidget(QLabel("登场轮回"), 0, 4)
+            self.characters_grid.addWidget(QLabel("登场天数"), 0, 5)
             for index, _item in enumerate(self.model.draft.characters, start=1):
                 character_input = QComboBox()
                 identity_input = QComboBox()
                 initial_area_input = QComboBox()
                 territory_area_input = QComboBox()
+                entry_loop_input = QSpinBox()
+                entry_loop_input.setMinimum(0)
+                entry_loop_input.setMaximum(999)
+                entry_day_input = QSpinBox()
+                entry_day_input.setMinimum(0)
+                entry_day_input.setMaximum(999)
                 character_input.currentIndexChanged.connect(self._refresh_perpetrator_options)
                 character_input.currentIndexChanged.connect(self._refresh_character_initial_area_inputs)
                 character_input.currentIndexChanged.connect(self._refresh_character_territory_area_inputs)
+                character_input.currentIndexChanged.connect(self._refresh_character_entry_inputs)
                 self.characters_grid.addWidget(character_input, index, 0)
                 self.characters_grid.addWidget(identity_input, index, 1)
                 self.characters_grid.addWidget(initial_area_input, index, 2)
                 self.characters_grid.addWidget(territory_area_input, index, 3)
-                self._character_inputs.append((character_input, identity_input, initial_area_input, territory_area_input))
+                self.characters_grid.addWidget(entry_loop_input, index, 4)
+                self.characters_grid.addWidget(entry_day_input, index, 5)
+                self._character_inputs.append(
+                    (
+                        character_input,
+                        identity_input,
+                        initial_area_input,
+                        territory_area_input,
+                        entry_loop_input,
+                        entry_day_input,
+                    )
+                )
 
         def _focus_character_row(self, index: int) -> None:
             if not self._character_inputs:
@@ -545,7 +615,7 @@ else:
         def _refresh_perpetrator_options(self) -> None:
             selected_characters = [
                 self._combo_value(character_input)
-                for character_input, _, _, _ in self._character_inputs
+                for character_input, _, _, _, _, _ in self._character_inputs
                 if self._combo_value(character_input)
             ]
             if not selected_characters:
@@ -564,7 +634,7 @@ else:
                 self._set_combo_items(perpetrator_input, options, current)
 
         def _refresh_character_initial_area_inputs(self) -> None:
-            for index, (character_input, _, initial_area_input, _) in enumerate(self._character_inputs):
+            for index, (character_input, _, initial_area_input, _, _, _) in enumerate(self._character_inputs):
                 current_character = self._combo_value(character_input)
                 current_initial_area = self._combo_value(initial_area_input)
                 if not current_initial_area and index < len(self.model.draft.characters):
@@ -574,7 +644,7 @@ else:
                 initial_area_input.setEnabled(enabled)
 
         def _refresh_character_territory_area_inputs(self) -> None:
-            for index, (character_input, _, _, territory_area_input) in enumerate(self._character_inputs):
+            for index, (character_input, _, _, territory_area_input, _, _) in enumerate(self._character_inputs):
                 current_character = self._combo_value(character_input)
                 current_territory_area = self._combo_value(territory_area_input)
                 if not current_territory_area and index < len(self.model.draft.characters):
@@ -582,6 +652,24 @@ else:
                 area_options, enabled = self.model.character_territory_area_options(current_character)
                 self._set_combo_items(territory_area_input, area_options, current_territory_area)
                 territory_area_input.setEnabled(enabled)
+
+        def _refresh_character_entry_inputs(self) -> None:
+            for index, (character_input, _, _, _, entry_loop_input, entry_day_input) in enumerate(self._character_inputs):
+                current_character = self._combo_value(character_input)
+                current_entry_loop = self.model.draft.characters[index].entry_loop
+                current_entry_day = self.model.draft.characters[index].entry_day
+                entry_loop_enabled = self.model.character_can_set_entry_loop(current_character)
+                entry_day_enabled = self.model.character_can_set_entry_day(current_character)
+
+                entry_loop_input.blockSignals(True)
+                entry_loop_input.setValue(current_entry_loop)
+                entry_loop_input.setEnabled(entry_loop_enabled)
+                entry_loop_input.blockSignals(False)
+
+                entry_day_input.blockSignals(True)
+                entry_day_input.setValue(current_entry_day)
+                entry_day_input.setEnabled(entry_day_enabled)
+                entry_day_input.blockSignals(False)
 
         @staticmethod
         def _combo_value(combo: QComboBox) -> str:

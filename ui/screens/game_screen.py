@@ -128,6 +128,8 @@ class GameScreenModel:
             if option == "pass":
                 return "放弃 / 结束声明"
             return display_target_name(option)
+        if isinstance(option, dict):
+            return display_target_name(option)
         card_type = getattr(option, "card_type", None)
         if card_type is not None:
             return card_name(card_type.value)

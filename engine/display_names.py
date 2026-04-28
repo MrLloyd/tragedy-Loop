@@ -88,10 +88,15 @@ _WAIT_TYPE_NAMES = {
     "choose_incident_character": "选择事件角色目标",
     "choose_incident_area": "选择事件版图目标",
     "choose_incident_token_type": "选择事件指示物类型",
+    "choose_public_incident": "选择公开事件",
     "choose_action_resolve_ability": "选择行动结算能力",
     "choose_playwright_ability": "选择剧作家能力",
     "choose_goodwill_ability": "选择友好能力",
     "respond_goodwill_ability": "回应友好能力",
+    "choose_rule_x_declaration": "选择规则 X",
+    "choose_rule_x_reveal": "公开规则 X",
+    "choose_ability_token_type": "选择指示物类型",
+    "choose_ability_token_move": "选择指示物移动",
     "choose_turn_end_ability": "选择回合结束能力",
     "final_guess": "最终决战选择",
 }
@@ -255,6 +260,10 @@ def format_tokens(tokens: dict[str, int]) -> str:
 
 def display_target_name(value: Any) -> str:
     if not isinstance(value, str):
+        if isinstance(value, dict) and value.get("kind") == "public_incident":
+            name = str(value.get("name", "?"))
+            day = value.get("day", "?")
+            return f"第 {day} 天：{name}"
         character_id = selector_character_id(value)
         if character_id is not None:
             return character_name(character_id)
@@ -266,6 +275,8 @@ def display_target_name(value: Any) -> str:
         return area_name(value)
     if value in _character_names():
         return character_name(value)
+    if value in _module_catalog()["rules"]:
+        return rule_name(value)
     if value in _module_catalog()["identities"]:
         return identity_name(value)
     if value in _module_catalog()["incidents"]:
@@ -306,6 +317,16 @@ def format_public_info(public_info: dict[str, Any]) -> str:
     if isinstance(special_rules, list):
         lines.append(
             "特殊规则：" + ("；".join(str(item) for item in special_rules) if special_rules else "无")
+        )
+
+    if "revealed_rule_x_ids" in public_info:
+        revealed_rule_x_ids = public_info.get("revealed_rule_x_ids", [])
+        lines.append(
+            "已公开规则 X：" + (
+                "；".join(rule_name(str(item)) for item in revealed_rule_x_ids if str(item))
+                if revealed_rule_x_ids
+                else "无"
+            )
         )
 
     return "\n".join(lines)

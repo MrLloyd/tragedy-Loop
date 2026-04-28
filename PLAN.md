@@ -442,11 +442,13 @@ traged/
 
 > 详细阶段拆分与角色分批见 `PHASE7_GAP_CHECKLIST.md`。
 
-#### P7-1 当前结论（2026-04-25）
+#### P7-1 当前结论（2026-04-28）
 
 - **测试界面收口已完成**：`模组`、`规则`、`身份`、`事件` 四项已完成验证。
 - **不再阻塞前四项的内容**：所有“`剧本制作时`”类规则与角色约束，统一转到正式版建局流程回归。
 - **当前主瓶颈**：角色实现远落后于数据层，下一阶段不再是“角色测试优先”，而是“角色实现优先”。
+- **新增边界收口**：`Script` 已正式拆分为 `public_table / private_table`；除非另有说明，运行时剧本真值统一读取 `private_table`。
+- **本轮已落地角色专项**：`AI` 友好1、`情报商` 友好1、`鉴别员` 友好1 已通过专用交互落地并补齐自动化回归。
 
 #### P7-2 角色缺口盘点
 
@@ -571,6 +573,7 @@ traged/
   - 规则 / 身份公开、补位身份与复制身份
   - `MOVE_TOKEN` / `RETURN_CARD` / `REVIVE_CHARACTER` / `REMOVE_CHARACTER` 等新增原语
 - **实现原则**：优先补统一 selector / effect / validator，不在阶段 handler 中继续堆散装角色特判。
+- **补记（2026-04-28）**：`AI`、`情报商`、`鉴别员` 已不再属于该批“待实现角色”；后续保留回归观察即可。
 
 #### P7-6 第四批：角色总测与正式版回归
 
@@ -992,7 +995,7 @@ CharacterEndState:
 | **情报商** 友好1 | 公开1条主人公未声明的规则X | `REVEAL_RULE_X` | 新增 EffectType；需维护"已公开规则X列表"状态（GameState 新增字段） |
 | **医生** 友好2 | 本轮回住院患者不再拥有禁行区域 | `LIFT_FORBIDDEN_AREAS` | 新增 EffectType；写入临时状态（`state.lifted_forbidden_areas: set[str]`）；移动resolver检查 |
 | **小女孩** 友好1 | 本轮回中该角色不再拥有禁行区域 | `LIFT_FORBIDDEN_AREAS`（同上，针对单角色） | 同上，target 为角色 ID |
-| **AI** 友好1 | 选择1个已公开事件，立即处理其效果（当事人默认为AI） | `TRIGGER_INCIDENT_EFFECT` | 新增 EffectType；重入 IncidentHandler 的效果执行路径 |
+| **AI** 友好1 | 选择1个已公开事件，立即处理其效果（当事人默认为AI） | 已实现 | 2026-04-28：通过 `ProtagonistAbilityHandler` 专用交互接线；从公开信息表选事件，映射到私有真实事件，并调用 `IncidentResolver.resolve_effect_only()`，不标记事件已发生 |
 | **UP主** 友好1 | 同区域另1名角色+1友好-1不安；可将其EX牌转移至同区域另1名角色 | `MOVE_EX_CARD` | 新增 EffectType；需 EX牌数据结构（MZ/AHR 模组依赖） |
 | **幻想** 友好2 | 将该角色从版图上移除 | `REMOVE_FROM_BOARD` | 新增 EffectType；设置 `ch.is_removed = True`（字段已存在），区别于死亡 |
 | **妹妹** 友好1 | 强制同区域1名成人使用1个友好能力，无视友好数与无视友好特性 | `FORCE_ABILITY_USE` | 需新建"触发另一角色能力"的连锁机制；ability_resolver 需支持被动触发模式 |
@@ -1023,7 +1026,7 @@ CharacterEndState:
 - C-2 类（友好能力）需新增约 **20 个**机制，其中部分（`MOVE_TOKEN`、`RETURN_CARD`）与C-1共享
 - D 类约 **5 个**剧本制作约束，在脚本校验层处理
 - **FS+BTX 优先实现**：`REVIVE_CHARACTER`（仙人/异界人）、`PROTAGONIST_PROTECT`（军人）、`SUPPRESS_INCIDENT`（手下）、`LIFT_FORBIDDEN_AREAS`（医生/小女孩）、`MOVE_TOKEN`（转校生/御神木/鉴别员）、`RETURN_CARD`（班长）
-- **后续模组才需要**：`TRIGGER_INCIDENT_EFFECT`（AI）、`MOVE_EX_CARD`（UP主）、`FORCE_ABILITY_USE`（妹妹）、`EXTEND_TRAIT_TARGET`（从者）
+- **后续模组才需要**：`MOVE_EX_CARD`（UP主）、`FORCE_ABILITY_USE`（妹妹）、`EXTEND_TRAIT_TARGET`（从者）
 
 ---
 

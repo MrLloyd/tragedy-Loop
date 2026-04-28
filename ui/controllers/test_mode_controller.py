@@ -749,7 +749,7 @@ class TestModeController:
             self.session.state.reset_for_new_loop()
 
         next_phase = self.state_machine.advance(
-            is_final_day=(self.session.state.current_day >= self.session.state.script.days_per_loop),
+            is_final_day=(self.session.state.current_day >= self.session.state.max_days),
             failure_reached=bool(self.session.state.failure_flags),
             is_last_loop=self.session.state.is_last_loop,
             protagonist_dead=self.session.state.protagonist_dead,

@@ -219,18 +219,18 @@ class AbilityResolver:
     ) -> list[AbilityCandidate]:
         result: list[AbilityCandidate] = []
 
-        if state.script.rule_y is not None:
+        if state.script.private_table.rule_y is not None:
             result.extend(
                 self._collect_from_rule(
                     state,
                     timing=timing,
                     ability_type=ability_type,
-                    rule_id=state.script.rule_y.rule_id,
-                    abilities=state.script.rule_y.abilities,
+                    rule_id=state.script.private_table.rule_y.rule_id,
+                    abilities=state.script.private_table.rule_y.abilities,
                 )
             )
 
-        for rule in state.script.rules_x:
+        for rule in state.script.private_table.rules_x:
             result.extend(
                 self._collect_from_rule(
                     state,

@@ -21,6 +21,7 @@ from engine.display_names import (
     identity_name,
     incident_name,
     outcome_name,
+    rule_name,
     token_name,
 )
 from engine.models.enums import AreaId, CharacterLifeState, PlayerRole, TokenType
@@ -99,7 +100,7 @@ class Visibility:
             leader_index=state.leader_index,
             characters=characters,
             board_tokens=Visibility._board_tokens(state),
-            public_info=state.script.get_public_info(),
+            public_info=state.script.public_table.to_dict(),
             placed_cards_count=len(state.placed_cards),
         )
 
@@ -132,7 +133,7 @@ class Visibility:
             leader_index=state.leader_index,
             characters=characters,
             board_tokens=Visibility._board_tokens(state),
-            public_info=state.script.get_public_info(),
+            public_info=state.script.public_table.to_dict(),
             placed_cards_count=len(state.placed_cards),
         )
 
@@ -187,6 +188,9 @@ class Visibility:
                 incident_id = incident_name(str(details.get("incident_id", "?")))
                 day = details.get("day", "?")
                 return f"第 {day} 天发生事件：{incident_id}"
+
+            case "reveal_rule_x":
+                return f"公开规则 X：{rule_name(str(details.get('rule_x_id', '?')))}"
 
             case "loop_ended":
                 return f"轮回 {details.get('loop', '?')} 结束"

@@ -240,12 +240,13 @@ class GameSessionController(UICallback):
             "engine_has_pending_callback": controller._pending_callback is not None,
         } if wait is not None else None
         snapshot["engine_runtime"] = controller.get_runtime_debug_snapshot()
-        snapshot["script"] = {
-            "module_id": controller.state.script.module_id,
-            "loop_count": controller.state.script.loop_count,
-            "days_per_loop": controller.state.script.days_per_loop,
-            "rule_y_id": controller.state.script.rule_y.rule_id if controller.state.script.rule_y is not None else "",
-            "rule_x_ids": [rule.rule_id for rule in controller.state.script.rules_x],
+        snapshot["public_script"] = controller.state.script.public_table.to_dict()
+        snapshot["private_script"] = {
+            "module_id": controller.state.script.private_table.module_id,
+            "loop_count": controller.state.script.private_table.loop_count,
+            "days_per_loop": controller.state.script.private_table.days_per_loop,
+            "rule_y_id": controller.state.script.private_table.rule_y.rule_id if controller.state.script.private_table.rule_y is not None else "",
+            "rule_x_ids": [rule.rule_id for rule in controller.state.script.private_table.rules_x],
             "incidents": [
                 {
                     "incident_id": incident.incident_id,
@@ -256,9 +257,10 @@ class GameSessionController(UICallback):
                     "target_area_ids": list(incident.target_area_ids),
                     "chosen_token_types": list(incident.chosen_token_types),
                 }
-                for incident in controller.state.script.incidents
+                for incident in controller.state.script.private_table.incidents
             ],
         }
+        snapshot["script"] = dict(snapshot["private_script"])
         return snapshot
 
     def _require_wait(self, input_type: str) -> WaitForInput:
@@ -366,6 +368,7 @@ _EVENT_TYPE_NAMES = {
     "IDENTITY_REVEALED": "身份公开",
     "INCIDENT_REVEALED": "当事人公开",
     "INCIDENT_OCCURRED": "事件发生",
+    "RULE_X_REVEALED": "规则 X 公开",
     "PHASE_CHANGED": "阶段切换",
     "LOOP_STARTED": "轮回开始",
     "LOOP_ENDED": "轮回结束",
@@ -384,6 +387,7 @@ _EVENT_DATA_KEY_NAMES = {
     "destination": "目的地",
     "identity_id": "身份",
     "incident_id": "事件",
+    "rule_x_id": "规则 X",
     "loop": "轮回",
     "new_value": "新值",
     "other_character_id": "死亡角色",

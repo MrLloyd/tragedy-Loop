@@ -636,7 +636,7 @@ class AtomicResolver:
             case "reveal_incident":
                 incident_id = str(mutation.details["incident_id"])
                 schedule = next(
-                    (item for item in state.script.incidents if item.incident_id == incident_id),
+                    (item for item in state.script.private_table.incidents if item.incident_id == incident_id),
                     None,
                 )
                 if schedule is not None:

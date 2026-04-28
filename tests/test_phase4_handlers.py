@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from engine.event_bus import EventBus, GameEventType
+from engine.game_controller import GameController
 from engine.game_state import GameState
 from engine.models.ability import Ability
 from engine.models.cards import ActionCard, CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, EffectType, PlayerRole, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, EffectType, GamePhase, PlayerRole, TokenType
 from engine.models.identity import IdentityDef
+from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
     ActionResolveHandler,
@@ -21,6 +23,7 @@ from engine.phases.phase_base import (
     TurnEndHandler,
     WaitForInput,
 )
+from engine.resolvers.ability_resolver import AbilityResolver
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
 from engine.rules.module_loader import apply_loaded_module, build_game_state_from_module, load_module
@@ -40,6 +43,34 @@ def _ability_choice(wait: WaitForInput, ability_id: str):
     )
 
 
+def _build_reference_btx_state() -> GameState:
+    return build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=3,
+        days_per_loop=3,
+        rule_y_id="btx_sealed_evil",
+        rule_x_ids=["btx_friends_circle", "btx_love_scenic_line"],
+        character_setups=[
+            CharacterSetup("male_student", "commoner"),
+            CharacterSetup("female_student", "cultist"),
+            CharacterSetup("idol", "rumormonger"),
+            CharacterSetup("office_worker", "friend"),
+            CharacterSetup("shrine_maiden", "friend"),
+            CharacterSetup("alien", "beloved"),
+            CharacterSetup("inpatient", "lover"),
+            CharacterSetup("nurse", "mastermind"),
+            CharacterSetup("appraiser", "commoner"),
+        ],
+        incidents=[
+            IncidentSchedule("suicide", day=3, perpetrator_id="female_student"),
+        ],
+    )
+
+
+def _appraiser_move_option(source_id: str, token_type: str, target_id: str) -> str:
+    return f"{source_id}|{token_type}|{target_id}"
+
+
 def _install_identity(state: GameState, identity_id: str, abilities: list[Ability]) -> None:
     state.identity_defs[identity_id] = IdentityDef(
         identity_id=identity_id,
@@ -47,6 +78,47 @@ def _install_identity(state: GameState, identity_id: str, abilities: list[Abilit
         module="test",
         abilities=abilities,
     )
+
+
+def test_entry_sync_handles_deity_loop_and_transfer_student_day_gates() -> None:
+    controller = GameController()
+    controller.state.characters["deity"] = CharacterState(
+        character_id="deity",
+        name="神灵",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="friend",
+        original_identity_id="friend",
+        entry_loop=2,
+    )
+    controller.state.characters["transfer_student"] = CharacterState(
+        character_id="transfer_student",
+        name="转校生",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="friend",
+        original_identity_id="friend",
+        entry_day=3,
+    )
+
+    controller.state.current_loop = 1
+    controller.state.current_day = 1
+    controller._sync_entry_characters_for_phase(GamePhase.LOOP_START)
+    assert controller.state.characters["deity"].is_removed()
+    assert controller.state.characters["transfer_student"].is_removed()
+
+    controller.state.current_loop = 2
+    controller._sync_entry_characters_for_phase(GamePhase.LOOP_START)
+    assert controller.state.characters["deity"].is_active()
+    assert controller.state.characters["transfer_student"].is_removed()
+
+    controller.state.current_day = 2
+    controller._sync_entry_characters_for_phase(GamePhase.TURN_START)
+    assert controller.state.characters["transfer_student"].is_removed()
+
+    controller.state.current_day = 3
+    controller._sync_entry_characters_for_phase(GamePhase.TURN_START)
+    assert controller.state.characters["transfer_student"].is_active()
 
 
 def test_loop_start_handler_executes_friend_reveal_effect() -> None:
@@ -670,6 +742,362 @@ def test_protagonist_ability_ignores_refusal_when_identity_ignores_goodwill() ->
 
     assert isinstance(follow_up, WaitForInput)
     assert state.characters["killer"].tokens.get(TokenType.GOODWILL) == 1
+
+
+def test_ai_goodwill_uses_public_incident_and_does_not_mark_incident_occurred() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = GameState()
+    loaded = load_module("basic_tragedy_x")
+    apply_loaded_module(state, loaded)
+    state.script.private_table.rule_y = next(
+        rule for rule in loaded.module_def.rules_y if rule.rule_id == "btx_change_future"
+    )
+    state.script.private_table.rules_x = [
+        next(rule for rule in loaded.module_def.rules_x if rule.rule_id == "btx_friends_circle"),
+        next(rule for rule in loaded.module_def.rules_x if rule.rule_id == "btx_love_scenic_line"),
+    ]
+    state.script.public_table.incidents = [
+        {"name": "公开蝴蝶", "day": 2},
+    ]
+    state.script.private_table.public_incident_refs = ["butterfly_effect"]
+    state.script.private_table.incidents = [
+        IncidentSchedule("suicide", day=3, perpetrator_id="other"),
+    ]
+    state.characters["ai"] = CharacterState(
+        character_id="ai",
+        name="AI",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="mastermind",
+        original_identity_id="mastermind",
+        goodwill_ability_texts=["能力1", "", "", ""],
+        goodwill_ability_goodwill_requirements=[3, 0, 0, 0],
+        goodwill_ability_once_per_loop=[True],
+    )
+    state.characters["ai"].tokens.add(TokenType.GOODWILL, 3)
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    public_wait = signal.callback(_ability_choice(signal, "goodwill:ai:1"))
+    assert isinstance(public_wait, WaitForInput)
+    assert public_wait.input_type == "choose_public_incident"
+    assert public_wait.player == "protagonist_0"
+    assert len(public_wait.options) == 1
+    assert public_wait.options[0]["name"] == "公开蝴蝶"
+    assert public_wait.options[0]["day"] == 2
+
+    character_wait = public_wait.callback(public_wait.options[0])
+    assert isinstance(character_wait, WaitForInput)
+    assert character_wait.input_type == "choose_incident_character"
+    assert character_wait.player == "protagonist_0"
+    assert character_wait.options == ["ai", "target"]
+
+    token_wait = character_wait.callback("target")
+    assert isinstance(token_wait, WaitForInput)
+    assert token_wait.input_type == "choose_incident_token_type"
+    assert token_wait.player == "protagonist_0"
+    assert set(token_wait.options) == {"goodwill", "paranoia", "intrigue"}
+
+    done = token_wait.callback("intrigue")
+
+    assert isinstance(done, PhaseComplete)
+    assert state.characters["target"].tokens.get(TokenType.INTRIGUE) == 1
+    assert state.incidents_occurred_this_loop == []
+    assert state.incident_results_this_loop == []
+    assert not any(
+        event.event_type == GameEventType.INCIDENT_OCCURRED
+        and event.data.get("incident_id") == "butterfly_effect"
+        for event in bus.log
+    )
+
+    loop_end_failures = AbilityResolver().collect_abilities(
+        state,
+        timing=AbilityTiming.LOOP_END,
+        ability_type=AbilityType.LOSS_CONDITION,
+    )
+    assert "btx_fail_butterfly_effect_occurred" not in {
+        candidate.ability.ability_id for candidate in loop_end_failures
+    }
+
+
+def test_informant_goodwill_reveals_other_selected_rule_x_after_declaration() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("informant", "commoner"),
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("idol", "killer"),
+            CharacterSetup("office_worker", "friend"),
+            CharacterSetup("shrine_maiden", "serial_killer"),
+        ],
+        incidents=[],
+        skip_script_validation=True,
+    )
+    state.characters["informant"].tokens.add(TokenType.GOODWILL, 5)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    choose_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    assert isinstance(choose_wait, WaitForInput)
+    assert choose_wait.input_type == "respond_goodwill_ability"
+
+    declared_wait = choose_wait.callback("allow")
+    assert isinstance(declared_wait, WaitForInput)
+    assert declared_wait.input_type == "choose_rule_x_declaration"
+
+    revealed = declared_wait.callback("btx_rumors")
+
+    assert isinstance(revealed, PhaseComplete)
+    assert state.revealed_rule_x_ids == ["btx_latent_serial_killer"]
+    assert any(
+        event.event_type == GameEventType.RULE_X_REVEALED
+        and event.data.get("rule_x_id") == "btx_latent_serial_killer"
+        for event in bus.log
+    )
+
+
+def test_informant_goodwill_allows_playwright_choice_when_both_selected_rules_differ() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="btx_murder_plan",
+        rule_x_ids=["btx_rumors", "btx_latent_serial_killer"],
+        character_setups=[
+            CharacterSetup("informant", "commoner"),
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("idol", "killer"),
+            CharacterSetup("office_worker", "friend"),
+            CharacterSetup("shrine_maiden", "serial_killer"),
+        ],
+        incidents=[],
+        skip_script_validation=True,
+    )
+    state.characters["informant"].tokens.add(TokenType.GOODWILL, 5)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    assert isinstance(response_wait, WaitForInput)
+
+    declared_wait = response_wait.callback("allow")
+    assert isinstance(declared_wait, WaitForInput)
+
+    reveal_wait = declared_wait.callback("btx_causal_line")
+    assert isinstance(reveal_wait, WaitForInput)
+    assert reveal_wait.input_type == "choose_rule_x_reveal"
+    assert set(reveal_wait.options) == {"btx_rumors", "btx_latent_serial_killer"}
+
+    done = reveal_wait.callback("btx_rumors")
+
+    assert isinstance(done, PhaseComplete)
+    assert state.revealed_rule_x_ids == ["btx_rumors"]
+
+
+def test_informant_goodwill_reveals_first_steps_rule_x_directly() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = build_game_state_from_module(
+        "first_steps",
+        loop_count=1,
+        days_per_loop=1,
+        rule_y_id="fs_murder_plan",
+        rule_x_ids=["fs_ripper_shadow"],
+        character_setups=[
+            CharacterSetup("informant", "commoner"),
+            CharacterSetup("male_student", "mastermind"),
+            CharacterSetup("female_student", "key_person"),
+            CharacterSetup("idol", "killer"),
+            CharacterSetup("office_worker", "friend"),
+            CharacterSetup("shrine_maiden", "serial_killer"),
+        ],
+        incidents=[],
+        skip_script_validation=True,
+    )
+    state.characters["informant"].tokens.add(TokenType.GOODWILL, 5)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    assert isinstance(response_wait, WaitForInput)
+
+    done = response_wait.callback("allow")
+
+    assert isinstance(done, PhaseComplete)
+    assert state.revealed_rule_x_ids == ["fs_ripper_shadow"]
+    assert any(
+        event.event_type == GameEventType.RULE_X_REVEALED
+        and event.data.get("rule_x_id") == "fs_ripper_shadow"
+        for event in bus.log
+    )
+
+
+def test_appraiser_goodwill_moves_selected_token_between_two_same_area_characters() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = _build_reference_btx_state()
+    state.characters["appraiser"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["appraiser"].area = AreaId.CITY
+    state.characters["male_student"].area = AreaId.CITY
+    state.characters["female_student"].area = AreaId.CITY
+    state.characters["idol"].area = AreaId.SCHOOL
+    state.characters["office_worker"].area = AreaId.HOSPITAL
+    state.characters["alien"].area = AreaId.SHRINE
+    state.characters["male_student"].tokens.add(TokenType.PARANOIA, 1)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    assert isinstance(response_wait, WaitForInput)
+    assert response_wait.input_type == "respond_goodwill_ability"
+
+    source_wait = response_wait.callback("allow")
+    assert isinstance(source_wait, WaitForInput)
+    assert source_wait.input_type == "choose_ability_target"
+    assert set(source_wait.options) == {"male_student", "female_student"}
+
+    target_wait = source_wait.callback("male_student")
+    assert isinstance(target_wait, WaitForInput)
+    assert target_wait.input_type == "choose_ability_target"
+    assert set(target_wait.options) == {"female_student"}
+
+    token_wait = target_wait.callback("female_student")
+    assert isinstance(token_wait, WaitForInput)
+    assert token_wait.input_type == "choose_ability_token_move"
+    assert token_wait.options == [
+        _appraiser_move_option("male_student", "paranoia", "female_student")
+    ]
+
+    done = token_wait.callback(_appraiser_move_option("male_student", "paranoia", "female_student"))
+
+    assert isinstance(done, PhaseComplete)
+    assert state.characters["male_student"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 1
+
+
+def test_appraiser_goodwill_can_select_two_empty_characters_and_resolve_no_effect() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = _build_reference_btx_state()
+    state.characters["appraiser"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["appraiser"].area = AreaId.CITY
+    state.characters["male_student"].area = AreaId.CITY
+    state.characters["female_student"].area = AreaId.CITY
+    state.characters["idol"].area = AreaId.SCHOOL
+    state.characters["office_worker"].area = AreaId.HOSPITAL
+    state.characters["alien"].area = AreaId.SHRINE
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    assert isinstance(response_wait, WaitForInput)
+
+    source_wait = response_wait.callback("allow")
+    assert isinstance(source_wait, WaitForInput)
+
+    target_wait = source_wait.callback("male_student")
+    assert isinstance(target_wait, WaitForInput)
+
+    done = target_wait.callback("female_student")
+
+    assert isinstance(done, PhaseComplete)
+    assert state.characters["male_student"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 0
+
+
+def test_appraiser_goodwill_must_choose_one_available_move_after_targets_selected() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = _build_reference_btx_state()
+    state.characters["appraiser"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["appraiser"].area = AreaId.CITY
+    state.characters["male_student"].area = AreaId.CITY
+    state.characters["female_student"].area = AreaId.CITY
+    state.characters["idol"].area = AreaId.SCHOOL
+    state.characters["office_worker"].area = AreaId.HOSPITAL
+    state.characters["alien"].area = AreaId.SHRINE
+    state.characters["male_student"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["male_student"].tokens.add(TokenType.GOODWILL, 1)
+    state.characters["female_student"].tokens.add(TokenType.INTRIGUE, 1)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    assert isinstance(response_wait, WaitForInput)
+
+    source_wait = response_wait.callback("allow")
+    assert isinstance(source_wait, WaitForInput)
+    target_wait = source_wait.callback("male_student")
+    assert isinstance(target_wait, WaitForInput)
+    token_wait = target_wait.callback("female_student")
+
+    assert isinstance(token_wait, WaitForInput)
+    assert token_wait.input_type == "choose_ability_token_move"
+    assert set(token_wait.options) == {
+        _appraiser_move_option("male_student", "paranoia", "female_student"),
+        _appraiser_move_option("male_student", "goodwill", "female_student"),
+        _appraiser_move_option("female_student", "intrigue", "male_student"),
+    }
+
+
+def test_appraiser_goodwill_must_move_from_b_when_only_b_has_tokens() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = _build_reference_btx_state()
+    state.characters["appraiser"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["appraiser"].area = AreaId.CITY
+    state.characters["male_student"].area = AreaId.CITY
+    state.characters["female_student"].area = AreaId.CITY
+    state.characters["idol"].area = AreaId.SCHOOL
+    state.characters["office_worker"].area = AreaId.HOSPITAL
+    state.characters["alien"].area = AreaId.SHRINE
+    state.characters["female_student"].tokens.add(TokenType.PARANOIA, 1)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    assert isinstance(response_wait, WaitForInput)
+
+    source_wait = response_wait.callback("allow")
+    assert isinstance(source_wait, WaitForInput)
+    target_wait = source_wait.callback("male_student")
+    assert isinstance(target_wait, WaitForInput)
+    move_wait = target_wait.callback("female_student")
+
+    assert isinstance(move_wait, WaitForInput)
+    assert move_wait.input_type == "choose_ability_token_move"
+    assert move_wait.options == [
+        _appraiser_move_option("female_student", "paranoia", "male_student")
+    ]
+
+    done = move_wait.callback(_appraiser_move_option("female_student", "paranoia", "male_student"))
+
+    assert isinstance(done, PhaseComplete)
+    assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["male_student"].tokens.get(TokenType.PARANOIA) == 1
 
 
 def test_turn_end_handler_executes_mandatory_then_optional() -> None:

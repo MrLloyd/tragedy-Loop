@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 from engine.models.cards import CardPlacement, PlacementIntent
 from engine.models.ability import Ability, AbilityLocationContext
 from engine.models.effects import Condition, Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
 from engine.models.selectors import (
     area_choice_selector,
+    character_choice_selector,
     parse_target_selector,
     selector_area_id,
     selector_is_self_ref,
@@ -937,11 +938,11 @@ class PhaseHandler(ABC):
             options = value.get("options", ["1", "-1"])
             return [str(item) for item in options if str(item) in {"1", "-1"}]
         if choice == "choose_incident":
-            return [schedule.incident_id for schedule in state.script.incidents]
+            return [schedule.incident_id for schedule in state.script.private_table.incidents]
         if choice == "choose_occurred_incident":
             return [
                 schedule.incident_id
-                for schedule in state.script.incidents
+                for schedule in state.script.private_table.incidents
                 if schedule.occurred or schedule.incident_id in state.incidents_occurred_this_loop
             ]
         if choice == "choose_return_card":
@@ -1044,10 +1045,10 @@ class GamePrepareHandler(PhaseHandler):
     @staticmethod
     def _is_script_ready(state: GameState) -> bool:
         return (
-            state.script.rule_y is not None
-            and bool(state.script.rules_x)
-            and bool(state.script.characters)
-            and bool(state.script.incidents)
+            state.script.private_table.rule_y is not None
+            and bool(state.script.private_table.rules_x)
+            and bool(state.script.private_table.characters)
+            and bool(state.script.private_table.incidents)
         )
 
     def _build_script_setup_wait(
@@ -1060,9 +1061,9 @@ class GamePrepareHandler(PhaseHandler):
         from engine.rules.script_validator import ScriptValidationError
 
         context = build_script_setup_context(
-            state.script.module_id or "first_steps",
-            loop_count=state.script.loop_count,
-            days_per_loop=state.script.days_per_loop,
+            state.script.private_table.module_id or "first_steps",
+            loop_count=state.script.private_table.loop_count,
+            days_per_loop=state.script.private_table.days_per_loop,
             errors=errors,
         )
 
@@ -1670,6 +1671,10 @@ class PlaywrightAbilityHandler(PhaseHandler):
 
 class ProtagonistAbilityHandler(PhaseHandler):
     phase = GamePhase.PROTAGONIST_ABILITY
+    _AI_ABILITY_ID = "goodwill:ai:1"
+    _INFORMANT_ABILITY_ID = "goodwill:informant:1"
+    _APPRAISER_ABILITY_ID = "goodwill:appraiser:1"
+    _SISTER_ABILITY_ID = "goodwill:sister:1"
 
     def execute(self, state: GameState) -> PhaseSignal:
         return self._request_goodwill_ability(state)
@@ -1700,11 +1705,109 @@ class ProtagonistAbilityHandler(PhaseHandler):
             callback=_on_choice,
         )
 
+    def _request_sister_goodwill_ability(self, state: GameState) -> PhaseSignal:
+        owner = state.characters.get("sister")
+        if owner is None or not owner.is_active():
+            return PhaseComplete()
+
+        options = [
+            character_id
+            for character_id, character in state.characters.items()
+            if character_id != owner.character_id
+            and character.is_active()
+            and character.area == owner.area
+            and Attribute.ADULT in character.attributes
+        ]
+        if not options:
+            return PhaseComplete()
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            target_id = str(choice)
+            if target_id not in options:
+                raise ValueError(f"invalid sister target: {choice!r}")
+            target_candidates = self._filter_candidates_with_available_targets(
+                state,
+                [
+                    candidate
+                    for candidate in self.ability_resolver.collect_goodwill_abilities(state)
+                    if candidate.source_id == target_id
+                ],
+            )
+            if not target_candidates:
+                return PhaseComplete()
+            sister_candidate = self._sister_candidate(owner)
+            self._emit_ability_declared(sister_candidate)
+            self.ability_resolver.mark_ability_used(state, sister_candidate)
+            return self._request_sister_target_goodwill_ability(
+                state,
+                target_id=target_id,
+                target_candidates=target_candidates,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt="请选择要被妹妹强制使用友好能力的成人角色",
+            options=options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_choice,
+        )
+
+    def _sister_candidate(self, owner: Any) -> AbilityCandidate:
+        return AbilityCandidate(
+            source_kind="goodwill",
+            source_id=owner.character_id,
+            ability=Ability(
+                ability_id=self._SISTER_ABILITY_ID,
+                name="妹妹 友好能力1",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                description=owner.goodwill_ability_texts[0] if owner.goodwill_ability_texts else "",
+                effects=[],
+                goodwill_requirement=5,
+                once_per_loop=True,
+                can_be_refused=True,
+            ),
+        )
+
+    def _request_sister_target_goodwill_ability(
+        self,
+        state: GameState,
+        *,
+        target_id: str,
+        target_candidates: list[AbilityCandidate],
+    ) -> PhaseSignal:
+        if len(target_candidates) == 1:
+            return self._resolve_candidate(
+                state,
+                target_candidates[0],
+                next_signal_factory=PhaseComplete,
+            )
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            candidate = choice
+            if candidate not in target_candidates:
+                raise ValueError("invalid sister goodwill ability selection")
+            return self._resolve_candidate(
+                state,
+                candidate,
+                next_signal_factory=PhaseComplete,
+            )
+
+        return WaitForInput(
+            input_type="choose_goodwill_ability",
+            prompt=f"请选择由 {state.characters[target_id].name} 使用的友好能力",
+            options=target_candidates,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_choice,
+        )
+
     def _handle_goodwill_declaration(
         self,
         state: GameState,
         candidate: AbilityCandidate,
     ) -> PhaseSignal:
+        if candidate.ability.ability_id == self._SISTER_ABILITY_ID:
+            return self._resolve_goodwill_ability(state, candidate)
         owner_id = candidate.source_id
         should_ignore = self.ability_resolver.goodwill_should_be_ignored(state, owner_id)
         if candidate.ability.can_be_refused and not should_ignore:
@@ -1734,13 +1837,498 @@ class ProtagonistAbilityHandler(PhaseHandler):
         state: GameState,
         candidate: AbilityCandidate,
     ) -> PhaseSignal:
+        if candidate.ability.ability_id == self._SISTER_ABILITY_ID:
+            return self._request_sister_goodwill_ability(state)
         if candidate.source_id not in state.characters:
             return self._request_goodwill_ability(state)
+        if candidate.ability.ability_id == self._AI_ABILITY_ID:
+            return self._resolve_ai_goodwill(
+                state,
+                candidate,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
+            )
+        if candidate.ability.ability_id == self._INFORMANT_ABILITY_ID:
+            return self._resolve_informant_goodwill(
+                state,
+                candidate,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
+            )
+        if candidate.ability.ability_id == self._APPRAISER_ABILITY_ID:
+            return self._resolve_appraiser_goodwill(
+                state,
+                candidate,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
+            )
         return self._resolve_candidate(
             state,
             candidate,
             next_signal_factory=lambda: self._request_goodwill_ability(state),
         )
+
+    def _resolve_ai_goodwill(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        owner = state.characters.get(candidate.source_id)
+        if owner is None:
+            return next_signal_factory()
+        options = self._available_public_incident_options(state)
+        if not options:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+        self._emit_ability_declared(candidate)
+        incident_resolver = IncidentResolver(self.event_bus, self.atomic_resolver)
+
+        def _on_incident(choice: Any) -> PhaseSignal:
+            public_index = self._coerce_public_incident_index(choice)
+            if public_index is None:
+                raise ValueError(f"invalid public incident choice: {choice!r}")
+            selected = next(
+                (option for option in options if int(option.get("public_incident_index", -1)) == public_index),
+                None,
+            )
+            if selected is None:
+                raise ValueError(f"invalid public incident choice: {choice!r}")
+            schedule = self._build_ai_incident_schedule(
+                state,
+                public_index=public_index,
+                perpetrator_id=owner.character_id,
+            )
+            if schedule is None:
+                self.ability_resolver.mark_ability_used(state, candidate)
+                return next_signal_factory()
+            incident_def = state.incident_defs.get(schedule.incident_id)
+            return self._continue_ai_incident_resolution(
+                state,
+                candidate,
+                schedule=schedule,
+                incident_def=incident_def,
+                incident_resolver=incident_resolver,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_public_incident",
+            prompt="队长请选择公开信息表中的事件",
+            options=options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_incident,
+        )
+
+    def _continue_ai_incident_resolution(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        schedule,
+        incident_def,
+        incident_resolver: IncidentResolver,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        if incident_def is None:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+
+        runtime_choice = incident_resolver.next_runtime_choice(state, schedule, incident_def)
+        if runtime_choice is None:
+            result = incident_resolver.resolve_effect_only(
+                state,
+                schedule,
+                incident_def,
+            )
+            self.ability_resolver.mark_ability_used(state, candidate)
+            signal = self._resolution_result_to_signal(
+                result,
+                default_reason=candidate.ability.ability_id,
+            )
+            if signal is not None:
+                return signal
+            return next_signal_factory()
+
+        choice_kind, options = runtime_choice
+        if not options:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+
+        if choice_kind == "character":
+            input_type = "choose_incident_character"
+            prompt = "队长请选择事件角色目标"
+        elif choice_kind == "area":
+            input_type = "choose_incident_area"
+            prompt = "队长请选择事件版图目标"
+        elif choice_kind == "token":
+            input_type = "choose_incident_token_type"
+            prompt = "队长请选择事件指示物类型"
+        else:
+            raise ValueError(f"unsupported ai incident choice kind: {choice_kind}")
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            selected = str(choice)
+            if selected not in options:
+                raise ValueError(f"invalid ai incident {choice_kind}: {choice!r}")
+            if choice_kind == "character":
+                schedule.target_selectors.append(character_choice_selector(selected))
+                schedule.target_character_ids.append(selected)
+            elif choice_kind == "area":
+                schedule.target_selectors.append(area_choice_selector(selected))
+                schedule.target_area_ids.append(selected)
+            else:
+                schedule.chosen_token_types.append(selected)
+            return self._continue_ai_incident_resolution(
+                state,
+                candidate,
+                schedule=schedule,
+                incident_def=incident_def,
+                incident_resolver=incident_resolver,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type=input_type,
+            prompt=prompt,
+            options=options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_choice,
+        )
+
+    @staticmethod
+    def _available_public_incident_options(state: GameState) -> list[dict[str, Any]]:
+        options: list[dict[str, Any]] = []
+        for index in range(state.script.public_incident_count()):
+            entry = state.script.public_incident_entry(index)
+            ref = state.script.private_incident_ref_for_public_index(index)
+            if entry is None or not ref or ref not in state.incident_defs:
+                continue
+            options.append(
+                {
+                    "kind": "public_incident",
+                    "public_incident_index": index,
+                    "name": str(entry.get("name", ref)),
+                    "day": entry.get("day", "?"),
+                }
+            )
+        return options
+
+    @staticmethod
+    def _coerce_public_incident_index(choice: Any) -> int | None:
+        if isinstance(choice, dict):
+            raw = choice.get("public_incident_index")
+            if isinstance(raw, int):
+                return raw
+            if isinstance(raw, str) and raw.isdigit():
+                return int(raw)
+            return None
+        if isinstance(choice, int):
+            return choice
+        if isinstance(choice, str) and choice.isdigit():
+            return int(choice)
+        return None
+
+    @staticmethod
+    def _build_ai_incident_schedule(
+        state: GameState,
+        *,
+        public_index: int,
+        perpetrator_id: str,
+    ):
+        ref = state.script.private_incident_ref_for_public_index(public_index)
+        if not ref:
+            return None
+        entry = state.script.public_incident_entry(public_index) or {}
+        day = entry.get("day", state.current_day)
+        if not isinstance(day, int):
+            day = state.current_day
+        from engine.models.incident import IncidentSchedule
+        return IncidentSchedule(
+            ref,
+            day=day,
+            perpetrator_id=perpetrator_id,
+        )
+
+    def _resolve_informant_goodwill(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        self._emit_ability_declared(candidate)
+        if state.script.private_table.module_id == "first_steps":
+            return self._reveal_informant_rule_x(
+                state,
+                candidate,
+                rule_x_id=self._default_first_steps_rule_x_id(state),
+                next_signal_factory=next_signal_factory,
+            )
+
+        available_rule_ids = self._available_module_rule_x_ids(state)
+        if not available_rule_ids:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+
+        def _on_declared(choice: Any) -> PhaseSignal:
+            declared_rule_x_id = str(choice)
+            if declared_rule_x_id not in available_rule_ids:
+                raise ValueError(f"invalid declared rule_x: {choice!r}")
+            return self._request_informant_reveal_choice(
+                state,
+                candidate,
+                declared_rule_x_id=declared_rule_x_id,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_rule_x_declaration",
+            prompt="队长请选择要声明的规则 X",
+            options=available_rule_ids,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_declared,
+        )
+
+    def _request_informant_reveal_choice(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        declared_rule_x_id: str,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        selected_rule_ids = [rule.rule_id for rule in state.script.private_table.rules_x]
+        revealable = [
+            rule_id for rule_id in selected_rule_ids
+            if rule_id != declared_rule_x_id
+        ]
+        if not revealable:
+            revealable = list(selected_rule_ids)
+        if not revealable:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+        if len(revealable) == 1:
+            return self._reveal_informant_rule_x(
+                state,
+                candidate,
+                rule_x_id=revealable[0],
+                next_signal_factory=next_signal_factory,
+            )
+
+        def _on_reveal(choice: Any) -> PhaseSignal:
+            revealed_rule_x_id = str(choice)
+            if revealed_rule_x_id not in revealable:
+                raise ValueError(f"invalid revealed rule_x: {choice!r}")
+            return self._reveal_informant_rule_x(
+                state,
+                candidate,
+                rule_x_id=revealed_rule_x_id,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_rule_x_reveal",
+            prompt="剧作家请选择要公开的规则 X",
+            options=revealable,
+            player="mastermind",
+            callback=_on_reveal,
+        )
+
+    def _reveal_informant_rule_x(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        rule_x_id: str,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        if rule_x_id not in state.revealed_rule_x_ids:
+            state.revealed_rule_x_ids.append(rule_x_id)
+        self.event_bus.emit(GameEvent(GameEventType.RULE_X_REVEALED, {"rule_x_id": rule_x_id}))
+        self.ability_resolver.mark_ability_used(state, candidate)
+        return next_signal_factory()
+
+    @staticmethod
+    def _available_module_rule_x_ids(state: GameState) -> list[str]:
+        if state.module_def is not None:
+            return [rule.rule_id for rule in state.module_def.rules_x]
+        return [rule.rule_id for rule in state.script.private_table.rules_x]
+
+    @staticmethod
+    def _default_first_steps_rule_x_id(state: GameState) -> str:
+        if state.script.private_table.rules_x:
+            return state.script.private_table.rules_x[0].rule_id
+        available = ProtagonistAbilityHandler._available_module_rule_x_ids(state)
+        if not available:
+            raise ValueError("first_steps has no available rule_x")
+        return available[0]
+
+    def _resolve_appraiser_goodwill(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        owner = state.characters.get(candidate.source_id)
+        if owner is None:
+            return next_signal_factory()
+        options = [
+            character_id
+            for character_id, character in state.characters.items()
+            if character_id != owner.character_id
+            and character.area == owner.area
+            and character.is_active()
+        ]
+        if len(options) < 2:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+        self._emit_ability_declared(candidate)
+
+        def _on_source(choice: Any) -> PhaseSignal:
+            source_id = str(choice)
+            if source_id not in options:
+                raise ValueError(f"invalid appraiser source: {choice!r}")
+            return self._request_appraiser_target(
+                state,
+                candidate,
+                source_id=source_id,
+                options=options,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt="请选择要移出指示物的角色 A",
+            options=options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_source,
+        )
+
+    def _request_appraiser_target(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        source_id: str,
+        options: list[str],
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        target_options = [character_id for character_id in options if character_id != source_id]
+
+        def _on_target(choice: Any) -> PhaseSignal:
+            target_id = str(choice)
+            if target_id not in target_options:
+                raise ValueError(f"invalid appraiser target: {choice!r}")
+            return self._request_appraiser_token_move(
+                state,
+                candidate,
+                first_id=source_id,
+                second_id=target_id,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt="请选择角色 B",
+            options=target_options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_target,
+        )
+
+    def _request_appraiser_token_move(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        first_id: str,
+        second_id: str,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        first = state.characters.get(first_id)
+        second = state.characters.get(second_id)
+        if first is None or second is None:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+        move_options = self._appraiser_move_options(state, first_id=first_id, second_id=second_id)
+        if not move_options:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+
+        def _on_move(choice: Any) -> PhaseSignal:
+            move_key = str(choice)
+            move = self._parse_appraiser_move_option(move_key)
+            if move is None or move_key not in move_options:
+                raise ValueError(f"invalid appraiser token move: {choice!r}")
+            source_id, token_name, target_id = move
+            result = self.atomic_resolver.resolve(
+                state,
+                [
+                    ScopedEffect(
+                        effect=Effect(
+                            effect_type=EffectType.MOVE_TOKEN,
+                            target=target_id,
+                            token_type=TokenType(token_name),
+                            amount=1,
+                        ),
+                        perpetrator_id=source_id,
+                    )
+                ],
+            )
+            self.ability_resolver.mark_ability_used(state, candidate)
+            signal = self._resolution_result_to_signal(
+                result,
+                default_reason=candidate.ability.ability_id,
+            )
+            if signal is not None:
+                return signal
+            return next_signal_factory()
+
+        return WaitForInput(
+            input_type="choose_ability_token_move",
+            prompt="请选择要执行的指示物移动",
+            options=move_options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_move,
+        )
+
+    def _appraiser_move_options(
+        self,
+        state: GameState,
+        *,
+        first_id: str,
+        second_id: str,
+    ) -> list[str]:
+        options: list[str] = []
+        for source_id, target_id in ((first_id, second_id), (second_id, first_id)):
+            source = state.characters.get(source_id)
+            if source is None:
+                continue
+            for token in TokenType:
+                if source.tokens.get(token) <= 0:
+                    continue
+                options.append(self._build_appraiser_move_option(
+                    source_id=source_id,
+                    token_name=token.value,
+                    target_id=target_id,
+                ))
+        return options
+
+    @staticmethod
+    def _build_appraiser_move_option(
+        *,
+        source_id: str,
+        token_name: str,
+        target_id: str,
+    ) -> str:
+        return f"{source_id}|{token_name}|{target_id}"
+
+    @staticmethod
+    def _parse_appraiser_move_option(value: str) -> tuple[str, str, str] | None:
+        parts = value.split("|")
+        if len(parts) != 3:
+            return None
+        source_id, token_name, target_id = parts
+        return source_id, token_name, target_id
 
 
 class IncidentHandler(PhaseHandler):
@@ -1920,9 +2508,9 @@ class FinalGuessHandler(PhaseHandler):
     ) -> WaitForInput:
         context = {
             "errors": list(errors or []),
-            "rule_y_id": state.script.rule_y.rule_id if state.script.rule_y is not None else None,
-            "rule_x_ids": [rule.rule_id for rule in state.script.rules_x],
-            "character_ids": [setup.character_id for setup in state.script.characters],
+            "rule_y_id": state.script.private_table.rule_y.rule_id if state.script.private_table.rule_y is not None else None,
+            "rule_x_ids": [rule.rule_id for rule in state.script.private_table.rules_x],
+            "character_ids": [setup.character_id for setup in state.script.private_table.characters],
             "identity_ids": sorted(state.identity_defs.keys()),
         }
 
@@ -1961,7 +2549,7 @@ class FinalGuessHandler(PhaseHandler):
         if not isinstance(raw_character_identities, dict):
             return {}, "最终决战缺少 character_identities"
 
-        expected_character_ids = [setup.character_id for setup in state.script.characters]
+        expected_character_ids = [setup.character_id for setup in state.script.private_table.characters]
         guessed_character_ids = list(raw_character_identities.keys())
         if set(guessed_character_ids) != set(expected_character_ids):
             return {}, "最终决战需要为所有登场角色提交身份猜测"
@@ -1979,16 +2567,16 @@ class FinalGuessHandler(PhaseHandler):
 
     @staticmethod
     def _is_final_guess_correct(state: GameState, payload: dict[str, Any]) -> bool:
-        actual_rule_y_id = state.script.rule_y.rule_id if state.script.rule_y is not None else None
+        actual_rule_y_id = state.script.private_table.rule_y.rule_id if state.script.private_table.rule_y is not None else None
         if payload["rule_y_id"] != actual_rule_y_id:
             return False
 
-        if set(payload["rule_x_ids"]) != {rule.rule_id for rule in state.script.rules_x}:
+        if set(payload["rule_x_ids"]) != {rule.rule_id for rule in state.script.private_table.rules_x}:
             return False
 
         actual_character_identities = {
             setup.character_id: state.characters[setup.character_id].original_identity_id
-            for setup in state.script.characters
+            for setup in state.script.private_table.characters
         }
         return payload["character_identities"] == actual_character_identities
 

@@ -127,6 +127,34 @@ class IncidentResolver:
         self._record_public_result(state, resolution.public_result)
         return resolution
 
+    def resolve_effect_only(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef | None = None,
+    ) -> IncidentResolution:
+        """仅执行事件效果，不标记事件已发生，也不写公开记录。"""
+        resolved_incident_def = incident_def or state.incident_defs.get(schedule.incident_id)
+        resolution = IncidentResolution(schedule=schedule, incident_def=resolved_incident_def)
+        if resolved_incident_def is None:
+            return resolution
+
+        if self.next_runtime_choice(state, schedule, resolved_incident_def) is not None:
+            return resolution
+
+        effects = self._materialize_effects(state, schedule, resolved_incident_def.effects)
+        result = self.atomic_resolver.resolve(
+            state,
+            effects,
+            sequential=resolved_incident_def.sequential,
+            perpetrator_id=schedule.perpetrator_id,
+        )
+
+        resolution.mutations = result.mutations
+        resolution.outcome = result.outcome
+        resolution.has_phenomenon = len(result.mutations) > 0
+        return resolution
+
     def can_occur(
         self,
         state: GameState,

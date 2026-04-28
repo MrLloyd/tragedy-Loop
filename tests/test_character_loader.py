@@ -14,7 +14,7 @@ from engine.rules.character_loader import (
     instantiate_character_state,
     load_character_defs,
 )
-from engine.rules.module_loader import build_game_state_from_module
+from engine.rules.module_loader import build_game_state_from_module, build_script_setup_context
 
 
 def test_load_character_defs_reads_character_templates() -> None:
@@ -119,6 +119,23 @@ def test_instantiate_character_state_applies_template_and_identity_alias() -> No
     assert state.goodwill_abilities[0].goodwill_requirement == 3
 
 
+def test_instantiate_character_state_keeps_entry_fields_for_supported_roles() -> None:
+    defs = load_character_defs()
+    deity = instantiate_character_state(
+        CharacterSetup(character_id="deity", identity_id="friend", entry_loop=2),
+        defs,
+    )
+    transfer_student = instantiate_character_state(
+        CharacterSetup(character_id="transfer_student", identity_id="friend", entry_day=3),
+        defs,
+    )
+
+    assert deity.entry_loop == 2
+    assert deity.entry_day is None
+    assert transfer_student.entry_loop is None
+    assert transfer_student.entry_day == 3
+
+
 def test_instantiate_character_state_keeps_base_and_current_forbidden_areas() -> None:
     defs = load_character_defs()
     setup = CharacterSetup(character_id="office_worker", identity_id="平民")
@@ -183,6 +200,15 @@ def test_build_game_state_from_module_supports_test_instance_import() -> None:
     assert len(state.script.incident_public) == 1
     assert state.script.incident_public[0]["name"] == "谋杀"
     assert state.script.incident_public[0]["day"] == 1
+
+
+def test_build_script_setup_context_hides_disabled_streamer() -> None:
+    context = build_script_setup_context("first_steps")
+
+    assert "streamer" not in context["available_characters"]
+    assert "streamer" not in context["character_initial_area_specs"]
+    assert context["entry_loop_character_ids"] == ["deity"]
+    assert context["entry_day_character_ids"] == ["transfer_student"]
 
 
 def test_build_game_state_from_module_applies_script_selected_initial_area() -> None:

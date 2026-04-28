@@ -177,6 +177,7 @@ class GameController:
         self.state.current_phase = phase
         self._append_trace(f"run_phase {phase.value}")
         settle_persistent_effects(self.state)
+        self._sync_entry_characters_for_phase(phase)
 
         # 通知 UI
         self._notify_phase_change()
@@ -192,6 +193,7 @@ class GameController:
         # NEXT_LOOP：重置状态后自动推进
         if phase == GamePhase.NEXT_LOOP:
             self.state.reset_for_new_loop()
+            self._sync_entry_characters_for_phase(GamePhase.LOOP_START)
             self.event_bus.emit(GameEvent(GameEventType.LOOP_STARTED, {"loop": self.state.current_loop}))
             self._advance_and_run()
             return
@@ -263,6 +265,39 @@ class GameController:
     def _append_trace(self, message: str) -> None:
         self.runtime_debug.trace_tail.append(message)
 
+    def _sync_entry_characters_for_phase(self, phase: GamePhase) -> None:
+        if phase == GamePhase.GAME_PREPARE:
+            deity = self.state.characters.get("deity")
+            if deity is not None and (deity.entry_loop or 0) > 0:
+                deity.mark_removed()
+            transfer_student = self.state.characters.get("transfer_student")
+            if transfer_student is not None and transfer_student.entry_day:
+                transfer_student.mark_removed()
+            return
+        if phase == GamePhase.LOOP_START:
+            deity = self.state.characters.get("deity")
+            if deity is not None:
+                entry_loop = deity.entry_loop or 0
+                if entry_loop > 0 and self.state.current_loop >= entry_loop:
+                    deity.mark_alive()
+                else:
+                    deity.mark_removed()
+
+            transfer_student = self.state.characters.get("transfer_student")
+            if transfer_student is not None and transfer_student.entry_day:
+                transfer_student.mark_removed()
+            return
+
+        if phase == GamePhase.TURN_START:
+            transfer_student = self.state.characters.get("transfer_student")
+            if transfer_student is None:
+                return
+            entry_day = transfer_student.entry_day or 0
+            if entry_day > 0 and self.state.current_day >= entry_day:
+                transfer_student.mark_alive()
+            elif entry_day > 0:
+                transfer_student.mark_removed()
+
     def _record_runtime_error(self, message: str) -> None:
         self.runtime_debug.last_error = message
         self._append_trace(f"error {message}")
@@ -291,7 +326,7 @@ class GameController:
         prev_phase = self.state_machine.current_phase  # 保存推进前的阶段
 
         phase = self.state_machine.advance(
-            is_final_day=(self.state.current_day >= self.state.script.days_per_loop),
+            is_final_day=(self.state.current_day >= self.state.max_days),
             failure_reached=bool(self.state.failure_flags),
             is_last_loop=self.state.is_last_loop,
             protagonist_dead=self.state.protagonist_dead,
@@ -353,6 +388,7 @@ class GameController:
             GameEventType.IDENTITY_REVEALED: "reveal_identity",
             GameEventType.INCIDENT_REVEALED: "reveal_incident",
             GameEventType.INCIDENT_OCCURRED: "incident_occurred",
+            GameEventType.RULE_X_REVEALED: "reveal_rule_x",
             GameEventType.LOOP_ENDED: "loop_ended",
             GameEventType.GAME_ENDED: "game_ended",
             GameEventType.ABILITY_REFUSED: "ability_refused",
@@ -366,6 +402,7 @@ class GameController:
             GameEventType.IDENTITY_REVEALED,
             GameEventType.INCIDENT_REVEALED,
             GameEventType.INCIDENT_OCCURRED,
+            GameEventType.RULE_X_REVEALED,
             GameEventType.LOOP_STARTED,
             GameEventType.LOOP_ENDED,
             GameEventType.GAME_ENDED,

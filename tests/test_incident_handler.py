@@ -242,6 +242,56 @@ def test_ai_incident_check_counts_all_tokens_as_paranoia() -> None:
     assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 2
 
 
+def test_resolve_effect_only_executes_effect_without_marking_incident_occurred() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="effect_only_incident",
+        name="仅效果事件",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target="target",
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            )
+        ],
+    )
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    state.characters["perp"] = CharacterState(
+        character_id="perp",
+        name="当事人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=2,
+    )
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    schedule = IncidentSchedule(
+        "effect_only_incident",
+        day=1,
+        perpetrator_id="perp",
+    )
+
+    result = resolver.resolve_effect_only(state, schedule, incident_def)
+
+    assert result.occurred is False
+    assert schedule.occurred is False
+    assert state.characters["target"].tokens.intrigue == 1
+    assert state.incidents_occurred_this_loop == []
+    assert state.incident_results_this_loop == []
+    assert not any(event.event_type == GameEventType.INCIDENT_OCCURRED for event in bus.log)
+
+
 # ---------------------------------------------------------------------------
 # 测试 6：结构化同区域全体目标 — 杀死同区域全部存活角色
 # ---------------------------------------------------------------------------

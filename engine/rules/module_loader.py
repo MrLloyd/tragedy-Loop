@@ -22,6 +22,8 @@ from engine.models.incident import IncidentDef, IncidentSchedule
 from engine.models.script import CharacterSetup, ModuleDef, RuleDef
 from engine.rules.character_loader import (
     CharacterDef,
+    ENTRY_DAY_CHARACTER_IDS,
+    ENTRY_LOOP_CHARACTER_IDS,
     instantiate_character_state,
     load_character_defs,
     normalize_identity_id,
@@ -101,8 +103,10 @@ def apply_loaded_module(state: GameState, loaded: LoadedModule) -> None:
     state.module_def = loaded.module_def
     state.identity_defs = dict(loaded.identity_defs)
     state.incident_defs = dict(loaded.incident_defs)
-    state.script.module_id = loaded.module_def.module_id
-    state.script.special_rules_text = list(loaded.module_def.special_rules)
+    state.script.private_table.module_id = loaded.module_def.module_id
+    state.script.private_table.special_rules = list(loaded.module_def.special_rules)
+    state.script.public_table.module_id = loaded.module_def.module_id
+    state.script.public_table.special_rules = list(loaded.module_def.special_rules)
     state.ex_gauge_resets_per_loop = loaded.module_def.ex_gauge_resets_per_loop
 
 
@@ -126,16 +130,18 @@ def build_game_state_from_module(
     loaded = load_module(module_id)
     state = GameState()
     if loop_count is not None:
-        state.script.loop_count = loop_count
+        state.script.private_table.loop_count = loop_count
+        state.script.public_table.loop_count = loop_count
     if days_per_loop is not None:
-        state.script.days_per_loop = days_per_loop
+        state.script.private_table.days_per_loop = days_per_loop
+        state.script.public_table.days_per_loop = days_per_loop
     apply_loaded_module(state, loaded)
     state.init_protagonist_hands()
 
     if rule_y_id is not None:
-        state.script.rule_y = _pick_rule(loaded.module_def.rules_y, rule_y_id, "rule_y")
+        state.script.private_table.rule_y = _pick_rule(loaded.module_def.rules_y, rule_y_id, "rule_y")
     if rule_x_ids is not None:
-        state.script.rules_x = [
+        state.script.private_table.rules_x = [
             _pick_rule(loaded.module_def.rules_x, rid, "rule_x")
             for rid in rule_x_ids
         ]
@@ -143,7 +149,7 @@ def build_game_state_from_module(
     defs = character_defs if character_defs is not None else load_character_defs()
 
     if character_setups is not None:
-        state.script.characters = copy.deepcopy(character_setups)
+        state.script.private_table.characters = copy.deepcopy(character_setups)
         state.characters = _build_characters_from_setups(
             character_setups,
             defs,
@@ -151,8 +157,11 @@ def build_game_state_from_module(
         )
 
     if incidents is not None:
-        state.script.incidents = copy.deepcopy(incidents)
-        state.script.incident_public = _build_incident_public_info(incidents, state.incident_defs)
+        state.script.private_table.incidents = copy.deepcopy(incidents)
+        state.script.private_table.public_incident_refs = [
+            inc.incident_id for inc in incidents
+        ]
+        state.script.public_table.incidents = _build_incident_public_info(incidents, state.incident_defs)
 
     if not skip_script_validation and _script_has_instance_input(
         character_setups=character_setups,
@@ -161,7 +170,7 @@ def build_game_state_from_module(
         rule_x_ids=rule_x_ids,
     ):
         issues = validate_script(
-            state.script,
+            state.script.private_table,
             ScriptValidationContext(
                 module_def=loaded.module_def,
                 identity_defs=loaded.identity_defs,
@@ -213,6 +222,11 @@ def build_script_setup_context(
     """为 `script_setup` 输入生成 UI 渲染元数据。"""
     loaded = load_module(module_id)
     character_defs = load_character_defs()
+    available_character_defs = {
+        character_id: character
+        for character_id, character in character_defs.items()
+        if "disabled_until_ex_rules" not in character.script_constraints
+    }
 
     return {
         "module_id": module_id,
@@ -225,14 +239,16 @@ def build_script_setup_context(
         "available_rule_x_ids": [rule.rule_id for rule in loaded.module_def.rules_x],
         "available_identities": sorted(loaded.identity_defs.keys()),
         "available_incidents": sorted(loaded.incident_defs.keys()),
-        "available_characters": sorted(character_defs.keys()),
+        "available_characters": sorted(available_character_defs.keys()),
+        "entry_loop_character_ids": sorted(ENTRY_LOOP_CHARACTER_IDS),
+        "entry_day_character_ids": sorted(ENTRY_DAY_CHARACTER_IDS),
         "character_initial_area_specs": {
             character_id: {
                 "mode": character.initial_area_mode,
                 "default_area": character.initial_area.value,
                 "candidates": [area.value for area in character.initial_area_candidates],
             }
-            for character_id, character in character_defs.items()
+            for character_id, character in available_character_defs.items()
         },
     }
 

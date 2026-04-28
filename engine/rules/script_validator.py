@@ -5,15 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from engine.models.enums import AreaId, Attribute, TokenType, Trait
-from engine.models.script import CharacterSetup, RuleDef, Script
+from engine.models.script import CharacterSetup, PrivateScriptInfo, RuleDef
 from engine.rules.character_loader import (
     CharacterDef,
+    ENTRY_DAY_CHARACTER_IDS,
+    ENTRY_LOOP_CHARACTER_IDS,
     normalize_identity_id,
 )
 from engine.models.identity import IdentityDef
 from engine.models.incident import IncidentDef
 from engine.models.script import ModuleDef
 from engine.validation.common import ValidationIssue
+
+_SPECIAL_SCRIPT_CREATION_IDENTITY_CHARACTER_IDS = {"outsider", "copycat"}
 
 
 @dataclass
@@ -33,7 +37,7 @@ class ScriptValidationError(ValueError):
         super().__init__(message)
 
 
-def validate_script(script: Script, context: ScriptValidationContext) -> list[ValidationIssue]:
+def validate_script(script: PrivateScriptInfo, context: ScriptValidationContext) -> list[ValidationIssue]:
     """总入口：基础剧本校验 → SCRIPT_CREATION 规则校验。"""
     issues = validate_basic_script(script, context)
     if issues:
@@ -43,7 +47,7 @@ def validate_script(script: Script, context: ScriptValidationContext) -> list[Va
 
 
 def validate_basic_script(
-    script: Script,
+    script: PrivateScriptInfo,
     context: ScriptValidationContext,
 ) -> list[ValidationIssue]:
     """基础剧本结构校验，与具体规则文字无关。"""
@@ -86,6 +90,57 @@ def validate_basic_script(
         identity_id = normalize_identity_id(setup.identity_id)
         if identity_id != "平民" and identity_id not in context.identity_defs:
             issues.append(ValidationIssue(f"{path}.identity_id", f"unknown identity: {setup.identity_id!r}"))
+        if setup.entry_loop > 0 and setup.character_id not in ENTRY_LOOP_CHARACTER_IDS:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.entry_loop",
+                    f"{character_def.name} cannot set entry_loop",
+                )
+            )
+        if setup.entry_day > 0 and setup.character_id not in ENTRY_DAY_CHARACTER_IDS:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.entry_day",
+                    f"{character_def.name} cannot set entry_day",
+                )
+            )
+        if setup.character_id in ENTRY_LOOP_CHARACTER_IDS:
+            if setup.entry_loop <= 0:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.entry_loop",
+                        f"{character_def.name} requires entry_loop",
+                    )
+                )
+            elif setup.entry_loop > script.loop_count:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.entry_loop",
+                        f"{character_def.name} entry_loop must be in 1..{script.loop_count}",
+                    )
+                )
+        if setup.character_id in ENTRY_DAY_CHARACTER_IDS:
+            if setup.entry_day <= 0:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.entry_day",
+                        f"{character_def.name} requires entry_day",
+                    )
+                )
+            elif setup.entry_day > script.days_per_loop:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.entry_day",
+                        f"{character_def.name} entry_day must be in 1..{script.days_per_loop}",
+                    )
+                )
+        if _has_script_constraint(character_def, "disabled_until_ex_rules"):
+            issues.append(
+                ValidationIssue(
+                    f"{path}.character_id",
+                    f"{character_def.name} is disabled until EX-card rules are implemented",
+                )
+            )
 
     selected_character_ids = {setup.character_id for setup in script.characters}
     seen_incident_days: set[int] = set()
@@ -155,7 +210,7 @@ def validate_basic_script(
 
 
 def validate_script_creation_constraints(
-    script: Script,
+    script: PrivateScriptInfo,
     context: ScriptValidationContext,
 ) -> list[ValidationIssue]:
     """SCRIPT_CREATION / 剧本制作时约束。"""
@@ -164,6 +219,7 @@ def validate_script_creation_constraints(
 
     issues: list[ValidationIssue] = []
     character_by_identity = _characters_by_identity(script)
+    rule_pool_identity_ids = _selected_rule_identity_ids([script.rule_y, *script.rules_x])
 
     if script.rule_y and script.rule_y.rule_id == "btx_cursed_contract":
         for character_id in character_by_identity.get("key_person", []):
@@ -200,11 +256,49 @@ def validate_script_creation_constraints(
                     )
                 )
 
+        if char_def.character_id == "outsider":
+            if identity_id == "平民":
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.identity_id",
+                        f"{char_def.name} cannot be assigned commoner at script creation",
+                    )
+                )
+            elif identity_id in rule_pool_identity_ids:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.identity_id",
+                        f"{char_def.name} must use an identity outside the selected rule pool",
+                    )
+                )
+
+        if char_def.character_id == "copycat":
+            if identity_id == "平民":
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.identity_id",
+                        f"{char_def.name} cannot be assigned commoner at script creation",
+                    )
+                )
+            else:
+                same_identity_characters = [
+                    character_id
+                    for character_id in character_by_identity.get(identity_id, [])
+                    if character_id != char_def.character_id
+                ]
+                if not same_identity_characters:
+                    issues.append(
+                        ValidationIssue(
+                            f"{path}.identity_id",
+                            f"{char_def.name} requires another character with the same identity",
+                        )
+                    )
+
     return issues
 
 
 def _validate_identity_slots(
-    script: Script,
+    script: PrivateScriptInfo,
     rules: list[RuleDef],
     context: ScriptValidationContext,
 ) -> list[ValidationIssue]:
@@ -228,6 +322,8 @@ def _validate_identity_slots(
 
     actual: dict[str, int] = {}
     for setup in script.characters:
+        if setup.character_id in _SPECIAL_SCRIPT_CREATION_IDENTITY_CHARACTER_IDS:
+            continue
         identity_id = normalize_identity_id(setup.identity_id)
         if identity_id == "平民":
             continue
@@ -275,6 +371,16 @@ def _validate_identity_slots(
     return issues
 
 
+def _selected_rule_identity_ids(rules: list[RuleDef]) -> set[str]:
+    selected: set[str] = set()
+    for rule in rules:
+        for identity_id in rule.identity_slots:
+            selected.add(identity_id)
+        for identity_id in rule.identity_slot_ranges:
+            selected.add(identity_id)
+    return selected
+
+
 def _characters_by_identity(script: Script) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for setup in script.characters:
@@ -291,6 +397,8 @@ def _has_script_constraint(character_def: CharacterDef, constraint: str) -> bool
         return "不能為「平民」" in text or "不能为「平民」" in text or "不能为平民" in text
     if constraint == "cannot_ignore_goodwill_identity":
         return "无视友好特性的身份" in text or "無視友好特性的身份" in text
+    if constraint == "disabled_until_ex_rules":
+        return constraint in character_def.script_constraints
     return False
 
 

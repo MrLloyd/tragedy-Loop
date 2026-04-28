@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from engine.game_controller import GameController, UICallback
 from engine.game_state import GameState
-from engine.models.enums import GamePhase, Outcome
+from engine.models.enums import GamePhase, Outcome, PlayerRole
+from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import WaitForInput
 from engine.rules.module_loader import (
@@ -54,6 +55,35 @@ def test_build_game_state_from_module_first_steps() -> None:
     assert state.script.loop_count == 1
     assert state.script.days_per_loop == 1
     assert len(state.protagonist_hands) == 3
+
+
+def test_runtime_reads_private_script_table_while_visibility_reads_public_script_table() -> None:
+    state = GameState.create_minimal_test_state(loop_count=2, days_per_loop=3)
+    state.script.public_table.module_id = "public_only"
+    state.script.public_table.loop_count = 9
+    state.script.public_table.days_per_loop = 8
+    state.script.public_table.special_rules = ["公开规则"]
+
+    assert state.max_loops == 2
+    assert state.max_days == 3
+
+    visible = GameController().visibility.filter_for_role(state, PlayerRole.PROTAGONIST_0)
+    assert visible.public_info["module_id"] == "public_only"
+    assert visible.public_info["loop_count"] == 9
+    assert visible.public_info["days_per_loop"] == 8
+    assert visible.public_info["special_rules"] == ["公开规则"]
+
+
+def test_script_public_incident_ref_defaults_to_private_incident_index() -> None:
+    state = build_game_state_from_module(
+        "basic_tragedy_x",
+        loop_count=1,
+        days_per_loop=3,
+        incidents=[IncidentSchedule("suicide", day=3, perpetrator_id="female_student")],
+    )
+    state.script.private_table.public_incident_refs = []
+
+    assert state.script.private_incident_ref_for_public_index(0) == "suicide"
 
 
 def test_start_game_waits_for_script_setup_without_instance_input() -> None:

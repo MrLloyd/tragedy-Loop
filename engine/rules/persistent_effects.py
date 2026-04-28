@@ -55,9 +55,9 @@ def settle_persistent_effects(state: GameState) -> None:
 
 
 def _persistent_rules(state: GameState):
-    if state.script.rule_y is not None:
-        yield state.script.rule_y
-    yield from state.script.rules_x
+    if state.script.private_table.rule_y is not None:
+        yield state.script.private_table.rule_y
+    yield from state.script.private_table.rules_x
 
 
 def _persistent_targets(resolver, state: GameState, effect: Effect) -> list[str]:

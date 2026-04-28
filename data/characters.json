@@ -61,6 +61,9 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
+      "script_constraints": [
+        "disabled_until_ex_rules"
+      ],
       "goodwill_ability_texts": [
         "往同一区域另外一名角色身上放置1枚友好指示物，并移除1枚不安指示物。随后，可以将那名角色身上的Ex牌转移到与那名角色位于同一区域、且非UP主的1名角色身上。",
         "",
@@ -100,8 +103,7 @@
       "initial_area": "city",
       "forbidden_areas": [],
       "attributes": [
-        "female",
-        "adult"
+        "girl"
       ],
       "paranoia_limit": 2,
       "base_traits": [],
@@ -1368,7 +1370,7 @@
       "paranoia_limit": 2,
       "base_traits": [],
       "goodwill_ability_texts": [
-        "声明1条规则X的名称。剧作家从当前剧本所选用的规则X中，公开1条主人公未声明的规则X。",
+        "主人公先从模组的规则X中选择1条。然后剧作家从当前剧本所选用的2条规则X中选择1条向主人公公开，但不能与主人公选择的规则X重复。First Steps 模组中，剧作家直接公开规则X。",
         "",
         "",
         ""
@@ -1389,7 +1391,7 @@
           "name": "情报商 友好能力1",
           "ability_type": "optional",
           "timing": "protagonist_ability",
-          "description": "声明1条规则X的名称。剧作家从当前剧本所选用的规则X中，公开1条主人公未声明的规则X。",
+          "description": "主人公先从模组的规则X中选择1条。然后剧作家从当前剧本所选用的2条规则X中选择1条向主人公公开，但不能与主人公选择的规则X重复。First Steps 模组中，剧作家直接公开规则X。",
           "condition": null,
           "effects": [],
           "sequential": false,

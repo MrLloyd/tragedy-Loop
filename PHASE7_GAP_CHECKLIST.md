@@ -1,6 +1,6 @@
 # Phase 7 测试与角色实现清单
 
-日期：2026-04-27
+日期：2026-04-28
 
 范围：`First Steps` / `Basic Tragedy X`
 
@@ -14,6 +14,7 @@
 - [x] 规则测试界面验证完成
 - [x] 身份测试界面验证完成
 - [x] 事件测试界面验证完成
+- [x] 剧本公开 / 非公开信息表边界已拆分并完成回归
 - [x] “剧本制作时”类规则 / 角色约束改为正式版建局流程验证
 - [ ] 角色实现完成
 - [ ] 角色总测完成
@@ -127,6 +128,63 @@
 
 ---
 
+## 五点五、2026-04-28 补记：剧本信息边界与 AI / 情报商 / 鉴别员
+
+### 剧本信息边界
+
+- [x] `Script` 已拆分为 `public_table` 与 `private_table`
+- [x] 运行时真值统一从 `private_table` 读取，默认不再从公开信息表取规则 / 角色 / 事件真值
+- [x] `public_table` 仅保留给主人公阅读的内容：
+  - `module_id`
+  - `loop_count`
+  - `days_per_loop`
+  - 公开事件名称与发生天数
+  - 特殊规则
+- [x] `private_table` 统一承载实际运行所需数据：
+  - 模组
+  - 规则 `Y / X`
+  - 轮回数
+  - 每轮回天数
+  - 实际事件、发生天数、当事人
+  - 登场角色
+  - 特殊规则
+- [x] 可见性与 UI 展示统一读取 `public_table`
+- [x] `public_incident_refs` 支持“公开事件 -> 真实事件”映射；若未显式填写，则按私有事件同索引回退
+
+### 角色专项补记
+
+- [x] `goodwill:ai:1`
+  - 从公开信息表选择事件
+  - 实际效果映射到私有真实事件执行
+  - 当事人视为 `AI`
+  - 事件中的所有目标选择统一由队长完成
+  - 仅处理事件效果，不标记事件已发生，不写公开结果，不发送 `INCIDENT_OCCURRED`
+  - 不会触发 `改变未来` 中“蝴蝶效应已发生”的失败条件
+
+- [x] `goodwill:informant:1`
+  - 已按规则改为：主人公先声明 1 条所选规则 `X`，剧作家再从剧本已选规则 `X` 中公开另一条，且不得与主人公选择重复
+  - `First Steps` 维持特判：剧作家直接公开规则 `X`
+  - 已公开规则 `X` 状态改存于 `GameState.revealed_rule_x_ids`，并跨轮回保留
+
+- [x] `goodwill:appraiser:1`
+  - 已按裁定改为：先选同区域 2 名角色，再选择 1 枚指示物移动
+  - 仅当 `A / B` 两名角色都没有指示物时，才允许“无效果”
+  - 只要 `A` 或 `B` 任一角色上有可移动指示物，就必须选择其中一个合法移动
+
+### 已完成回归
+
+- [x] `tests/test_phase4_handlers.py`
+  - `AI` 公开事件代结算
+  - `informant` 规则 `X` 公开流程
+  - `appraiser` 指示物移动边界
+- [x] `tests/test_incident_handler.py`
+  - `IncidentResolver.resolve_effect_only()` 只处理效果、不记事件发生
+- [x] `tests/test_module_apply.py`
+  - 运行时读取私有表、可见性读取公开表
+  - 公开事件到私有事件的默认映射回退
+
+---
+
 ## 六、角色能力与特性结构化状态
 
 ### 6.1 角色能力
@@ -183,22 +241,22 @@
 
 | 状态 | 能力 | 角色 / 友好能力 | 需要复核的点 |
 |------|------|-----------------|--------------|
-| [ ] | `goodwill:doctor:2` | `doctor` 友好2 | `lift_forbidden_areas` 已接线；待专项回归确认住院患者禁行解除 |
-| [ ] | `goodwill:vip:1` | `vip` 友好1 | `reveal_identity` 已接线；待专项回归确认“领地中另外 1 名角色”范围 |
+| [x] | `goodwill:doctor:2` | `doctor` 友好2 | `lift_forbidden_areas` 已接线；待专项回归确认住院患者禁行解除 |
+| [x] | `goodwill:vip:1` | `vip` 友好1 | `reveal_identity` 已接线；待专项回归确认“领地中另外 1 名角色”范围 |
 | [ ] | `goodwill:scholar:1` | `scholar` 友好1 | 已确认 FS / BTX 无 EX 槽分支；带 EX 槽模组的 +1 / -1 分支待后续专项回归 |
-| [ ] | `goodwill:phantom:2` | `phantom` 友好2 | `remove_character` 已接线；待专项回归确认离场状态与后续行动牌路由。后续统一采用三态入口：`ACTIVE / DEAD / REMOVED`，并由 `CharacterState.life_state()` 派生 `is_active()` / `is_dead()` |
+| [x] | `goodwill:phantom:2` | `phantom` 友好2 | `remove_character` 已接线；待专项回归确认离场状态与后续行动牌路由。后续统一采用三态入口：`ACTIVE / DEAD / REMOVED`，并由 `CharacterState.life_state()` 派生 `is_active()` / `is_dead()` |
 
-##### 已结构化但未实现
+##### 已结构化但仍有缺口
 
 | 状态 | 能力 | 角色 / 友好能力 | 当前缺口 |
 |------|------|-----------------|----------|
-| [ ] | `goodwill:ai:1` | `ai` 友好1 | 仍为空 `effects`；需实现公开信息表事件代结算，且不标记事件已发生 |
+| [x] | `goodwill:ai:1` | `ai` 友好1 | 已接线专用交互；从公开信息表选事件并映射到私有真实事件，仅执行效果，不标记事件已发生 |
 | [ ] | `goodwill:streamer:1` | `streamer` 友好1 | 仍为空 `effects`；需放置友好、移除不安，并处理 Ex 牌转移 |
 | [ ] | `goodwill:servant:1` | `servant` 友好1 | 仍为空 `effects`；需本轮追加特性适用对象 |
 | [ ] | `goodwill:sister:1` | `sister` 友好1 | 仍为空 `effects`；需让同区域成人无视友好数量使用 1 个友好能力，且不可拒绝 |
-| [ ] | `goodwill:informant:1` | `informant` 友好1 | 仍为空 `effects`；需声明规则 X 并公开未声明规则 X |
+| [x] | `goodwill:informant:1` | `informant` 友好1 | 已接线专用交互并通过规则流程回归；后续只需继续观察正式 UI 展示 |
 | [ ] | `goodwill:copycat:1` | `copycat` 友好1 | 仍为空 `effects`；需公开场上与自身身份相同的全部角色名 |
-| [ ] | `goodwill:appraiser:1` | `appraiser` 友好1 | 仍为空 `effects`；需在同区域另外 2 名角色之间移动任意 1 枚指示物 |
+| [x] | `goodwill:appraiser:1` | `appraiser` 友好1 | 已接线专用交互并通过边界回归；仅当两名目标都无指示物时才无效果，否则必须移动 1 枚合法指示物 |
 
 #### 未结构化
 

@@ -21,6 +21,8 @@ _CHARACTER_DATA_FILE = Path(__file__).parent.parent.parent / "data" / "character
 
 # 兼容历史脚本中的平民写法。
 _COMMONER_ALIASES = {"平民", "commoner"}
+ENTRY_LOOP_CHARACTER_IDS = frozenset({"deity"})
+ENTRY_DAY_CHARACTER_IDS = frozenset({"transfer_student"})
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,8 @@ def instantiate_character_state(
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
         goodwill_ability_goodwill_requirements=list(char_def.goodwill_ability_goodwill_requirements),
         goodwill_ability_once_per_loop=list(char_def.goodwill_ability_once_per_loop),
+        entry_loop=setup.entry_loop if char_def.character_id in ENTRY_LOOP_CHARACTER_IDS else None,
+        entry_day=setup.entry_day if char_def.character_id in ENTRY_DAY_CHARACTER_IDS else None,
     )
 
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from engine.event_bus import EventBus
 from engine.game_state import GameState
+from engine.models.ability import Ability
 from engine.models.character import CharacterState
-from engine.models.enums import AbilityTiming, AreaId, CharacterLifeState, TokenType
+from engine.models.effects import Effect
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CharacterLifeState, EffectType, TokenType, Trait
 from engine.phases.phase_base import (
     PhaseComplete,
     PlaywrightAbilityHandler,
@@ -227,6 +229,96 @@ def test_phase5_male_student_goodwill_can_be_refused() -> None:
     assert isinstance(follow_up, WaitForInput)
     assert state.characters["male_student"].tokens.get(TokenType.GOODWILL) == 2
     assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 1
+
+
+def test_phase5_sister_forces_adult_goodwill_without_refusal() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["sister"] = CharacterState(
+        character_id="sister",
+        name="妹妹",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="sister",
+        original_identity_id="sister",
+        attributes={Attribute.GIRL, Attribute.SISTER},
+        goodwill_ability_texts=[
+            "同一区域的1名成人使用1个友好能力，此时无视该成人的友好指示物数量。即使该成人带有无视友好特性，也不能拒绝使用那个能力。但能力依然受到次数限制。",
+            "",
+            "",
+            "",
+        ],
+        goodwill_ability_goodwill_requirements=[5, 0, 0, 0],
+        goodwill_ability_once_per_loop=[True, False],
+    )
+    state.characters["soldier"] = CharacterState(
+        character_id="soldier",
+        name="军人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="soldier",
+        original_identity_id="soldier",
+        attributes={Attribute.ADULT, Attribute.MALE},
+        base_traits={Trait.IGNORE_GOODWILL},
+        goodwill_abilities=[
+            Ability(
+                ability_id="goodwill:soldier:1",
+                name="军人 友好能力1",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                description="往同一区域任意1名角色身上放置2枚不安指示物",
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target={
+                            "scope": "same_area",
+                            "subject": "character",
+                        },
+                        token_type=TokenType.PARANOIA,
+                        amount=2,
+                    )
+                ],
+                goodwill_requirement=2,
+                once_per_loop=True,
+                can_be_refused=True,
+            )
+        ],
+    )
+    state.characters["victim"] = CharacterState(
+        character_id="victim",
+        name="路人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        attributes={Attribute.ADULT},
+    )
+    state.characters["sister"].tokens.add(TokenType.GOODWILL, 5)
+    state.characters["soldier"].tokens.add(TokenType.GOODWILL, 2)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    sister_choice = next(
+        option for option in signal.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == "goodwill:sister:1"
+    )
+
+    target_wait = signal.callback(sister_choice)
+    assert isinstance(target_wait, WaitForInput)
+    assert target_wait.input_type == "choose_ability_target"
+
+    soldier_wait = target_wait.callback("soldier")
+    assert isinstance(soldier_wait, WaitForInput)
+    assert soldier_wait.input_type == "choose_ability_target"
+    assert "victim" in soldier_wait.options
+
+    result = soldier_wait.callback("victim")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["victim"].tokens.get(TokenType.PARANOIA) == 2
+    assert state.ability_runtime.usages_this_loop["goodwill:sister:goodwill:sister:1"] == 1
+    assert state.ability_runtime.usages_this_loop["goodwill:soldier:goodwill:soldier:1"] == 1
 
 
 def test_phase5_office_worker_goodwill_reveals_identity() -> None:

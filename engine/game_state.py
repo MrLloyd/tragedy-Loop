@@ -22,7 +22,7 @@ from engine.models.cards import (
 from engine.models.character import CharacterEndState, CharacterState, TokenSet
 from engine.models.identity import IdentityDef
 from engine.models.incident import IncidentDef, IncidentPublicResult, IncidentSchedule
-from engine.models.script import ModuleDef, Script
+from engine.models.script import ModuleDef, PrivateScriptInfo, PublicScriptInfo, Script
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +114,7 @@ class GameState:
     incidents_occurred_this_loop: list[str] = field(default_factory=list)
     incident_results_this_loop: list[IncidentPublicResult] = field(default_factory=list)
     revealed_incident_perpetrators_this_loop: list[dict[str, Any]] = field(default_factory=list)
+    revealed_rule_x_ids: list[str] = field(default_factory=list)
     suppressed_incident_perpetrators: set[str] = field(default_factory=set)
     # Phase 2 module_loader 填充；为空时 IncidentHandler 仅做触发标记，跳过效果执行
     incident_defs: dict[str, IncidentDef] = field(default_factory=dict)
@@ -159,11 +160,19 @@ class GameState:
           - 当前轮 = 1, 当前天 = 1
         """
         script = Script(
-            module_id="first_steps",
-            loop_count=loop_count,
-            days_per_loop=days_per_loop,
-            incident_public=[],
-            special_rules_text=[],
+            public_table=PublicScriptInfo(
+                module_id="first_steps",
+                loop_count=loop_count,
+                days_per_loop=days_per_loop,
+                incidents=[],
+                special_rules=[],
+            ),
+            private_table=PrivateScriptInfo(
+                module_id="first_steps",
+                loop_count=loop_count,
+                days_per_loop=days_per_loop,
+                special_rules=[],
+            ),
         )
 
         state = cls(
@@ -201,11 +210,11 @@ class GameState:
 
     @property
     def max_loops(self) -> int:
-        return self.script.loop_count
+        return self.script.private_table.loop_count
 
     @property
     def max_days(self) -> int:
-        return self.script.days_per_loop
+        return self.script.private_table.days_per_loop
 
     @property
     def is_final_day(self) -> bool:
@@ -280,7 +289,7 @@ class GameState:
         return True
 
     def get_incidents_for_day(self, day: int) -> list[IncidentSchedule]:
-        return [inc for inc in self.script.incidents if inc.day == day]
+        return [inc for inc in self.script.private_table.incidents if inc.day == day]
 
     # ==================================================================
     # 快照（原子结算"读"阶段用）
@@ -356,7 +365,7 @@ class GameState:
         self.leader_index = 0
 
         # 事件重置
-        for inc in self.script.incidents:
+        for inc in self.script.private_table.incidents:
             inc.occurred = False
         self.incidents_occurred_this_loop.clear()
         self.incident_results_this_loop.clear()
