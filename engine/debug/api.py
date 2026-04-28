@@ -484,7 +484,7 @@ def _concretize_effect(effect: Effect, target_id: str) -> Effect:
 
 
 def _candidate_owner_id(candidate: AbilityCandidate) -> str:
-    if candidate.source_kind in {"identity", "goodwill", "derived"}:
+    if candidate.source_kind in {"identity", "goodwill", "derived", "character_trait_ability"}:
         return candidate.source_id
     return ""
 

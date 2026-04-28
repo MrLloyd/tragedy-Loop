@@ -20,7 +20,7 @@ from engine.models.selectors import (
     selector_requires_choice,
 )
 from engine.resolvers.ability_resolver import AbilityCandidate, AbilityResolver
-from engine.resolvers.atomic_resolver import ScopedEffect
+from engine.resolvers.atomic_resolver import ScopedEffect, ServantFollowChoiceRequest
 from engine.resolvers.incident_resolver import IncidentResolver
 from engine.rules.runtime_traits import has_trait
 
@@ -199,19 +199,25 @@ class PhaseHandler(ABC):
         if isinstance(prepared, WaitForInput):
             return prepared
 
-        self._emit_ability_declared(candidate)
-        result = self.atomic_resolver.resolve(
+        def _before_resolve() -> None:
+            self._emit_ability_declared(candidate)
+
+        def _on_resolved(result: Any) -> PhaseSignal:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            signal = self._resolution_result_to_signal(result, default_reason=candidate.ability.ability_id)
+            if signal is not None:
+                return signal
+            return next_signal_factory()
+
+        return self._resolve_effect_batch_with_servant_follow(
             state,
             prepared,
             sequential=candidate.ability.sequential,
             perpetrator_id=owner_id,
             location_context=location_context,
+            before_resolve=_before_resolve,
+            on_resolved=_on_resolved,
         )
-        self.ability_resolver.mark_ability_used(state, candidate)
-        signal = self._resolution_result_to_signal(result, default_reason=candidate.ability.ability_id)
-        if signal is not None:
-            return signal
-        return next_signal_factory()
 
     def _execute_mandatory_batch(
         self,
@@ -245,7 +251,7 @@ class PhaseHandler(ABC):
         )
 
     def _candidate_owner_id(self, candidate: AbilityCandidate) -> str:
-        if candidate.source_kind in {"identity", "goodwill", "derived"}:
+        if candidate.source_kind in {"identity", "goodwill", "derived", "character_trait_ability"}:
             return candidate.source_id
         return ""
 
@@ -281,7 +287,7 @@ class PhaseHandler(ABC):
                 )
             ]
         if (
-            candidate.source_kind not in {"identity", "derived"}
+            candidate.source_kind not in {"identity", "derived", "character_trait_ability"}
             or owner.character_id != "vip"
             or territory_area is None
             or territory_area == owner.area
@@ -582,25 +588,37 @@ class PhaseHandler(ABC):
 
         round_effects: list[ScopedEffect] = []
         for item in prepared:
-            self._emit_ability_declared(item.candidate)
             round_effects.extend(self._bind_all_candidate_effects(item))
 
-        result = self.atomic_resolver.resolve(state, round_effects)
-        for item in prepared:
-            self.ability_resolver.mark_ability_used(state, item.candidate)
-        default_reason = (
-            prepared[0].candidate.ability.ability_id
-            if len(prepared) == 1
-            else "mandatory_batch"
-        )
-        signal = self._resolution_result_to_signal(
-            result,
-            default_reason=default_reason,
-        )
-        if signal is not None:
-            return signal
+        def _before_resolve() -> None:
+            for item in prepared:
+                self._emit_ability_declared(item.candidate)
 
-        return next_signal_factory()
+        def _on_resolved(result: Any) -> PhaseSignal:
+            for item in prepared:
+                self.ability_resolver.mark_ability_used(state, item.candidate)
+            default_reason = (
+                prepared[0].candidate.ability.ability_id
+                if len(prepared) == 1
+                else "mandatory_batch"
+            )
+            signal = self._resolution_result_to_signal(
+                result,
+                default_reason=default_reason,
+            )
+            if signal is not None:
+                return signal
+            return next_signal_factory()
+
+        return self._resolve_effect_batch_with_servant_follow(
+            state,
+            round_effects,
+            sequential=False,
+            perpetrator_id="",
+            location_context=None,
+            before_resolve=_before_resolve,
+            on_resolved=_on_resolved,
+        )
 
     def _bind_all_candidate_effects(
         self,
@@ -621,6 +639,94 @@ class PhaseHandler(ABC):
             effect=effect,
             perpetrator_id=prepared.owner_id,
             location_context=prepared.location_context,
+        )
+
+    def _resolve_effect_batch_with_servant_follow(
+        self,
+        state: GameState,
+        effects: list[Effect | ScopedEffect],
+        *,
+        sequential: bool,
+        perpetrator_id: str,
+        location_context: AbilityLocationContext | None,
+        before_resolve: Callable[[], None] | None,
+        on_resolved: Callable[[Any], PhaseSignal],
+        servant_follow_choices: dict[str, str] | None = None,
+    ) -> PhaseSignal:
+        choices = dict(servant_follow_choices or {})
+        request = self.atomic_resolver.next_servant_follow_choice(
+            state,
+            effects,
+            sequential=sequential,
+            perpetrator_id=perpetrator_id,
+            location_context=location_context,
+            servant_follow_choices=choices,
+        )
+        if request is not None:
+            return self._build_servant_follow_wait(
+                state,
+                request,
+                sequential=sequential,
+                effects=effects,
+                perpetrator_id=perpetrator_id,
+                location_context=location_context,
+                before_resolve=before_resolve,
+                on_resolved=on_resolved,
+                servant_follow_choices=choices,
+            )
+
+        if before_resolve is not None:
+            before_resolve()
+        result = self.atomic_resolver.resolve(
+            state,
+            effects,
+            sequential=sequential,
+            perpetrator_id=perpetrator_id,
+            location_context=location_context,
+            servant_follow_choices=choices,
+        )
+        return on_resolved(result)
+
+    def _build_servant_follow_wait(
+        self,
+        state: GameState,
+        request: ServantFollowChoiceRequest,
+        *,
+        sequential: bool,
+        effects: list[Effect | ScopedEffect],
+        perpetrator_id: str,
+        location_context: AbilityLocationContext | None,
+        before_resolve: Callable[[], None] | None,
+        on_resolved: Callable[[Any], PhaseSignal],
+        servant_follow_choices: dict[str, str],
+    ) -> WaitForInput:
+        servant = state.characters.get(request.servant_id)
+        servant_name = servant.name if servant is not None else request.servant_id
+        player = f"protagonist_{state.leader_index}"
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            selected = str(choice)
+            if selected not in request.options:
+                raise ValueError(f"invalid servant follow target: {selected!r}")
+            updated_choices = dict(servant_follow_choices)
+            updated_choices[request.servant_id] = selected
+            return self._resolve_effect_batch_with_servant_follow(
+                state,
+                effects,
+                sequential=sequential,
+                perpetrator_id=perpetrator_id,
+                location_context=location_context,
+                before_resolve=before_resolve,
+                on_resolved=on_resolved,
+                servant_follow_choices=updated_choices,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt=f"请选择 {servant_name} 要跟随移动的角色",
+            options=request.options,
+            player=player,
+            callback=_on_choice,
         )
 
     def _prepare_effects_for_resolution(
@@ -1288,6 +1394,7 @@ class ProtagonistActionHandler(PhaseHandler):
 
 class ActionResolveHandler(PhaseHandler):
     phase = GamePhase.ACTION_RESOLVE
+    _PHANTOM_CHARACTER_ID = "phantom"
 
     # CardType → (TokenType, delta)
     _TOKEN_EFFECTS: dict[CardType, tuple[TokenType, int]] = {
@@ -1440,19 +1547,40 @@ class ActionResolveHandler(PhaseHandler):
 
         composites = self._build_composite_action_cards(placements)
         movement_effects = self._build_movement_effects(state, composites)
+        movement_effects.extend(self._build_phantom_board_redirect_movement_effects(state, composites))
         if movement_effects:
-            result = self.atomic_resolver.resolve(state, movement_effects, sequential=False)
-            signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
-            if signal is not None:
-                return signal
+            def _on_movement_resolved(result: Any) -> PhaseSignal:
+                signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
+                if signal is not None:
+                    return signal
+                return self._resolve_non_movement_placed_cards(state, composites)
 
+            return self._resolve_effect_batch_with_servant_follow(
+                state,
+                movement_effects,
+                sequential=False,
+                perpetrator_id="",
+                location_context=None,
+                before_resolve=None,
+                on_resolved=_on_movement_resolved,
+            )
+
+        return self._resolve_non_movement_placed_cards(state, composites)
+
+    def _resolve_non_movement_placed_cards(
+        self,
+        state: GameState,
+        composites: list[CompositeActionCard],
+    ) -> PhaseSignal:
+        # phantom 的版图投影按批次重算：先吃移动批次，再在移动后的版图上吃非移动批次。
         non_movement_effects = self._build_non_movement_effects(composites)
-        if non_movement_effects:
-            result = self.atomic_resolver.resolve(state, non_movement_effects, sequential=False)
-            signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
-            if signal is not None:
-                return signal
-
+        non_movement_effects.extend(self._build_phantom_board_redirect_non_movement_effects(state, composites))
+        if not non_movement_effects:
+            return PhaseComplete()
+        result = self.atomic_resolver.resolve(state, non_movement_effects, sequential=False)
+        signal = self._resolution_result_to_signal(result, default_reason="action_resolve")
+        if signal is not None:
+            return signal
         return PhaseComplete()
 
     def _build_composite_action_cards(
@@ -1487,16 +1615,37 @@ class ActionResolveHandler(PhaseHandler):
         for composite in composites:
             if composite.movement_card_type is None or composite.target_type != "character":
                 continue
-            dest = self._movement_destination(state, composite.target_id, composite.movement_card_type)
-            if dest is None:
-                continue
-            effects.append(
-                Effect(
-                    effect_type=EffectType.MOVE_CHARACTER,
-                    target=composite.target_id,
-                    value=dest,
-                )
+            effect = self._movement_effect_for_target(
+                state,
+                target_id=composite.target_id,
+                card_type=composite.movement_card_type,
             )
+            if effect is not None:
+                effects.append(effect)
+        return effects
+
+    def _build_phantom_board_redirect_movement_effects(
+        self,
+        state: GameState,
+        composites: list[CompositeActionCard],
+    ) -> list[Effect]:
+        phantom = self._phantom_character(state)
+        if phantom is None:
+            return []
+
+        effects: list[Effect] = []
+        for composite in composites:
+            if composite.target_type != "board" or composite.target_id != phantom.area.value:
+                continue
+            if composite.movement_card_type is None:
+                continue
+            effect = self._movement_effect_for_target(
+                state,
+                target_id=phantom.character_id,
+                card_type=composite.movement_card_type,
+            )
+            if effect is not None:
+                effects.append(effect)
         return effects
 
     def _build_non_movement_effects(
@@ -1509,6 +1658,34 @@ class ActionResolveHandler(PhaseHandler):
             for placement in composite.placements
             if not placement.card.is_movement and placement.card.card_type not in self._FORBID_TOKEN
         ]
+        return self._token_effects_from_placements(placements)
+
+    def _build_phantom_board_redirect_non_movement_effects(
+        self,
+        state: GameState,
+        composites: list[CompositeActionCard],
+    ) -> list[Effect]:
+        phantom = self._phantom_character(state)
+        if phantom is None:
+            return []
+
+        placements = [
+            placement
+            for composite in composites
+            if composite.target_type == "board" and composite.target_id == phantom.area.value
+            for placement in composite.placements
+            if not placement.nullified
+            and not placement.card.is_movement
+            and placement.card.card_type not in self._FORBID_TOKEN
+        ]
+        return self._token_effects_from_placements(placements, target_id=phantom.character_id)
+
+    def _token_effects_from_placements(
+        self,
+        placements: list[CardPlacement],
+        *,
+        target_id: str | None = None,
+    ) -> list[Effect]:
         hope_count = sum(1 for placement in placements if placement.card.card_type == CardType.HOPE_PLUS_1)
 
         effects: list[Effect] = []
@@ -1523,12 +1700,35 @@ class ActionResolveHandler(PhaseHandler):
             effects.append(
                 Effect(
                     effect_type=EffectType.PLACE_TOKEN if delta > 0 else EffectType.REMOVE_TOKEN,
-                    target=placement.target_id,
+                    target=target_id or placement.target_id,
                     token_type=token_type,
                     amount=abs(delta),
                 )
             )
         return effects
+
+    def _movement_effect_for_target(
+        self,
+        state: GameState,
+        *,
+        target_id: str,
+        card_type: CardType,
+    ) -> Effect | None:
+        dest = self._movement_destination(state, target_id, card_type)
+        if dest is None:
+            return None
+        return Effect(
+            effect_type=EffectType.MOVE_CHARACTER,
+            target=target_id,
+            value=dest,
+        )
+
+    @staticmethod
+    def _phantom_character(state: GameState) -> Any | None:
+        phantom = state.characters.get(ActionResolveHandler._PHANTOM_CHARACTER_ID)
+        if phantom is None or not phantom.is_active():
+            return None
+        return phantom
 
     def _token_effect_for_card(
         self,
@@ -2347,13 +2547,97 @@ class IncidentHandler(PhaseHandler):
         效果结算由 IncidentResolver 统一负责。
         """
         schedules = state.get_incidents_for_day(state.current_day)
+        return self._resolve_schedules(state, schedules, index=0)
 
-        for schedule in schedules:
-            result = self.incident_resolver.resolve_schedule(state, schedule)
-            if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
-                return ForceLoopEnd(reason=schedule.incident_id)
+    def _resolve_schedules(
+        self,
+        state: GameState,
+        schedules: list[Any],
+        *,
+        index: int,
+        servant_follow_choices: dict[str, str] | None = None,
+    ) -> PhaseSignal:
+        if index >= len(schedules):
+            return PhaseComplete()
 
-        return PhaseComplete()
+        schedule = schedules[index]
+        choices = dict(servant_follow_choices or {})
+        request = self.incident_resolver.next_servant_follow_choice(
+            state,
+            schedule,
+            servant_follow_choices=choices,
+        )
+        if request is not None:
+            return self._build_servant_follow_wait(
+                state,
+                request,
+                schedules=schedules,
+                schedule_index=index,
+                servant_follow_choices=choices,
+            )
+
+        result = self.incident_resolver.resolve_schedule(
+            state,
+            schedule,
+            servant_follow_choices=choices,
+        )
+        if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
+            return ForceLoopEnd(reason=schedule.incident_id)
+        return self._resolve_schedules(state, schedules, index=index + 1)
+
+    def _build_servant_follow_wait(
+        self,
+        state: GameState,
+        request: ServantFollowChoiceRequest,
+        *,
+        schedules: list[Any] | None = None,
+        schedule_index: int | None = None,
+        servant_follow_choices: dict[str, str] | None = None,
+        sequential: bool | None = None,
+        effects: list[Effect | ScopedEffect] | None = None,
+        perpetrator_id: str | None = None,
+        location_context: AbilityLocationContext | None = None,
+        before_resolve: Callable[[], None] | None = None,
+        on_resolved: Callable[[Any], PhaseSignal] | None = None,
+    ) -> WaitForInput:
+        if schedules is None or schedule_index is None:
+            return super()._build_servant_follow_wait(  # type: ignore[misc]
+                state,
+                request,
+                sequential=bool(sequential),
+                effects=effects or [],
+                perpetrator_id=perpetrator_id or "",
+                location_context=location_context,
+                before_resolve=before_resolve,
+                on_resolved=on_resolved or (lambda _result: PhaseComplete()),
+                servant_follow_choices=servant_follow_choices or {},
+            )
+
+        servant = state.characters.get(request.servant_id)
+        servant_name = servant.name if servant is not None else request.servant_id
+        player = f"protagonist_{state.leader_index}"
+        choices = dict(servant_follow_choices or {})
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            selected = str(choice)
+            if selected not in request.options:
+                raise ValueError(f"invalid servant follow target: {selected!r}")
+            updated = dict(choices)
+            updated[request.servant_id] = selected
+            return self._resolve_schedules(
+                state,
+                schedules,
+                index=schedule_index,
+                servant_follow_choices=updated,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt=f"请选择 {servant_name} 要跟随移动的角色",
+            options=request.options,
+            player=player,
+            callback=_on_choice,
+        )
 
 
 class LeaderRotateHandler(PhaseHandler):

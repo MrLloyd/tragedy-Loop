@@ -23,6 +23,7 @@ from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.rules.persistent_effects import settle_persistent_effects
 from engine.rules.runtime_identities import apply_identity_change
+from engine.rules.servant_rules import servant_target_ids
 
 if TYPE_CHECKING:
     from engine.game_state import GameState
@@ -72,6 +73,14 @@ class ScopedEffect:
     location_context: AbilityLocationContext | None = None
 
 
+@dataclass(frozen=True)
+class ServantFollowChoiceRequest:
+    """从者跟随移动在当前结算批次需要主人公选择的目标。"""
+
+    servant_id: str
+    options: list[str]
+
+
 # ---------------------------------------------------------------------------
 # AtomicResolver — 原子结算器
 # ---------------------------------------------------------------------------
@@ -91,7 +100,8 @@ class AtomicResolver:
     def resolve(self, state: GameState, effects: list[Effect | ScopedEffect],
                 sequential: bool = False,
                 perpetrator_id: str = "",
-                location_context: AbilityLocationContext | None = None) -> ResolutionResult:
+                location_context: AbilityLocationContext | None = None,
+                servant_follow_choices: dict[str, str] | None = None) -> ResolutionResult:
         """
         执行一次原子结算。
 
@@ -107,13 +117,78 @@ class AtomicResolver:
                 effects,
                 perpetrator_id,
                 location_context=location_context,
+                servant_follow_choices=servant_follow_choices,
             )
         return self._resolve_simultaneous(
             state,
             effects,
             perpetrator_id,
             location_context=location_context,
+            servant_follow_choices=servant_follow_choices,
         )
+
+    def next_servant_follow_choice(
+        self,
+        state: GameState,
+        effects: list[Effect | ScopedEffect],
+        *,
+        sequential: bool = False,
+        perpetrator_id: str = "",
+        location_context: AbilityLocationContext | None = None,
+        servant_follow_choices: dict[str, str] | None = None,
+    ) -> ServantFollowChoiceRequest | None:
+        settle_persistent_effects(state)
+        snapshot = state.snapshot()
+        choices = dict(servant_follow_choices or {})
+
+        if sequential:
+            for effect in effects:
+                scoped = self._coerce_scoped_effect(
+                    effect,
+                    default_perpetrator_id=perpetrator_id,
+                    default_location_context=location_context,
+                )
+                planned_mutations = self._plan_effect(
+                    snapshot,
+                    scoped.effect,
+                    scoped.perpetrator_id,
+                    scoped.location_context,
+                )
+                request, adjusted = self._apply_servant_follow_rules(
+                    snapshot,
+                    planned_mutations,
+                    servant_follow_choices=choices,
+                    require_choices=False,
+                )
+                if request is not None:
+                    return request
+                for mutation in adjusted:
+                    self._apply_mutation(snapshot, mutation, emit_events=False)
+                settle_persistent_effects(snapshot)
+            return None
+
+        planned_mutations: list[Mutation] = []
+        for effect in effects:
+            scoped = self._coerce_scoped_effect(
+                effect,
+                default_perpetrator_id=perpetrator_id,
+                default_location_context=location_context,
+            )
+            planned_mutations.extend(
+                self._plan_effect(
+                    snapshot,
+                    scoped.effect,
+                    scoped.perpetrator_id,
+                    scoped.location_context,
+                )
+            )
+        request, _ = self._apply_servant_follow_rules(
+            snapshot,
+            planned_mutations,
+            servant_follow_choices=choices,
+            require_choices=False,
+        )
+        return request
 
     # ==================================================================
     # 同时生效结算
@@ -122,12 +197,14 @@ class AtomicResolver:
     def _resolve_simultaneous(self, state: GameState,
                               effects: list[Effect | ScopedEffect],
                               perpetrator_id: str = "",
-                              location_context: AbilityLocationContext | None = None) -> ResolutionResult:
+                              location_context: AbilityLocationContext | None = None,
+                              servant_follow_choices: dict[str, str] | None = None) -> ResolutionResult:
         planned_mutations = self._apply_effect_batch(
             state,
             effects,
             perpetrator_id=perpetrator_id,
             location_context=location_context,
+            servant_follow_choices=servant_follow_choices,
         )
 
         # ③ 触发：收集并处理链式效果
@@ -140,7 +217,8 @@ class AtomicResolver:
     def _resolve_sequential(self, state: GameState,
                             effects: list[Effect | ScopedEffect],
                             perpetrator_id: str = "",
-                            location_context: AbilityLocationContext | None = None) -> ResolutionResult:
+                            location_context: AbilityLocationContext | None = None,
+                            servant_follow_choices: dict[str, str] | None = None) -> ResolutionResult:
         all_mutations: list[Mutation] = []
         final_outcome = Outcome.NONE
 
@@ -151,6 +229,7 @@ class AtomicResolver:
                 [effect],
                 perpetrator_id,
                 location_context=location_context,
+                servant_follow_choices=servant_follow_choices,
             )
             all_mutations.extend(sub_result.mutations)
 
@@ -344,6 +423,22 @@ class AtomicResolver:
                         details={"destination": destination_area.value},
                     ))
 
+            case EffectType.ADD_TRAIT_TARGET_OVERRIDE:
+                trait_key = str(effect.value or "servant")
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
+                    if tid not in snapshot.characters:
+                        continue
+                    mutations.append(Mutation(
+                        mutation_type="trait_target_override_add",
+                        target_id=tid,
+                        details={"trait_key": trait_key},
+                    ))
+
             case EffectType.LIFT_FORBIDDEN_AREAS:
                 for tid in self._resolve_target_ids(
                     snapshot,
@@ -516,7 +611,13 @@ class AtomicResolver:
     # 第二步：写 — 批量应用到真实状态
     # ==================================================================
 
-    def _apply_mutation(self, state: GameState, mutation: Mutation) -> None:
+    def _apply_mutation(
+        self,
+        state: GameState,
+        mutation: Mutation,
+        *,
+        emit_events: bool,
+    ) -> None:
         """将单个 mutation 写入真实状态"""
 
         match mutation.mutation_type:
@@ -529,20 +630,22 @@ class AtomicResolver:
                 # 目标可能是角色或版图
                 if target_id in state.characters:
                     state.characters[target_id].tokens.add(token_type, delta)
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.TOKEN_CHANGED,
-                        {"target_id": target_id, "token_type": token_type.value,
-                         "delta": delta},
-                    ))
-                elif hasattr(AreaId, target_id.upper()):
-                    area_id = AreaId(target_id)
-                    if area_id in state.board.areas:
-                        state.board.areas[area_id].tokens.add(token_type, delta)
+                    if emit_events:
                         self.event_bus.emit(GameEvent(
                             GameEventType.TOKEN_CHANGED,
                             {"target_id": target_id, "token_type": token_type.value,
                              "delta": delta},
                         ))
+                elif hasattr(AreaId, target_id.upper()):
+                    area_id = AreaId(target_id)
+                    if area_id in state.board.areas:
+                        state.board.areas[area_id].tokens.add(token_type, delta)
+                        if emit_events:
+                            self.event_bus.emit(GameEvent(
+                                GameEventType.TOKEN_CHANGED,
+                                {"target_id": target_id, "token_type": token_type.value,
+                                 "delta": delta},
+                            ))
 
             case "token_move":
                 source_id = mutation.details["source_id"]
@@ -560,22 +663,25 @@ class AtomicResolver:
                     area_id = AreaId(target_id)
                     if area_id in state.board.areas:
                         state.board.areas[area_id].tokens.add(token_type, removed)
-                self.event_bus.emit(GameEvent(
-                    GameEventType.TOKEN_CHANGED,
-                    {"target_id": source_id, "token_type": token_type.value, "delta": -removed},
-                ))
-                self.event_bus.emit(GameEvent(
-                    GameEventType.TOKEN_CHANGED,
-                    {"target_id": target_id, "token_type": token_type.value, "delta": removed},
-                ))
+                if emit_events:
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.TOKEN_CHANGED,
+                        {"target_id": source_id, "token_type": token_type.value, "delta": -removed},
+                    ))
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.TOKEN_CHANGED,
+                        {"target_id": target_id, "token_type": token_type.value, "delta": removed},
+                    ))
 
             case "character_death":
                 cid = mutation.target_id
                 if cid in state.characters:
                     ch = state.characters[cid]
                     if ch.is_active():
-                        result = self.death_resolver.process_death(ch, state)
-                        mutation.details["death_result"] = result
+                        outcome = self.death_resolver.process_death(ch, state)
+                        mutation.details["death_result"] = outcome.result
+                        if outcome.resolved_character_id is not None:
+                            mutation.details["death_target_id"] = outcome.resolved_character_id
 
             case "character_move":
                 cid = mutation.target_id
@@ -585,10 +691,16 @@ class AtomicResolver:
                     if not moved:
                         return
                     ch = state.characters[cid]
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.CHARACTER_MOVED,
-                        {"character_id": cid, "destination": str(ch.area.value)},
-                    ))
+                    if emit_events:
+                        self.event_bus.emit(GameEvent(
+                            GameEventType.CHARACTER_MOVED,
+                            {"character_id": cid, "destination": str(ch.area.value)},
+                        ))
+
+            case "trait_target_override_add":
+                trait_key = str(mutation.details.get("trait_key", "servant"))
+                if mutation.target_id in state.characters:
+                    state.trait_target_overrides.setdefault(trait_key, set()).add(mutation.target_id)
 
             case "character_revive":
                 cid = mutation.target_id
@@ -600,10 +712,11 @@ class AtomicResolver:
                 cid = mutation.target_id
                 if cid in state.characters:
                     state.characters[cid].mark_removed()
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.CHARACTER_REMOVED,
-                        {"character_id": cid},
-                    ))
+                    if emit_events:
+                        self.event_bus.emit(GameEvent(
+                            GameEventType.CHARACTER_REMOVED,
+                            {"character_id": cid},
+                        ))
 
             case "lift_forbidden_areas":
                 cid = mutation.target_id
@@ -628,10 +741,11 @@ class AtomicResolver:
                 if cid in state.characters:
                     ch = state.characters[cid]
                     ch.revealed = True
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.IDENTITY_REVEALED,
-                        {"character_id": cid, "identity_id": ch.identity_id},
-                    ))
+                    if emit_events:
+                        self.event_bus.emit(GameEvent(
+                            GameEventType.IDENTITY_REVEALED,
+                            {"character_id": cid, "identity_id": ch.identity_id},
+                        ))
 
             case "reveal_incident":
                 incident_id = str(mutation.details["incident_id"])
@@ -647,14 +761,15 @@ class AtomicResolver:
                             "day": schedule.day,
                         }
                     )
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.INCIDENT_REVEALED,
-                        {
-                            "incident_id": incident_id,
-                            "perpetrator_id": schedule.perpetrator_id,
-                            "day": schedule.day,
-                        },
-                    ))
+                    if emit_events:
+                        self.event_bus.emit(GameEvent(
+                            GameEventType.INCIDENT_REVEALED,
+                            {
+                                "incident_id": incident_id,
+                                "perpetrator_id": schedule.perpetrator_id,
+                                "day": schedule.day,
+                            },
+                        ))
 
             case "identity_change":
                 cid = mutation.target_id
@@ -680,10 +795,11 @@ class AtomicResolver:
             case "ex_gauge_change":
                 delta = mutation.details["delta"]
                 state.ex_gauge = max(0, state.ex_gauge + delta)
-                self.event_bus.emit(GameEvent(
-                    GameEventType.EX_GAUGE_CHANGED,
-                    {"delta": delta, "new_value": state.ex_gauge},
-                ))
+                if emit_events:
+                    self.event_bus.emit(GameEvent(
+                        GameEventType.EX_GAUGE_CHANGED,
+                        {"delta": delta, "new_value": state.ex_gauge},
+                    ))
 
             case "incident_suppress":
                 state.suppressed_incident_perpetrators.add(mutation.target_id)
@@ -695,6 +811,7 @@ class AtomicResolver:
         *,
         perpetrator_id: str = "",
         location_context: AbilityLocationContext | None = None,
+        servant_follow_choices: dict[str, str] | None = None,
     ) -> list[Mutation]:
         """仅执行读写两步，不进入触发处理。"""
         settle_persistent_effects(state)
@@ -715,10 +832,127 @@ class AtomicResolver:
                 )
             )
 
+        _, planned_mutations = self._apply_servant_follow_rules(
+            snapshot,
+            planned_mutations,
+            servant_follow_choices=dict(servant_follow_choices or {}),
+            require_choices=True,
+        )
+
         for mutation in planned_mutations:
-            self._apply_mutation(state, mutation)
+            self._apply_mutation(state, mutation, emit_events=True)
         settle_persistent_effects(state)
         return planned_mutations
+
+    def _apply_servant_follow_rules(
+        self,
+        snapshot: GameState,
+        planned_mutations: list[Mutation],
+        *,
+        servant_follow_choices: dict[str, str],
+        require_choices: bool,
+    ) -> tuple[ServantFollowChoiceRequest | None, list[Mutation]]:
+        movement_mutations = [
+            mutation
+            for mutation in planned_mutations
+            if mutation.mutation_type == "character_move"
+        ]
+        if not movement_mutations:
+            return None, planned_mutations
+
+        moved_destinations = {
+            mutation.target_id: str(mutation.details.get("destination", ""))
+            for mutation in movement_mutations
+            if mutation.target_id in snapshot.characters
+        }
+        if not moved_destinations:
+            return None, planned_mutations
+
+        servant_follow_mutations: list[Mutation] = []
+        servant_ids_to_override: set[str] = set()
+
+        for servant_id, servant in snapshot.characters.items():
+            if servant.character_id != "servant" or not servant.is_active() or servant.is_removed():
+                continue
+            candidate_targets = self._servant_follow_candidates(
+                snapshot,
+                servant_id=servant_id,
+                moved_destinations=moved_destinations,
+            )
+            if not candidate_targets:
+                continue
+
+            destination_map = {
+                target_id: moved_destinations[target_id]
+                for target_id in candidate_targets
+            }
+            unique_destinations = {destination for destination in destination_map.values() if destination}
+            if len(unique_destinations) > 1:
+                selected_target = servant_follow_choices.get(servant_id)
+                if selected_target not in candidate_targets:
+                    request = ServantFollowChoiceRequest(
+                        servant_id=servant_id,
+                        options=sorted(candidate_targets),
+                    )
+                    if not require_choices:
+                        return request, planned_mutations
+                    raise ValueError(f"servant follow choice required for {servant_id}")
+            else:
+                selected_target = sorted(candidate_targets)[0]
+
+            destination = destination_map.get(selected_target, "")
+            if not destination:
+                continue
+            servant_ids_to_override.add(servant_id)
+            servant_follow_mutations.append(Mutation(
+                mutation_type="character_move",
+                target_id=servant_id,
+                details={
+                    "destination": destination,
+                    "follow_target_id": selected_target,
+                    "servant_follow": True,
+                },
+            ))
+
+        adjusted_mutations = [
+            mutation
+            for mutation in planned_mutations
+            if not (
+                mutation.mutation_type == "character_move"
+                and mutation.target_id in servant_ids_to_override
+            )
+        ]
+        adjusted_mutations.extend(servant_follow_mutations)
+        return None, adjusted_mutations
+
+    def _servant_follow_candidates(
+        self,
+        snapshot: GameState,
+        *,
+        servant_id: str,
+        moved_destinations: dict[str, str],
+    ) -> list[str]:
+        servant = snapshot.characters.get(servant_id)
+        if servant is None:
+            return []
+        target_ids = self._servant_follow_target_ids(snapshot, servant_id)
+        candidates: list[str] = []
+        for target_id in target_ids:
+            target = snapshot.characters.get(target_id)
+            if target is None or not target.is_active() or target.is_removed():
+                continue
+            if target.area != servant.area:
+                continue
+            if target_id not in moved_destinations:
+                continue
+            if not moved_destinations[target_id]:
+                continue
+            candidates.append(target_id)
+        return candidates
+
+    @staticmethod
+    def _servant_follow_target_ids(snapshot: GameState, servant_id: str) -> set[str]:
+        return servant_target_ids(snapshot, servant_id)
 
     # ==================================================================
     # 第三步：触发 — 处理链式效果（队列式）
@@ -785,95 +1019,98 @@ class AtomicResolver:
         triggers = []
 
         if mutation.mutation_type == "character_death":
-            death_result = mutation.details.get("death_result")
-            if death_result == DeathResult.DIED:
-                cid = mutation.target_id
-                self.event_bus.emit(GameEvent(
-                    GameEventType.CHARACTER_DEATH,
-                    {"character_id": cid},
-                ))
-                # 接入身份 ON_DEATH 能力触发入口
+            death_target_id = mutation.details.get("death_target_id")
+            if death_target_id is None and mutation.details.get("death_result") == DeathResult.DIED:
+                death_target_id = mutation.target_id
+            if death_target_id is not None:
+                cid = str(death_target_id)
                 ch = state.characters.get(cid)
-                if ch and ch.identity_id:
-                    identity_def = state.identity_defs.get(ch.identity_id)
-                    if identity_def:
-                        for ability in identity_def.abilities:
-                            if ability.timing == AbilityTiming.ON_DEATH:
-                                self.event_bus.emit(GameEvent(
-                                    GameEventType.ABILITY_DECLARED,
-                                    {
-                                        "source_kind": "character",
-                                        "character_id": cid,
-                                        "identity_id": ch.identity_id,
-                                        "ability_id": ability.ability_id,
-                                        "timing": AbilityTiming.ON_DEATH.value,
-                                    },
-                                ))
-                                triggers.append(Trigger(
-                                    trigger_type="on_death",
-                                    source_id=cid,
-                                    is_terminal=False,
-                                    effects=ability.effects,
-                                    sequential=ability.sequential,
-                                ))
-                for candidate in self.ability_resolver.collect_derived_abilities(
-                    state,
-                    timing=AbilityTiming.ON_DEATH,
-                    alive_only=False,
-                ):
-                    if candidate.source_id != cid:
-                        continue
+                if ch and ch.is_dead():
                     self.event_bus.emit(GameEvent(
-                        GameEventType.ABILITY_DECLARED,
-                        {
-                            "source_kind": "derived",
-                            "character_id": cid,
-                            "identity_id": candidate.identity_id,
-                            "ability_id": candidate.ability.ability_id,
-                            "timing": AbilityTiming.ON_DEATH.value,
-                        },
+                        GameEventType.CHARACTER_DEATH,
+                        {"character_id": cid},
                     ))
-                    triggers.append(Trigger(
-                        trigger_type="on_death",
-                        source_id=cid,
-                        is_terminal=False,
-                        effects=candidate.ability.effects,
-                        sequential=candidate.ability.sequential,
-                    ))
-                for owner in state.characters.values():
-                    if owner.character_id == cid or not owner.is_active():
-                        continue
-                    identity_def = state.identity_defs.get(owner.identity_id)
-                    if identity_def is None:
-                        continue
-                    for ability in identity_def.abilities:
-                        if ability.timing != AbilityTiming.ON_OTHER_DEATH:
-                            continue
-                        if not self.ability_resolver.evaluate_condition(
-                            state,
-                            ability.condition,
-                            owner_id=owner.character_id,
-                            other_id=cid,
-                        ):
+                    # 接入身份 ON_DEATH 能力触发入口
+                    if ch.identity_id:
+                        identity_def = state.identity_defs.get(ch.identity_id)
+                        if identity_def:
+                            for ability in identity_def.abilities:
+                                if ability.timing == AbilityTiming.ON_DEATH:
+                                    self.event_bus.emit(GameEvent(
+                                        GameEventType.ABILITY_DECLARED,
+                                        {
+                                            "source_kind": "character",
+                                            "character_id": cid,
+                                            "identity_id": ch.identity_id,
+                                            "ability_id": ability.ability_id,
+                                            "timing": AbilityTiming.ON_DEATH.value,
+                                        },
+                                    ))
+                                    triggers.append(Trigger(
+                                        trigger_type="on_death",
+                                        source_id=cid,
+                                        is_terminal=False,
+                                        effects=ability.effects,
+                                        sequential=ability.sequential,
+                                    ))
+                    for candidate in self.ability_resolver.collect_derived_abilities(
+                        state,
+                        timing=AbilityTiming.ON_DEATH,
+                        alive_only=False,
+                    ):
+                        if candidate.source_id != cid:
                             continue
                         self.event_bus.emit(GameEvent(
                             GameEventType.ABILITY_DECLARED,
                             {
-                                "source_kind": "character",
-                                "character_id": owner.character_id,
-                                "identity_id": owner.identity_id,
-                                "ability_id": ability.ability_id,
-                                "timing": AbilityTiming.ON_OTHER_DEATH.value,
-                                "other_character_id": cid,
+                                "source_kind": "derived",
+                                "character_id": cid,
+                                "identity_id": candidate.identity_id,
+                                "ability_id": candidate.ability.ability_id,
+                                "timing": AbilityTiming.ON_DEATH.value,
                             },
                         ))
                         triggers.append(Trigger(
-                            trigger_type="on_other_death",
-                            source_id=owner.character_id,
+                            trigger_type="on_death",
+                            source_id=cid,
                             is_terminal=False,
-                            effects=ability.effects,
-                            sequential=ability.sequential,
+                            effects=candidate.ability.effects,
+                            sequential=candidate.ability.sequential,
                         ))
+                    for owner in state.characters.values():
+                        if owner.character_id == cid or not owner.is_active():
+                            continue
+                        identity_def = state.identity_defs.get(owner.identity_id)
+                        if identity_def is None:
+                            continue
+                        for ability in identity_def.abilities:
+                            if ability.timing != AbilityTiming.ON_OTHER_DEATH:
+                                continue
+                            if not self.ability_resolver.evaluate_condition(
+                                state,
+                                ability.condition,
+                                owner_id=owner.character_id,
+                                other_id=cid,
+                            ):
+                                continue
+                            self.event_bus.emit(GameEvent(
+                                GameEventType.ABILITY_DECLARED,
+                                {
+                                    "source_kind": "character",
+                                    "character_id": owner.character_id,
+                                    "identity_id": owner.identity_id,
+                                    "ability_id": ability.ability_id,
+                                    "timing": AbilityTiming.ON_OTHER_DEATH.value,
+                                    "other_character_id": cid,
+                                },
+                            ))
+                            triggers.append(Trigger(
+                                trigger_type="on_other_death",
+                                source_id=owner.character_id,
+                                is_terminal=False,
+                                effects=ability.effects,
+                                sequential=ability.sequential,
+                            ))
 
         if mutation.mutation_type == "identity_change":
             settle_persistent_effects(state)

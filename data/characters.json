@@ -1,6 +1,6 @@
 {
   "source": "tragedy_loop_appendix.md §附录C 角色表（与引擎枚举：AreaId、Attribute 对齐）",
-  "schema_note": "goodwill_abilities 为正式结构化入口；goodwill_ability_texts / goodwill_ability_goodwill_requirements / goodwill_ability_once_per_loop 为迁移期兼容字段。下标 0–3 对应友好能力1–4；goodwill_ability_once_per_loop 长度为2，对应能力1与能力2是否每轮回限一次（附录仅定义这两项）。",
+  "schema_note": "goodwill_abilities 为正式结构化入口；character_trait_ability 为角色固有特性能力（声明式）入口；goodwill_ability_texts / goodwill_ability_goodwill_requirements / goodwill_ability_once_per_loop 为迁移期兼容字段。下标 0–3 对应友好能力1–4；goodwill_ability_once_per_loop 长度为2，对应能力1与能力2是否每轮回限一次（附录仅定义这两项）。",
   "characters": [
     {
       "character_id": "ai",
@@ -265,7 +265,16 @@
           "timing": "protagonist_ability",
           "description": "选择场上的另外1名角色，本轮轮回中，将那名角色追加至特性适用对象中。",
           "condition": null,
-          "effects": [],
+          "effects": [
+            {
+              "effect_type": "add_trait_target_override",
+              "target": {
+                "scope": "any_area",
+                "subject": "other_character"
+              },
+              "value": "servant"
+            }
+          ],
           "sequential": false,
           "goodwill_requirement": 4,
           "once_per_loop": true,
@@ -322,6 +331,30 @@
       ],
       "paranoia_limit": 0,
       "base_traits": [],
+      "character_trait_ability": [
+        {
+          "ability_id": "character_trait_ability:black_cat:loop_start_place_intrigue",
+          "name": "黑猫特性：轮回开始放置密谋",
+          "ability_type": "mandatory",
+          "timing": "loop_start",
+          "description": "每轮轮回开始时，往神社放置1枚密谋指示物。",
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "scope": "fixed_area",
+                "subject": "board",
+                "area": "shrine"
+              },
+              "token_type": "intrigue",
+              "amount": 1
+            }
+          ],
+          "sequential": false,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
+      ],
       "goodwill_ability_texts": [
         "",
         "",
@@ -1217,7 +1250,9 @@
         "female"
       ],
       "paranoia_limit": 2,
-      "base_traits": [],
+      "base_traits": [
+        "no_action_cards"
+      ],
       "goodwill_ability_texts": [
         "将同一区域任意1名角色移动至任意版图",
         "将该角色从版图上移除",

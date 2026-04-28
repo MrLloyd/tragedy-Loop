@@ -25,7 +25,7 @@ from engine.rules.runtime_traits import active_traits as resolve_active_traits
 class AbilityCandidate:
     """一次可结算能力的候选项。"""
 
-    source_kind: str  # "goodwill" | "identity" | "rule" | "derived"
+    source_kind: str  # "goodwill" | "character_trait_ability" | "identity" | "rule" | "derived"
     source_id: str
     ability: Ability
     identity_id: Optional[str] = None
@@ -152,6 +152,39 @@ class AbilityResolver:
             if not self._has_playwright_goodwill_trait(state, candidate.source_id):
                 continue
             result.append(candidate)
+        return result
+
+    def collect_character_trait_abilities(
+        self,
+        state: GameState,
+        *,
+        timing: AbilityTiming,
+        ability_type: AbilityType | None = None,
+        alive_only: bool = True,
+    ) -> list[AbilityCandidate]:
+        result: list[AbilityCandidate] = []
+        for ch in state.characters.values():
+            if alive_only and not ch.is_active():
+                continue
+            for ability in ch.character_trait_abilities:
+                if ability.timing != timing:
+                    continue
+                if ability_type is not None and ability.ability_type != ability_type:
+                    continue
+                if not self._evaluate_condition_for_owner_contexts(
+                    state,
+                    ability.condition,
+                    owner_id=ch.character_id,
+                ):
+                    continue
+                candidate = AbilityCandidate(
+                    source_kind="character_trait_ability",
+                    source_id=ch.character_id,
+                    ability=ability,
+                )
+                if not self.is_ability_available(state, candidate):
+                    continue
+                result.append(candidate)
         return result
 
     def _collect_identity_abilities(
@@ -289,8 +322,14 @@ class AbilityResolver:
         ability_type: AbilityType | None = None,
         alive_only: bool = True,
     ) -> list[AbilityCandidate]:
-        """统一入口：角色友好 / 身份 / 规则 / 常驻派生。"""
+        """统一入口：角色友好 / 角色特性 / 身份 / 规则 / 常驻派生。"""
         goodwill_candidates = self.collect_goodwill_abilities(
+            state,
+            timing=timing,
+            ability_type=ability_type,
+            alive_only=alive_only,
+        )
+        character_trait_candidates = self.collect_character_trait_abilities(
             state,
             timing=timing,
             ability_type=ability_type,
@@ -313,7 +352,13 @@ class AbilityResolver:
             ability_type=ability_type,
             alive_only=alive_only,
         )
-        return [*goodwill_candidates, *identity_candidates, *rule_candidates, *derived_candidates]
+        return [
+            *goodwill_candidates,
+            *character_trait_candidates,
+            *identity_candidates,
+            *rule_candidates,
+            *derived_candidates,
+        ]
 
     def ability_usage_key(self, candidate: AbilityCandidate) -> str:
         return f"{candidate.source_kind}:{candidate.source_id}:{candidate.ability.ability_id}"

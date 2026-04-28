@@ -242,6 +242,43 @@ def test_ai_incident_check_counts_all_tokens_as_paranoia() -> None:
     assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 2
 
 
+def test_black_cat_incident_effect_is_overridden_to_no_phenomenon() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="test_intrigue_incident",
+        name="测试密谋事件",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target={
+                    "scope": "fixed_area",
+                    "subject": "board",
+                    "area": "shrine",
+                },
+                token_type=TokenType.INTRIGUE,
+                amount=2,
+            )
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=0,
+        paranoia_limit=0,
+        incident_id="test_intrigue_incident",
+        perpetrator_id="black_cat",
+        incident_def=incident_def,
+    )
+    state.characters["black_cat"].character_id = "black_cat"
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert result.has_phenomenon is False
+    assert result.mutations == []
+    assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 0
+
+
 def test_resolve_effect_only_executes_effect_without_marking_incident_occurred() -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
@@ -772,3 +809,44 @@ def test_disappearance_without_area_choice_occurs_but_has_no_phenomenon() -> Non
     assert state.characters["perp"].area == AreaId.CITY
     assert state.incident_results_this_loop[-1].occurred is True
     assert state.incident_results_this_loop[-1].has_phenomenon is False
+
+
+def test_disappearance_moves_servant_with_perpetrator_before_following_effects() -> None:
+    handler, _ = _make_handler()
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.current_day = 1
+    state.characters["ojousama"] = CharacterState(
+        character_id="ojousama",
+        name="大小姐",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=2,
+    )
+    state.characters["servant"] = CharacterState(
+        character_id="servant",
+        name="从者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["ojousama"].tokens.paranoia = 2
+    state.script.incidents = [
+        IncidentSchedule(
+            "disappearance",
+            day=1,
+            perpetrator_id="ojousama",
+            target_selectors=[area_choice_selector("school")],
+            target_area_ids=["school"],
+        )
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["ojousama"].area == AreaId.SCHOOL
+    assert state.characters["servant"].area == AreaId.SCHOOL
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1

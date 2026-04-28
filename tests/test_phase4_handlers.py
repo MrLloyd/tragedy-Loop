@@ -7,7 +7,7 @@ from engine.models.ability import Ability
 from engine.models.cards import ActionCard, CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, EffectType, GamePhase, PlayerRole, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, DeathResult, EffectType, GamePhase, Outcome, PlayerRole, TokenType
 from engine.models.identity import IdentityDef
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
@@ -26,6 +26,7 @@ from engine.phases.phase_base import (
 from engine.resolvers.ability_resolver import AbilityResolver
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
+from engine.rules.character_loader import instantiate_character_state, load_character_defs
 from engine.rules.module_loader import apply_loaded_module, build_game_state_from_module, load_module
 from engine.visibility import Visibility
 
@@ -208,6 +209,178 @@ def test_loop_start_handler_applies_causal_line_and_friend_reveal_together() -> 
     assert isinstance(signal, PhaseComplete)
     assert state.characters["friend"].tokens.get(TokenType.PARANOIA) == 2
     assert state.characters["friend"].tokens.get(TokenType.GOODWILL) == 1
+
+
+def test_loop_start_handler_executes_black_cat_character_trait_ability() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = LoopStartHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    defs = load_character_defs()
+    state.characters["black_cat"] = instantiate_character_state(
+        CharacterSetup(character_id="black_cat", identity_id="commoner"),
+        defs,
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.board.areas[AreaId.SHRINE].tokens.get(TokenType.INTRIGUE) == 1
+
+
+def test_playwright_ability_handler_waits_for_servant_follow_choice() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, resolver)
+    state = GameState()
+    state.characters["controller"] = CharacterState(
+        character_id="controller",
+        name="控制者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="controller_identity",
+        original_identity_id="controller_identity",
+    )
+    state.characters["servant"] = CharacterState(
+        character_id="servant",
+        name="从者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["ojousama"] = CharacterState(
+        character_id="ojousama",
+        name="大小姐",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    _install_identity(
+        state,
+        "controller_identity",
+        [
+            Ability(
+                ability_id="controller_move_pair",
+                name="控制者双重移动",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                once_per_loop=True,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.MOVE_CHARACTER,
+                        target="vip",
+                        value=AreaId.CITY.value,
+                    ),
+                    Effect(
+                        effect_type=EffectType.MOVE_CHARACTER,
+                        target="ojousama",
+                        value=AreaId.HOSPITAL.value,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "controller_move_pair")
+
+    follow_wait = signal.callback(choice)
+
+    assert isinstance(follow_wait, WaitForInput)
+    assert follow_wait.player == "protagonist_0"
+    assert follow_wait.options == ["ojousama", "vip"]
+
+    result = follow_wait.callback("vip")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["vip"].area == AreaId.CITY
+    assert state.characters["ojousama"].area == AreaId.HOSPITAL
+    assert state.characters["servant"].area == AreaId.CITY
+
+
+def test_servant_follow_targets_include_runtime_trait_target_overrides() -> None:
+    bus, resolver = _resolver_bundle()
+    state = GameState()
+    state.characters["servant"] = CharacterState(
+        character_id="servant",
+        name="从者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="老师",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.trait_target_overrides["servant"] = {"teacher"}
+
+    result = resolver.resolve(
+        state,
+        [
+            Effect(
+                effect_type=EffectType.MOVE_CHARACTER,
+                target="teacher",
+                value=AreaId.CITY.value,
+            )
+        ],
+    )
+
+    assert result.outcome == Outcome.NONE
+    assert state.characters["teacher"].area == AreaId.CITY
+    assert state.characters["servant"].area == AreaId.CITY
+
+
+def test_servant_death_substitutes_for_runtime_override_target() -> None:
+    bus, resolver = _resolver_bundle()
+    state = GameState()
+    state.characters["servant"] = CharacterState(
+        character_id="servant",
+        name="从者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="老师",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.trait_target_overrides["servant"] = {"teacher"}
+
+    result = resolver.resolve(
+        state,
+        [
+            Effect(
+                effect_type=EffectType.KILL_CHARACTER,
+                target="teacher",
+            )
+        ],
+    )
+
+    assert result.outcome == Outcome.NONE
+    assert result.mutations[0].details["death_result"] == DeathResult.PREVENTED_BY_SERVANT
+    assert result.mutations[0].details["death_target_id"] == "servant"
+    assert state.characters["teacher"].is_active()
+    assert state.characters["servant"].is_dead()
 
 
 def test_playwright_ability_handler_declares_and_resolves_targeted_ability() -> None:

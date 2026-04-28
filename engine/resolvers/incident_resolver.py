@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from engine.event_bus import GameEvent, GameEventType
 from engine.models.effects import Effect
-from engine.models.enums import Outcome, TokenType
+from engine.models.enums import EffectType, Outcome, TokenType
 from engine.models.incident import IncidentPublicResult
 from engine.models.selectors import (
     area_choice_selector,
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from engine.event_bus import EventBus
     from engine.game_state import GameState
     from engine.models.incident import IncidentDef, IncidentSchedule
-    from engine.resolvers.atomic_resolver import AtomicResolver, Mutation
+    from engine.resolvers.atomic_resolver import AtomicResolver, Mutation, ServantFollowChoiceRequest
 
 @dataclass
 class IncidentResolution:
@@ -69,6 +69,8 @@ class IncidentResolver:
         self,
         state: GameState,
         schedule: IncidentSchedule,
+        *,
+        servant_follow_choices: dict[str, str] | None = None,
     ) -> IncidentResolution:
         incident_def = state.incident_defs.get(schedule.incident_id)
         resolution = IncidentResolution(schedule=schedule, incident_def=incident_def)
@@ -97,7 +99,13 @@ class IncidentResolver:
             self._record_public_result(state, resolution.public_result)
             return resolution
 
-        if self.next_runtime_choice(state, schedule, incident_def) is not None:
+        effective_incident_def = self._incident_def_with_perpetrator_overrides(
+            state,
+            schedule,
+            incident_def,
+        )
+
+        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
             resolution.public_result = self._build_public_result(
                 state,
                 schedule,
@@ -107,12 +115,13 @@ class IncidentResolver:
             self._record_public_result(state, resolution.public_result)
             return resolution
 
-        effects = self._materialize_effects(state, schedule, incident_def.effects)
+        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
         result = self.atomic_resolver.resolve(
             state,
             effects,
-            sequential=incident_def.sequential,
+            sequential=effective_incident_def.sequential,
             perpetrator_id=schedule.perpetrator_id,
+            servant_follow_choices=servant_follow_choices,
         )
 
         resolution.mutations = result.mutations
@@ -132,6 +141,8 @@ class IncidentResolver:
         state: GameState,
         schedule: IncidentSchedule,
         incident_def: IncidentDef | None = None,
+        *,
+        servant_follow_choices: dict[str, str] | None = None,
     ) -> IncidentResolution:
         """仅执行事件效果，不标记事件已发生，也不写公开记录。"""
         resolved_incident_def = incident_def or state.incident_defs.get(schedule.incident_id)
@@ -139,21 +150,56 @@ class IncidentResolver:
         if resolved_incident_def is None:
             return resolution
 
-        if self.next_runtime_choice(state, schedule, resolved_incident_def) is not None:
+        effective_incident_def = self._incident_def_with_perpetrator_overrides(
+            state,
+            schedule,
+            resolved_incident_def,
+        )
+
+        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
             return resolution
 
-        effects = self._materialize_effects(state, schedule, resolved_incident_def.effects)
+        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
         result = self.atomic_resolver.resolve(
             state,
             effects,
-            sequential=resolved_incident_def.sequential,
+            sequential=effective_incident_def.sequential,
             perpetrator_id=schedule.perpetrator_id,
+            servant_follow_choices=servant_follow_choices,
         )
 
         resolution.mutations = result.mutations
         resolution.outcome = result.outcome
         resolution.has_phenomenon = len(result.mutations) > 0
         return resolution
+
+    def next_servant_follow_choice(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        *,
+        servant_follow_choices: dict[str, str] | None = None,
+    ) -> ServantFollowChoiceRequest | None:
+        incident_def = state.incident_defs.get(schedule.incident_id)
+        if not self.can_occur(state, schedule, incident_def):
+            return None
+        if incident_def is None:
+            return None
+        effective_incident_def = self._incident_def_with_perpetrator_overrides(
+            state,
+            schedule,
+            incident_def,
+        )
+        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
+            return None
+        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
+        return self.atomic_resolver.next_servant_follow_choice(
+            state,
+            effects,
+            sequential=effective_incident_def.sequential,
+            perpetrator_id=schedule.perpetrator_id,
+            servant_follow_choices=servant_follow_choices,
+        )
 
     def can_occur(
         self,
@@ -227,6 +273,30 @@ class IncidentResolver:
         if incident_def is not None:
             threshold += incident_def.modifies_paranoia_limit
         return threshold
+
+    def _incident_def_with_perpetrator_overrides(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef,
+    ) -> IncidentDef:
+        """
+        事件覆写钩子（角色级）。
+
+        目前仅落地 black_cat：其为当事人时，事件效果统一覆写为 NO_EFFECT。
+        其他角色扩展（结算次数、判定区域替代等）在此入口追加即可。
+        """
+        perpetrator = state.characters.get(schedule.perpetrator_id)
+        if perpetrator is None:
+            return incident_def
+
+        if perpetrator.character_id == "black_cat":
+            return replace(
+                incident_def,
+                effects=[Effect(effect_type=EffectType.NO_EFFECT)],
+            )
+
+        return incident_def
 
     def _mark_occurred(self, state: GameState, schedule: IncidentSchedule) -> None:
         schedule.occurred = True

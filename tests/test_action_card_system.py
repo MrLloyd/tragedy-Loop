@@ -31,7 +31,15 @@ class SpyAtomicResolver(AtomicResolver):
         super().__init__(event_bus, DeathResolver())
         self.calls: list[dict[str, object]] = []
 
-    def resolve(self, state: GameState, effects: list, sequential: bool = False, perpetrator_id: str = ""):
+    def resolve(
+        self,
+        state: GameState,
+        effects: list,
+        sequential: bool = False,
+        perpetrator_id: str = "",
+        location_context=None,
+        servant_follow_choices=None,
+    ):
         self.calls.append(
             {
                 "effects": list(effects),
@@ -44,6 +52,8 @@ class SpyAtomicResolver(AtomicResolver):
             effects,
             sequential=sequential,
             perpetrator_id=perpetrator_id,
+            location_context=location_context,
+            servant_follow_choices=servant_follow_choices,
         )
 
 
@@ -93,6 +103,18 @@ def _make_state_for_placement() -> GameState:
     )
 
     return state
+
+
+def _add_phantom_character(state: GameState, *, area: AreaId = AreaId.HOSPITAL) -> None:
+    state.characters["phantom"] = CharacterState(
+        character_id="phantom",
+        name="幻想",
+        area=area,
+        initial_area=area,
+        identity_id="平民",
+        original_identity_id="平民",
+        base_traits={Trait.NO_ACTION_CARDS},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +505,183 @@ def test_token_effect_on_board():
 
     # 验证版图密谋+2
     assert state.board.areas[area_id].tokens.intrigue == 2
+
+
+def test_phantom_cannot_receive_action_cards_directly():
+    state = _make_state_for_placement()
+    _add_phantom_character(state)
+
+    mm_handler, _, _, _ = _make_action_handlers()
+    signal = mm_handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    try:
+        signal.callback(
+            PlacementIntent(
+                card=state.mastermind_hand.cards[0],
+                target_type="character",
+                target_id="phantom",
+            )
+        )
+        assert False, "should reject direct action-card placement on phantom"
+    except ValueError as e:
+        assert "NO_ACTION_CARDS" in str(e) or "cannot receive" in str(e)
+
+
+def test_phantom_board_forbid_goodwill_nullifies_same_area_goodwill_plus_two():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    _add_phantom_character(state, area=AreaId.SCHOOL)
+
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_GOODWILL, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "board",
+            AreaId.SCHOOL.value,
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.GOODWILL_PLUS_2, PlayerRole.PROTAGONIST_1),
+            PlayerRole.PROTAGONIST_1,
+            "board",
+            AreaId.SCHOOL.value,
+            face_down=True,
+        ),
+    ]
+
+    result = act_handler.execute(state)
+    assert isinstance(result, PhaseComplete)
+
+    assert state.placed_cards[0].nullified is False
+    assert state.placed_cards[1].nullified is True
+    assert state.board.areas[AreaId.SCHOOL].tokens.goodwill == 0
+    assert state.characters["phantom"].tokens.goodwill == 0
+
+
+def test_phantom_same_area_board_intrigue_cards_apply_to_phantom():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    _add_phantom_character(state, area=AreaId.SCHOOL)
+
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_2, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "board",
+            AreaId.SCHOOL.value,
+            face_down=True,
+        ),
+    ]
+
+    result = act_handler.execute(state)
+    assert isinstance(result, PhaseComplete)
+
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 2
+    assert state.characters["phantom"].tokens.intrigue == 2
+
+
+def test_phantom_moves_then_destination_board_cards_apply_without_chain_movement():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    _add_phantom_character(state, area=AreaId.HOSPITAL)
+
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "board",
+            AreaId.HOSPITAL.value,
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.MOVE_VERTICAL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "board",
+            AreaId.SHRINE.value,
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_2, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "board",
+            AreaId.SHRINE.value,
+            face_down=True,
+        ),
+    ]
+
+    result = act_handler.execute(state)
+    assert isinstance(result, PhaseComplete)
+
+    assert state.characters["phantom"].area == AreaId.SHRINE
+    assert state.characters["phantom"].tokens.intrigue == 2
+    assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 2
+
+
+def test_servant_ignores_own_action_movement_and_follows_selected_target():
+    _, _, act_handler, _ = _make_action_handlers()
+    state = _make_state_for_placement()
+    state.characters["servant"] = CharacterState(
+        character_id="servant",
+        name="从者",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["ojousama"] = CharacterState(
+        character_id="ojousama",
+        name="大小姐",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.MOVE_VERTICAL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "servant",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.MOVE_HORIZONTAL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "vip",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.MOVE_VERTICAL, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "ojousama",
+            face_down=True,
+        ),
+    ]
+
+    wait = act_handler.execute(state)
+
+    assert isinstance(wait, WaitForInput)
+    assert wait.player == "protagonist_0"
+    assert wait.options == ["ojousama", "vip"]
+
+    result = wait.callback("vip")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["vip"].area == AreaId.CITY
+    assert state.characters["ojousama"].area == AreaId.SHRINE
+    assert state.characters["servant"].area == AreaId.CITY
 
 
 def test_board_intrigue_is_capped_at_three() -> None:

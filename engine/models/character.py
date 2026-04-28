@@ -107,6 +107,7 @@ class CharacterState:
 
     # --- 运行时状态（不序列化到 JSON） ---
     goodwill_abilities: list[Ability] = field(default_factory=list)
+    character_trait_abilities: list[Ability] = field(default_factory=list)
     goodwill_ability_texts: list[str] = field(default_factory=list)
     goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)

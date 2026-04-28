@@ -1,205 +1,220 @@
-# 惨剧轮回：计划与代码映射（开发导航）
+# 惨剧轮回：计划与代码映射（文档索引版）
 
-本文件把 **`PLAN.md` 中的阶段与主题** 映射到**仓库里的真实路径**，便于从「计划」跳到「代码」、从「代码」反查「计划」。  
-**单一事实源**：里程碑与勾选状态以 [`PLAN.md`](PLAN.md) 为准；本文侧重**落点与缺口**。
+本文件的目标不是复述架构，而是把“文档里的条目”尽量直接落到“仓库里的代码入口”。
 
----
+维护原则：
 
-## 相关计划文档索引
-
-| 文档 | 用途 |
-|------|------|
-| `PLAN.md` | 主计划与阶段状态，作为里程碑单一事实源 |
-| `PHASE7_GAP_CHECKLIST.md` | Phase 7 细化缺口：FS / BTX 规则、身份、事件、角色友好能力、特性 |
-| `PHASE6_GAME_PREPARE_UI_DRAFT.md` | Phase 6 新游戏 / 准备页 UI 草案 |
-| `WORK_PROGRESS.md` | 当前工作断点、验证命令与下次继续建议 |
+- `PLAN.md` 继续作为阶段状态单一事实源。
+- 规则语义优先看 `tragedy_loop_game_rules.md` 与 `tragedy_loop_appendix.md`。
+- 规则到代码的具体落点，优先看 `docs/rules_to_engine_mapping.md`。
+- UI 表现与输入回传，优先看 `docs/rules_to_ui_mapping.md` 和 `docs/engine_ui_boundary_mapping.md`。
+- 本文件只做“导航索引”，不重复展开规则细节。
 
 ---
 
-## 路径速查（代码 → `PLAN.md`）
+## 1. 文档入口总表
 
-| 路径 / 区域 | 主要对应 `PLAN.md` |
-|-------------|-------------------|
-| `data/*.json`、`data/modules/*.json` | §2 Phase 0（数据与契约） |
-| `engine/validation/__main__.py`, `runner.py`, `static_data.py`, `modules.py`, `common.py` | §2 Phase 0（校验入口：`python -m engine.validation`） |
-| `tests/test_data_validation.py` | §2 Phase 0（数据校验回归测试） |
-| `engine/models/board.py`, `cards.py`, `character.py`, `enums.py` | §2 Phase 0（基础领域模型）|
-| `engine/models/effects.py`, `ability.py` | §2 Phase 4（通用声明式条件/效果/能力模型） |
-| `engine/models/identity.py`, `incident.py` | §2 Phase 4（身份与事件定义模型） |
-| `engine/rules/character_loader.py` | §2 Phase 4（角色数据层 / 简易角色系统前置） |
-| `engine/models/script.py` | §2 Phase 2（模组脚本对象，与 `module_loader` 配套） |
-| `engine/state_machine.py` | §2 Phase 1（阶段流转与分支） |
-| `engine/game_state.py` | §2 Phase 1（聚合根、`module_def` / `has_final_guess`、测试工厂等） |
-| `engine/game_controller.py` | §2 Phase 1（调度循环）；§2 Phase 2（`start_game(module_id, ...)`） |
-| `engine/phases/phase_base.py` | §2 Phase 1（各阶段 handler）；内含行动/事件等最小闭环 |
-| `engine/resolvers/atomic_resolver.py` | §2 Phase 1；`PLAN.md` §3.1 同时裁定 |
-| `engine/resolvers/death_resolver.py` | §2 Phase 1；`PLAN.md` §3.4 / §3.5 等 |
-| `engine/event_bus.py` | §2 Phase 1（触发总线）；与身份/事件扩展相关 |
-| `engine/visibility.py` | `PLAN.md` §3.20 信息边界 |
-| `engine/rules/module_loader.py` | §2 Phase 2（`load_module`、`apply_loaded_module` → `GameState`） |
-| `engine/rules/identity_registry.py` | §2 Phase 2（身份定义注册） |
-| `engine/rules/incident_registry.py` | §2 Phase 2（事件定义注册） |
-| `engine/rules/rule_base.py`（**尚未创建**） | `PLAN.md` 目录规划；待 Phase 2+ 按需落地 |
-| `engine/resolvers/action_resolver.py`（**尚未创建**） | `PLAN.md` 目录规划；当前行动结算主要在 `atomic_resolver` + `phase_base` |
-| `engine/resolvers/ability_resolver.py` | §2 Phase 4（统一能力入口：按角色友好 / 身份 / 规则 / 派生来源收集） |
-| `engine/resolvers/incident_resolver.py`（**尚未创建**） | `PLAN.md` 目录规划；事件最小路径在 `phase_base` / `INCIDENT` |
-| `tests/test_wait_for_input_loop.py` | §2 Phase 1 DoD（输入闭环） |
-| `tests/test_incident_handler.py` | §2 Phase 1（事件阶段与裁定等） |
-| `tests/test_module_apply.py` | §2 Phase 2（`build_game_state_from_module`、`start_game` 模组开局入口等） |
-| `tests/test_validation_loader_integration.py` | §2 Phase 2（校验 + loader 联动） |
-| `tests/test_registry_loader.py` | §2 Phase 2（registry + `load_module`） |
-| `tests/test_character_loader.py`, `tests/test_ability_resolver.py` | §2 Phase 4（数据层与能力层回归） |
-| `ui/widgets/`, `ui/controllers/`, `ui/screens/`（基础结构已有） | §2 Phase 5（UI 框架启动中） |
-| `PHASE7_GAP_CHECKLIST.md` | §2 Phase 7（端到端可玩前的 FS / BTX 细化缺口索引） |
+| 文档 | 主要用途 | 先看什么 |
+|------|----------|---------|
+| [`PLAN.md`](PLAN.md) | 项目阶段、DoD、开发顺序 | §2 开发阶段、§3 规则边界案例 |
+| `tragedy_loop_game_rules.md` | 规则正文 | 规则名、时机、效果、边界描述 |
+| `tragedy_loop_appendix.md` | 附录 / 模组条目事实源 | FS / BTX 的条目与数量 |
+| [`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) | 规则语义 → `engine/` | 第 2 - 7 节 |
+| [`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) | 规则语义 → `ui/` | 第 2 - 8 节 |
+| [`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md) | `engine/` ↔ `ui/` 中间层 | 第 2 - 7 节 |
+| [`PHASE7_GAP_CHECKLIST.md`](PHASE7_GAP_CHECKLIST.md) | Phase 7 缺口清单 | FS / BTX 角色与规则缺口 |
+| [`WORK_PROGRESS.md`](WORK_PROGRESS.md) | 当前断点 | 最近一次工作记录 |
 
 ---
 
-## 1) 当前代码基线（与仓库一致）
+## 2. 文档到代码的主索引
 
-- **已有**：`engine/`（状态机、控制器、7 个模型文件、部分 resolver、`phases/phase_base.py`）、`data/`（board/cards/characters、modules）、`engine/rules/`（`module_loader`、`identity_registry`、`incident_registry`）、`engine/validation/`（6 个校验模块）、`tests/`（含 `test_module_apply` 等）、`ui/`（目录结构）。
-- **规则文档**：`tragedy_loop_game_rules.md`、`tragedy_loop_appendix.md`。
-- **风格**：dataclass + `atomic_resolver` + `phase_base` 阶段处理器；与 `PLAN.md` 架构一致。
+### 2.1 `PLAN.md` → 代码
 
-### 相对 `PLAN.md` 的常见缺口（维护时核对）
+#### §1 项目目录结构
 
-- **`has_final_guess`**：由 `GameState.module_def`（经 `apply_loaded_module` 装配）与 `game_controller` 读取；开局须显式装配模组数据。
-- **独立 resolver 文件**：`ability_resolver` 已建立统一入口；`action_resolver` / `incident_resolver` 仍未从 `phase_base` + `atomic_resolver` 中拆出（见上表）。
-- **UI**：未启动。
+| `PLAN.md` 条目 | 代码入口 |
+|----------------|----------|
+| `data/` 静态配置 | `data/board.json`、`data/cards.json`、`data/characters.json`、`data/modules/*.json` |
+| `engine/` 核心引擎 | `engine/state_machine.py`、`engine/game_state.py`、`engine/game_controller.py` |
+| `engine/models/` 领域模型 | `engine/models/enums.py`、`character.py`、`board.py`、`cards.py`、`script.py`、`incident.py`、`identity.py`、`ability.py`、`effects.py`、`selectors.py` |
+| `engine/resolvers/` 结算层 | `atomic_resolver.py`、`ability_resolver.py`、`incident_resolver.py`、`death_resolver.py` |
+| `engine/rules/` 数据装配 | `module_loader.py`、`script_validator.py`、`character_loader.py`、`identity_registry.py`、`incident_registry.py`、`runtime_traits.py`、`runtime_identities.py`、`persistent_effects.py` |
+| `engine/phases/` 阶段层 | `phase_base.py` |
+| `ui/` 前端 | `ui/app.py`、`ui/main_window.py`、`ui/screens/*.py`、`ui/controllers/*.py` |
+| `tests/` 回归测试 | `tests/test_*.py` |
 
----
+#### §2 开发阶段
 
-## 2) `PLAN.md` Phase 与代码映射
+| `PLAN.md` Phase | 代码入口 |
+|-----------------|----------|
+| Phase 0 数据与契约 | `data/*.json`、`engine/validation/*`、`tests/test_data_validation.py` |
+| Phase 1 状态机与核心引擎 | `engine/state_machine.py`、`engine/game_controller.py`、`engine/game_state.py`、`engine/phases/phase_base.py`、`engine/resolvers/atomic_resolver.py`、`engine/resolvers/death_resolver.py`、`engine/event_bus.py`、`engine/visibility.py`、`tests/test_wait_for_input_loop.py`、`tests/test_incident_handler.py`、`tests/test_phase1_core.py` |
+| Phase 2 模组加载与注册表 | `engine/rules/module_loader.py`、`engine/rules/script_validator.py`、`engine/rules/identity_registry.py`、`engine/rules/incident_registry.py`、`engine/rules/character_loader.py`、`tests/test_registry_loader.py`、`tests/test_module_apply.py`、`tests/test_validation_loader_integration.py` |
+| Phase 3 行动牌系统 | `engine/models/cards.py`、`engine/phases/phase_base.py`、`engine/resolvers/atomic_resolver.py`、`tests/test_action_card_system.py` |
+| Phase 4 身份 / 能力 / 事件 | `engine/models/identity.py`、`engine/models/incident.py`、`engine/models/ability.py`、`engine/models/effects.py`、`engine/resolvers/ability_resolver.py`、`engine/resolvers/incident_resolver.py`、`engine/rules/runtime_traits.py`、`engine/rules/runtime_identities.py`、`engine/rules/persistent_effects.py`、`tests/test_ability_resolver.py`、`tests/test_character_loader.py`、`tests/test_phase4_handlers.py`、`tests/test_phase4_p4_5_p4_6.py` |
+| Phase 5 基础 UI | `ui/app.py`、`ui/main_window.py`、`ui/screens/title_screen.py`、`ui/screens/new_game_screen.py`、`ui/screens/game_screen.py`、`ui/screens/result_screen.py`、`ui/controllers/new_game_controller.py`、`ui/controllers/game_session_controller.py`、`tests/test_ui_new_game_controller.py`、`tests/test_ui_game_screen_model.py`、`tests/test_ui_main_window_flow.py`、`tests/test_ui_session_smoke.py` |
+| Phase 6 端到端可玩 | `ui/` + `engine/` 闭环整体；优先看 `tests/test_first_steps_smoke_scenario.py`、`tests/test_test_mode_controller.py` |
+| Phase 7 缺口收敛 | `PHASE7_GAP_CHECKLIST.md`、`docs/phase7_goodwill_structured_migration.md`、`tests/test_goodwill_structured_migration.py`、`tests/test_phase5_first_steps_abilities.py` |
 
-章节编号与 [`PLAN.md`](PLAN.md) **§2 开发阶段**一致。
+#### §3 规则边界案例
 
-### Phase 0：基础设施 + 数据
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| 基础模型 | `engine/models/board.py`、`cards.py`、`character.py`、`enums.py` |
-| 静态数据 | `data/board.json`、`data/cards.json`、`data/characters.json`、`data/modules/first_steps.json`、`data/modules/basic_tragedy_x.json` |
-| 校验框架 | `engine/validation/__main__.py`、`runner.py`、`static_data.py`、`modules.py`、`common.py` |
-| 校验测试 | `tests/test_data_validation.py` |
-
-**结论**：数据与校验链路已落地；后续变更需保持与 `PLAN.md` Phase 0 勾选一致。
-
-### Phase 1：状态机 + 核心引擎
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| 状态机 | `engine/state_machine.py` |
-| 控制器主循环 | `engine/game_controller.py` |
-| 游戏状态 | `engine/game_state.py` |
-| 阶段逻辑 | `engine/phases/phase_base.py` |
-| 原子结算、同时裁定 | `engine/resolvers/atomic_resolver.py` |
-| 死亡链 | `engine/resolvers/death_resolver.py` |
-| 事件总线 | `engine/event_bus.py` |
-| 信息过滤 | `engine/visibility.py` |
-| 回归测试 | `tests/test_wait_for_input_loop.py`、`tests/test_incident_handler.py` |
-
-**缺口（见 `PLAN.md` Phase 1 未完成项）**：例如更多 Phase 1 核心测试等。
-
-### Phase 2：数据层完善（loader / registry / 与控制器联动）
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| 脚本模型 | `engine/models/script.py`（模组脚本对象） |
-| 模组加载 | `engine/rules/module_loader.py`（`load_module` → `LoadedModule`） |
-| 身份 / 事件注册表 | `engine/rules/identity_registry.py`、`engine/rules/incident_registry.py` |
-| 配置接线 | `build_game_state_from_module` / `apply_loaded_module` + `GameState.module_def`；`GameController.start_game(module_id, ...)`；`game_controller` 使用 `state.has_final_guess`；各 phase 读 `state.identity_defs` / `incident_defs` |
-
-**缺口**：更完整的剧本装配（角色表、`Script.rule_y` / `rules_x` 自模组等）可在后续 Phase 继续接；更多「模组差异」字段若需可继续从 `ModuleDef` 下放到运行时。
-
-### Phase 3：行动牌系统
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| 行动牌模型 | `engine/models/cards.py` |
-| 行动阶段与最小结算 | `engine/phases/phase_base.py`（如 `ACTION_RESOLVE` 相关 handler）、`engine/resolvers/atomic_resolver.py` |
-| 专用行动 resolver | 规划中：`engine/resolvers/action_resolver.py`（**未建**） |
-
-### Phase 4：身份与能力 + 事件系统
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| P4-1 角色数据层 / 简易角色系统 | `engine/models/character.py`、`engine/rules/character_loader.py` |
-| 身份 / 能力 / 效果模型 | `engine/models/identity.py` |
-| P4-2 能力统一入口 | `engine/resolvers/ability_resolver.py`（统一入口，按角色友好 / 身份 / 规则 / 常驻派生分层） |
-| P4-3 身份 / 规则能力补齐 | `data/modules/*.json`、`engine/rules/module_loader.py`、`identity_registry.py` |
-| 事件模型 | `engine/models/incident.py` |
-| 定义加载与注册 | `engine/rules/module_loader.py`、`identity_registry.py`、`incident_registry.py` |
-| P4-4 阶段接线 | `engine/phases/phase_base.py`、`event_bus.py` |
-| 纯结算层 | `engine/resolvers/atomic_resolver.py` |
-| 专用 resolver | `ability_resolver.py`（已建，待 Phase 4 继续扩展）、`incident_resolver.py`（**未建**） |
-| Phase 4 测试 | `tests/test_character_loader.py`、`tests/test_ability_resolver.py` |
-
-### Phase 5：基础 UI
-
-| PLAN 主题 | 代码落点 |
-|-----------|----------|
-| UI 框架结构 | `ui/widgets/`、`ui/controllers/`、`ui/screens/`（目录结构已建，awaiting 实现） |
-| 新游戏非公开信息表 | `ui/screens/` + `ui/controllers/`（默认加载 Phase 5 的 `first_steps` 剧本内容） |
-| 与引擎协作接口 | `game_controller.py` 中预留的 UI 协作接口 |
-
-- **规划**：见 `PLAN.md` 目录树中 `ui/`。
-- **现状**：目录结构已建立；具体 widget、screen、controller 实现待补充。
-
-### Phase 6：端到端可玩
-
-- 依赖 Phase 1–4 闭环 + Phase 5（若需要图形界面）；当前以引擎与测试为主要验证手段。
-
-### Phase 7：FS / BTX 细节补齐与端到端可玩收敛
-
-| PLAN 主题 | 代码 / 文档落点 |
-|-----------|-----------------|
-| Phase 7 缺口索引 | `PHASE7_GAP_CHECKLIST.md` |
-| FS / BTX 规则与身份细节 | `data/modules/first_steps.json`、`data/modules/basic_tragedy_x.json`、`engine/resolvers/ability_resolver.py`、`engine/phases/phase_base.py` |
-| FS / BTX 事件细节 | `data/modules/*.json`、`engine/resolvers/incident_resolver.py`、`engine/phases/phase_base.py` |
-| 所有角色友好能力结构化迁移 | `data/characters.json`、`engine/rules/character_loader.py`、`engine/models/character.py`、`engine/validation/static_data.py` |
-| 旧友好能力字段删除计划 | `PHASE7_GAP_CHECKLIST.md` 第 9 项 |
-| 对表测试矩阵 | `tests/test_phase5_first_steps_abilities.py`、`tests/test_phase4_handlers.py`、后续新增 Phase 7 回归测试 |
+| `PLAN.md` 条目 | 代码入口 |
+|----------------|----------|
+| 3.1 原子结算与同时裁定 | `engine/resolvers/atomic_resolver.py` |
+| 3.2 医院事故多人死亡 | `engine/resolvers/atomic_resolver.py`、`engine/resolvers/incident_resolver.py` |
+| 3.3 turn_end 能力顺序 | `engine/phases/phase_base.py`、`engine/resolvers/ability_resolver.py` |
+| 3.4 / 3.5 杀人狂与护卫 | `engine/resolvers/death_resolver.py`、`engine/phases/phase_base.py` |
+| 3.20 信息边界 | `engine/visibility.py` |
 
 ---
 
-## 3) `PLAN.md` §3 规则边界案例 → 代码锚点
+### 2.2 规则正文 / 附录 → 代码
 
-| §3 小节 | 主题 | 优先代码落点 |
-|---------|------|----------------|
-| 3.1 | 原子结算与同时裁定 | `engine/resolvers/atomic_resolver.py` |
-| 3.2 | 医院事故多人死亡 | `atomic_resolver` + 未来 `incident_resolver` / 事件效果 |
-| 3.3 | turn_end 能力顺序 | `phase_base.py`（`TURN_END`）、未来 `ability_resolver.py` |
-| 3.4 / 3.5 | 杀人狂与护卫 | `death_resolver.py`、`phase_base.py` |
-| 3.20 | 信息边界 | `engine/visibility.py` |
+#### `tragedy_loop_game_rules.md`
 
----
+| 规则主题 | 主要代码 |
+|----------|----------|
+| 阶段顺序与时机 | `engine/state_machine.py`、`engine/phases/phase_base.py` |
+| 行动牌合法性与结算 | `engine/models/cards.py`、`engine/phases/phase_base.py`、`engine/resolvers/atomic_resolver.py` |
+| 能力时机、拒绝、目标 | `engine/resolvers/ability_resolver.py`、`engine/phases/phase_base.py` |
+| 事件发生、公开结果 | `engine/resolvers/incident_resolver.py`、`engine/phases/phase_base.py`、`engine/visibility.py` |
+| 死亡 / 失败 / 轮回结束 | `engine/resolvers/death_resolver.py`、`engine/game_controller.py`、`engine/event_bus.py` |
+| 公开 / 非公开信息 | `engine/visibility.py` |
 
-## 4) 建议开发顺序（与 `PLAN.md` 一致时可对齐）
+#### `tragedy_loop_appendix.md`
 
-1. **Phase 2 接线**：`game_controller` / `Script` / 模组与 `has_final_guess`、注册表贯通（满足 `PLAN.md` Phase 1 DoD-5 与 Phase 2 DoD）。
-2. **P4-1 简易角色层**：先让角色友好能力与必要字段进入能力系统，不在此步完成完整角色系统。
-3. **P4-2 统一能力层**：以 `ability_resolver` 为统一入口，按角色友好 / 身份 / 规则 / 派生来源分层。
-4. **P4-3 / P4-4**：先补 FS / BTX 身份与规则能力，再接 `Playwright` / `Protagonist` / `TurnEnd` / `LoopStart` handler。
-5. **Phase 5 UI**：数据与引擎稳定后再接 PySide6。
-6. **Phase 7 收敛**：按 `PHASE7_GAP_CHECKLIST.md` 补齐 FS / BTX 规则、身份、事件、角色友好能力与特性。
-7. **测试**：随功能扩展补充 `tests/`，与 `PLAN.md` Phase DoD 对齐。
-
----
-
-## 5) 按文件开工的 TODO 入口（快速跳转）
-
-| 文件 | 典型任务（详见 `PLAN.md`） |
-|------|---------------------------|
-| `engine/game_controller.py` | 模组配置、`has_final_guess`、与 UI/输入的长期协作 |
-| `engine/phases/phase_base.py` | 各阶段业务完整度、与 resolver 拆分 |
-| `engine/resolvers/atomic_resolver.py` | Effect 与公告、与 visibility 对齐 |
-| `engine/resolvers/death_resolver.py` | 规则边界案例（护卫、批量死亡等） |
-| `engine/rules/module_loader.py` | 新模组字段、与 validation 一致 |
-| `engine/rules/identity_registry.py` / `incident_registry.py` | 与加载器、运行时查询一致 |
-| `tests/*.py` | 新回归用例 |
+| 附录主题 | 主要代码 |
+|----------|----------|
+| FS / BTX 模组条目 | `data/modules/first_steps.json`、`data/modules/basic_tragedy_x.json` |
+| 模组条目装配 | `engine/rules/module_loader.py` |
+| 剧本合法性校验 | `engine/rules/script_validator.py` |
+| 角色模板 | `data/characters.json`、`engine/rules/character_loader.py` |
+| 身份 / 事件定义 | `engine/models/identity.py`、`engine/models/incident.py`、`engine/rules/identity_registry.py`、`engine/rules/incident_registry.py` |
 
 ---
 
-## 6) 文档维护
+### 2.3 规则文档映射文档 → 代码
 
-- 修改架构或新增核心文件时：**同步更新本节路径表与 Phase 映射**，并核对 [`PLAN.md`](PLAN.md) 中的勾选与日期。
-- 若 `PLAN.md` 调整 Phase 含义，以 `PLAN.md` 为准更新本文件章节 **§2** 的对应关系。
+#### [`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md)
+
+| 文档章节 | 直接对应的代码 |
+|----------|----------------|
+| 第 1 节 分层原则 | `engine/state_machine.py`、`engine/game_controller.py`、`engine/phases/phase_base.py`、`engine/resolvers/*.py`、`engine/rules/*.py` |
+| 第 2 节 规则主题 → Engine | `engine/game_state.py`、`engine/rules/module_loader.py`、`engine/rules/script_validator.py`、`engine/resolvers/ability_resolver.py`、`engine/resolvers/incident_resolver.py`、`engine/visibility.py` |
+| 第 3 节 按规则对象映射 | `engine/models/script.py`、`engine/models/identity.py`、`engine/models/incident.py`、`engine/rules/runtime_identities.py` |
+| 第 4 节 按流程规则映射 | `engine/game_controller.py`、`engine/phases/phase_base.py`、`engine/rules/module_loader.py` |
+| 第 5 节 按“该改哪里”来查 | `engine/state_machine.py`、`engine/resolvers/*.py`、`engine/visibility.py`、`engine/rules/*.py` |
+
+#### [`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md)
+
+| 文档章节 | 直接对应的代码 |
+|----------|----------------|
+| 第 1 节 分层原则 | `ui/app.py`、`ui/main_window.py`、`ui/controllers/*.py`、`ui/screens/*.py` |
+| 第 2 节 规则文档主主题 → UI | `ui/screens/new_game_screen.py`、`ui/screens/game_screen.py`、`ui/screens/title_screen.py`、`ui/screens/result_screen.py` |
+| 第 3 节 按玩家视角映射 | `ui/screens/game_screen.py`、`ui/controllers/game_session_controller.py`、`engine/visibility.py` |
+| 第 4 节 按交互规则映射 | `ui/screens/new_game_screen.py`、`ui/controllers/new_game_controller.py`、`ui/screens/game_screen.py` |
+| 第 5 节 按显示规则映射 | `ui/screens/game_screen.py`、`ui/controllers/game_session_controller.py` |
+| 第 6 节 按“该改哪里”来查 | `ui/screens/*.py`、`ui/controllers/*.py`、`ui/main_window.py` |
+
+#### [`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md)
+
+| 文档章节 | 直接对应的代码 |
+|----------|----------------|
+| 第 1 节 这层负责什么 | `engine/game_controller.py`、`ui/controllers/game_session_controller.py`、`ui/screens/*.py` |
+| 第 2 节 核心边界对象 | `engine/game_controller.py`、`engine/phases/phase_base.py`、`engine/visibility.py`、`ui/controllers/game_session_controller.py` |
+| 第 3 节 数据流映射 | `engine/game_controller.py`、`ui/controllers/game_session_controller.py`、`ui/screens/*.py` |
+| 第 4 节 按问题类型定位 | `engine/game_controller.py`、`ui/controllers/game_session_controller.py`、`ui/screens/game_screen.py` |
+| 第 5 节 当前文件职责 | `engine/game_controller.py`、`ui/controllers/game_session_controller.py`、`ui/screens/*.py` |
+
+---
+
+## 3. 代码到文档的反查索引
+
+### 3.1 引擎入口
+
+| 代码入口 | 反查文档 |
+|----------|----------|
+| `engine/state_machine.py` | [`PLAN.md`](PLAN.md) §2 Phase 1；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/game_controller.py` | [`PLAN.md`](PLAN.md) §2 Phase 1 / §2 Phase 5；[`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md) 第 3 节 |
+| `engine/game_state.py` | [`PLAN.md`](PLAN.md) §2 Phase 1 / Phase 2；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 2 节 |
+| `engine/phases/phase_base.py` | [`PLAN.md`](PLAN.md) §2 Phase 1 / §3；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/resolvers/atomic_resolver.py` | [`PLAN.md`](PLAN.md) §3.1；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/resolvers/ability_resolver.py` | [`PLAN.md`](PLAN.md) Phase 4；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/resolvers/incident_resolver.py` | [`PLAN.md`](PLAN.md) Phase 4 / §3.2；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/resolvers/death_resolver.py` | [`PLAN.md`](PLAN.md) §3.4 / §3.5；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 4 节 |
+| `engine/visibility.py` | [`PLAN.md`](PLAN.md) §3.20；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 2 节 |
+
+### 3.2 规则与数据入口
+
+| 代码入口 | 反查文档 |
+|----------|----------|
+| `engine/rules/module_loader.py` | [`PLAN.md`](PLAN.md) Phase 2；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 2 节 |
+| `engine/rules/script_validator.py` | [`PLAN.md`](PLAN.md) Phase 4 P4-6；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 2 节 |
+| `engine/rules/character_loader.py` | [`PLAN.md`](PLAN.md) Phase 4 P4-0 / P4-1；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 2 节 |
+| `engine/rules/identity_registry.py` | [`PLAN.md`](PLAN.md) Phase 2 / Phase 4；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 3 节 |
+| `engine/rules/incident_registry.py` | [`PLAN.md`](PLAN.md) Phase 2 / Phase 4；[`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md) 第 3 节 |
+| `data/modules/*.json` | [`tragedy_loop_appendix.md`](tragedy_loop_appendix.md)；[`PLAN.md`](PLAN.md) Phase 2 |
+| `data/characters.json` | [`tragedy_loop_appendix.md`](tragedy_loop_appendix.md)；[`PLAN.md`](PLAN.md) Phase 4 |
+
+### 3.3 UI 入口
+
+| 代码入口 | 反查文档 |
+|----------|----------|
+| `ui/app.py` | [`PLAN.md`](PLAN.md) Phase 5 / Phase 6；[`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) 第 2 节 |
+| `ui/main_window.py` | [`PLAN.md`](PLAN.md) Phase 5 / Phase 6；[`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) 第 4 节 |
+| `ui/screens/new_game_screen.py` | [`PLAN.md`](PLAN.md) Phase 5 / Phase 6；[`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) 第 4 节 |
+| `ui/screens/game_screen.py` | [`PLAN.md`](PLAN.md) Phase 5 / Phase 6；[`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) 第 3 - 5 节 |
+| `ui/controllers/game_session_controller.py` | [`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md) 第 2 - 5 节 |
+| `ui/controllers/new_game_controller.py` | [`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md) 第 4 节；[`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md) 第 6 节 |
+
+---
+
+## 4. 当前仓库的“优先查找顺序”
+
+当你准备把某条规则或某个界面需求落到代码时，建议按这个顺序走：
+
+1. 先看 `tragedy_loop_game_rules.md` / `tragedy_loop_appendix.md`，确认规则原文和条目事实。
+2. 再看 [`docs/rules_to_engine_mapping.md`](docs/rules_to_engine_mapping.md)，定位应该改哪层 `engine/`。
+3. 如果是交互或展示问题，再看 [`docs/engine_ui_boundary_mapping.md`](docs/engine_ui_boundary_mapping.md)，确认是引擎、适配层还是 UI。
+4. 最后看 [`docs/rules_to_ui_mapping.md`](docs/rules_to_ui_mapping.md)，定位应该改哪个 `ui/` 文件。
+5. 如果要判断阶段进度和下一步工作，以 [`PLAN.md`](PLAN.md) 为准。
+
+---
+
+## 5. 维护规则
+
+- 新增或重命名核心文件时，先更新本文件，再补其他映射文档。
+- 如果某条规则已经从“规划”进入“实现”，优先把它从 `PLAN.md` 的阶段描述落到具体代码文件，而不是继续只写抽象阶段名。
+- 如果文档里出现“未建 / 规划中”的路径，但仓库里已经有真实实现，优先把这里改成真实路径。
+- 如果你以后要建立“文档条目 → 代码函数”的更细映射，建议直接在本文件下追加“章节 / 函数 / 测试”三列表，而不是再拆一份新的总索引。
+
+---
+
+## 6. 角色特性能力入口（`character_trait_ability`）
+
+| 主题 | 代码入口 |
+|------|----------|
+| 角色数据声明（结构化） | `data/characters.json` 的 `character_trait_ability` |
+| 角色模板解析 | `engine/rules/character_loader.py`（`CharacterDef.character_trait_abilities` / `CharacterState.character_trait_abilities`） |
+| 静态数据校验 | `engine/validation/static_data.py`（`character_trait_ability` 数组校验） |
+| 能力候选收集 | `engine/resolvers/ability_resolver.py`（`collect_character_trait_abilities`，`source_kind="character_trait_ability"`） |
+| 阶段执行接线 | `engine/phases/phase_base.py`（`_candidate_owner_id` / 位置上下文） |
+| 事件当事人覆写入口 | `engine/resolvers/incident_resolver.py`（`_incident_def_with_perpetrator_overrides`） |
+| 回归测试 | `tests/test_character_loader.py`、`tests/test_ability_resolver.py`、`tests/test_phase4_handlers.py`、`tests/test_incident_handler.py` |
+
+---
+
+## 7. 从者跟随移动入口（`servant`）
+
+| 主题 | 代码入口 |
+|------|----------|
+| 规则事实源 | `data/characters.json` 的 `servant.trait_rule` 与 `goodwill:servant:1` |
+| 运行时追加目标预留 | `engine/game_state.py`（`trait_target_overrides`，按轮回清空） |
+| 共享目标集合 | `engine/rules/servant_rules.py`（跟随与代死共用） |
+| 跟随移动核心钩子 | `engine/resolvers/atomic_resolver.py`（`next_servant_follow_choice` / `_apply_servant_follow_rules`） |
+| 顶层输入接线 | `engine/phases/phase_base.py`（`_resolve_effect_batch_with_servant_follow`，行动牌/能力/事件统一走这条链） |
+| 事件接线 | `engine/resolvers/incident_resolver.py`（`next_servant_follow_choice` / `resolve_schedule(..., servant_follow_choices=...)`） |
+| 当前覆盖范围 | 行动牌移动、身份/友好能力移动、事件移动（含 `sequential` / “随后”）、`servant` 代死 |
+| 已实现 | `goodwill:servant:1` 写入 `trait_target_overrides["servant"]`，追加目标会自动进入现有跟随 / 代死链 |
+| 回归测试 | `tests/test_action_card_system.py`、`tests/test_phase4_handlers.py`、`tests/test_incident_handler.py`、`tests/test_goodwill_structured_migration.py`、`tests/test_character_loader.py` |

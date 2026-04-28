@@ -288,6 +288,18 @@ def validate_characters(
                 for j, ability in enumerate(gabilities):
                     _validate_goodwill_ability(ability, f"{p}.goodwill_abilities[{j}]", issues)
 
+        trait_abilities = ch.get("character_trait_ability")
+        if trait_abilities is not None:
+            if not isinstance(trait_abilities, list):
+                issues.append(ValidationIssue(f"{p}.character_trait_ability", "must be an array"))
+            else:
+                for j, ability in enumerate(trait_abilities):
+                    _validate_character_trait_ability(
+                        ability,
+                        f"{p}.character_trait_ability[{j}]",
+                        issues,
+                    )
+
     return issues
 
 
@@ -295,6 +307,37 @@ def _validate_goodwill_ability(
     ability: Any,
     path_prefix: str,
     issues: list[ValidationIssue],
+) -> None:
+    _validate_structured_ability(
+        ability,
+        path_prefix,
+        issues,
+        default_ability_type=AbilityType.OPTIONAL,
+        default_timing=AbilityTiming.PROTAGONIST_ABILITY,
+    )
+
+
+def _validate_character_trait_ability(
+    ability: Any,
+    path_prefix: str,
+    issues: list[ValidationIssue],
+) -> None:
+    _validate_structured_ability(
+        ability,
+        path_prefix,
+        issues,
+        default_ability_type=AbilityType.MANDATORY,
+        default_timing=AbilityTiming.LOOP_START,
+    )
+
+
+def _validate_structured_ability(
+    ability: Any,
+    path_prefix: str,
+    issues: list[ValidationIssue],
+    *,
+    default_ability_type: AbilityType,
+    default_timing: AbilityTiming,
 ) -> None:
     if not isinstance(ability, dict):
         issues.append(ValidationIssue(path_prefix, "ability must be an object"))
@@ -304,11 +347,11 @@ def _validate_goodwill_ability(
     if not isinstance(ability_id, str) or not ability_id.strip():
         issues.append(ValidationIssue(f"{path_prefix}.ability_id", "must be non-empty string"))
 
-    ability_type = ability.get("ability_type", AbilityType.OPTIONAL.value)
+    ability_type = ability.get("ability_type", default_ability_type.value)
     if ability_type not in _ABILITY_TYPE_VALUES:
         issues.append(ValidationIssue(f"{path_prefix}.ability_type", f"invalid AbilityType: {ability_type!r}"))
 
-    timing = ability.get("timing", AbilityTiming.PROTAGONIST_ABILITY.value)
+    timing = ability.get("timing", default_timing.value)
     if timing not in _ABILITY_TIMING_VALUES:
         issues.append(ValidationIssue(f"{path_prefix}.timing", f"invalid AbilityTiming: {timing!r}"))
 

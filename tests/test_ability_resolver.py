@@ -9,8 +9,10 @@ from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, C
 from engine.models.effects import Condition, Effect
 from engine.models.identity import IdentityDef
 from engine.resolvers.ability_resolver import AbilityResolver
+from engine.rules.character_loader import instantiate_character_state, load_character_defs
 from engine.rules.module_loader import apply_loaded_module, load_module
 from engine.rules.runtime_traits import add_derived_trait, suppress_trait
+from engine.models.script import CharacterSetup
 
 
 def _build_state_with_module() -> GameState:
@@ -326,6 +328,34 @@ def test_collect_goodwill_abilities_from_character_runtime_data() -> None:
     state.ability_runtime.usages_this_loop[resolver.ability_usage_key(abilities[0])] = 1
     abilities = resolver.collect_goodwill_abilities(state)
     assert len(abilities) == 0
+
+
+def test_collect_character_trait_ability_candidates_at_loop_start() -> None:
+    state = _build_state_with_module()
+    defs = load_character_defs()
+    state.characters["black_cat"] = instantiate_character_state(
+        CharacterSetup(character_id="black_cat", identity_id="commoner"),
+        defs,
+    )
+
+    resolver = AbilityResolver()
+    abilities = resolver.collect_abilities(
+        state,
+        timing=AbilityTiming.LOOP_START,
+        ability_type=AbilityType.MANDATORY,
+        alive_only=False,
+    )
+
+    trait_candidates = [
+        candidate
+        for candidate in abilities
+        if candidate.source_kind == "character_trait_ability"
+    ]
+    assert len(trait_candidates) == 1
+    assert trait_candidates[0].source_id == "black_cat"
+    assert trait_candidates[0].ability.ability_id == (
+        "character_trait_ability:black_cat:loop_start_place_intrigue"
+    )
 
 
 def _playwright_goodwill_state(

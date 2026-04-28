@@ -123,6 +123,7 @@ class GameState:
 
     # ---- 能力运行时状态（统一限次，P4-2） ----
     ability_runtime: AbilityRuntimeState = field(default_factory=AbilityRuntimeState)
+    trait_target_overrides: dict[str, set[str]] = field(default_factory=dict)
 
     # ---- 跨轮回历史 ----
     loop_history: list[LoopSnapshot] = field(default_factory=list)
@@ -373,6 +374,7 @@ class GameState:
         self.suppressed_incident_perpetrators.clear()
         self.ability_runtime.usages_this_loop.clear()
         self.ability_runtime.usages_this_day.clear()
+        self.trait_target_overrides.clear()
         self.loop_initial_area_choices_done.clear()
 
         # EX 槽

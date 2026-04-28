@@ -38,6 +38,7 @@ class CharacterDef:
     trait_rule: str = ""
     script_constraints: list[str] = field(default_factory=list)
     goodwill_abilities: list[Ability] = field(default_factory=list)
+    character_trait_abilities: list[Ability] = field(default_factory=list)
     goodwill_ability_texts: list[str] = field(default_factory=list)
     goodwill_ability_goodwill_requirements: list[int] = field(default_factory=list)
     goodwill_ability_once_per_loop: list[bool] = field(default_factory=list)
@@ -113,6 +114,7 @@ def instantiate_character_state(
         forbidden_areas=list(char_def.forbidden_areas),
         territory_area=territory_area,
         goodwill_abilities=list(char_def.goodwill_abilities),
+        character_trait_abilities=list(char_def.character_trait_abilities),
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
         goodwill_ability_goodwill_requirements=list(char_def.goodwill_ability_goodwill_requirements),
         goodwill_ability_once_per_loop=list(char_def.goodwill_ability_once_per_loop),
@@ -149,6 +151,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
     script_constraints = [str(v) for v in data.get("script_constraints", [])]
 
     goodwill_abilities = _parse_goodwill_abilities(data, character_id)
+    character_trait_abilities = _parse_character_trait_abilities(data, character_id)
     goodwill_texts = [str(v) for v in data.get("goodwill_ability_texts", [])]
     raw_goodwill_requirements = data.get("goodwill_ability_goodwill_requirements", [])
     goodwill_requirements = [int(v) for v in raw_goodwill_requirements]
@@ -166,6 +169,7 @@ def _parse_character_def(data: dict[str, object]) -> CharacterDef:
         trait_rule=trait_rule,
         script_constraints=script_constraints,
         goodwill_abilities=goodwill_abilities,
+        character_trait_abilities=character_trait_abilities,
         goodwill_ability_texts=goodwill_texts,
         goodwill_ability_goodwill_requirements=goodwill_requirements,
         goodwill_ability_once_per_loop=goodwill_once,
@@ -178,6 +182,17 @@ def _parse_goodwill_abilities(data: dict[str, object], character_id: str) -> lis
     if isinstance(raw_structured, list):
         return [_parse_goodwill_ability(item, character_id) for item in raw_structured if isinstance(item, dict)]
     return _build_legacy_goodwill_abilities(data, character_id)
+
+
+def _parse_character_trait_abilities(data: dict[str, object], character_id: str) -> list[Ability]:
+    raw_structured = data.get("character_trait_ability")
+    if not isinstance(raw_structured, list):
+        return []
+    return [
+        _parse_character_trait_ability(item, character_id)
+        for item in raw_structured
+        if isinstance(item, dict)
+    ]
 
 
 def _build_legacy_goodwill_abilities(data: dict[str, object], character_id: str) -> list[Ability]:
@@ -208,11 +223,41 @@ def _build_legacy_goodwill_abilities(data: dict[str, object], character_id: str)
 
 
 def _parse_goodwill_ability(data: dict[str, object], character_id: str) -> Ability:
+    return _parse_structured_ability(
+        data,
+        default_ability_id=f"goodwill:{character_id}:structured",
+        default_name=f"{character_id} 友好能力",
+        default_timing=AbilityTiming.PROTAGONIST_ABILITY,
+        default_ability_type=AbilityType.OPTIONAL,
+        default_can_be_refused=True,
+    )
+
+
+def _parse_character_trait_ability(data: dict[str, object], character_id: str) -> Ability:
+    return _parse_structured_ability(
+        data,
+        default_ability_id=f"character_trait_ability:{character_id}:structured",
+        default_name=f"{character_id} 角色特性能力",
+        default_timing=AbilityTiming.LOOP_START,
+        default_ability_type=AbilityType.MANDATORY,
+        default_can_be_refused=False,
+    )
+
+
+def _parse_structured_ability(
+    data: dict[str, object],
+    *,
+    default_ability_id: str,
+    default_name: str,
+    default_timing: AbilityTiming,
+    default_ability_type: AbilityType,
+    default_can_be_refused: bool,
+) -> Ability:
     return Ability(
-        ability_id=str(data.get("ability_id", "")) or f"goodwill:{character_id}:structured",
-        name=str(data.get("name", f"{character_id} 友好能力")),
-        ability_type=AbilityType(str(data.get("ability_type", AbilityType.OPTIONAL.value))),
-        timing=AbilityTiming(str(data.get("timing", AbilityTiming.PROTAGONIST_ABILITY.value))),
+        ability_id=str(data.get("ability_id", "")) or default_ability_id,
+        name=str(data.get("name", default_name)),
+        ability_type=AbilityType(str(data.get("ability_type", default_ability_type.value))),
+        timing=AbilityTiming(str(data.get("timing", default_timing.value))),
         description=str(data.get("description", "")),
         condition=_parse_condition(data["condition"]) if data.get("condition") else None,
         effects=[_parse_effect(item) for item in data.get("effects", []) if isinstance(item, dict)],
@@ -220,7 +265,7 @@ def _parse_goodwill_ability(data: dict[str, object], character_id: str) -> Abili
         goodwill_requirement=int(data.get("goodwill_requirement", 0)),
         once_per_loop=bool(data.get("once_per_loop", False)),
         once_per_day=bool(data.get("once_per_day", False)),
-        can_be_refused=bool(data.get("can_be_refused", True)),
+        can_be_refused=bool(data.get("can_be_refused", default_can_be_refused)),
     )
 
 

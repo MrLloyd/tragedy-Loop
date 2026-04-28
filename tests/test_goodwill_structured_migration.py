@@ -700,6 +700,42 @@ def test_henchman_structured_goodwill_refuse_does_not_suppress_incident() -> Non
     assert state.script.incidents[0].occurred is True
 
 
+def test_servant_structured_goodwill_adds_trait_target_override() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["servant"] = _instantiate("servant")
+    state.characters["servant"].tokens.add(TokenType.GOODWILL, 4)
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["ojousama"] = CharacterState(
+        character_id="ojousama",
+        name="大小姐",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    target_wait = _choose_goodwill(signal, "goodwill:servant:1")
+    assert isinstance(target_wait, WaitForInput)
+    assert target_wait.input_type == "choose_ability_target"
+    assert set(target_wait.options) == {"vip", "ojousama"}
+
+    result = target_wait.callback("vip")
+    assert isinstance(result, PhaseComplete)
+    assert state.trait_target_overrides["servant"] == {"vip"}
+
+
 def test_class_rep_structured_goodwill_returns_only_current_leader_once_per_loop_card() -> None:
     bus, atomic = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, atomic)

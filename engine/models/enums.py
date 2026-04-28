@@ -112,6 +112,7 @@ class EffectType(Enum):
     KILL_CHARACTER = "kill_character"       # 角色死亡
     REVIVE_CHARACTER = "revive_character"   # 复活角色
     MOVE_CHARACTER = "move_character"       # 移动角色
+    ADD_TRAIT_TARGET_OVERRIDE = "add_trait_target_override"  # 运行时追加特性适用对象
     REMOVE_CHARACTER = "remove_character"   # 从游戏中移除角色
     LIFT_FORBIDDEN_AREAS = "lift_forbidden_areas"  # 解除禁行区域
 
@@ -239,4 +240,5 @@ class DeathResult(Enum):
     DIED = "died"                  # 实际死亡
     PREVENTED_BY_GUARD = "guard"   # 护卫指示物代替
     PREVENTED_BY_IMMORTAL = "immortal"  # 不死特性阻止
+    PREVENTED_BY_SERVANT = "servant"    # 从者代死
     PREVENTED_BY_SOLDIER = "soldier"    # 军人能力阻止（仅主人公死亡）

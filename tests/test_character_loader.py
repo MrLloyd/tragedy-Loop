@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from engine.models.enums import AreaId, Attribute, EffectType
+from engine.models.enums import AreaId, Attribute, EffectType, Trait
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.rules.character_loader import (
@@ -20,6 +20,8 @@ from engine.rules.module_loader import build_game_state_from_module, build_scrip
 def test_load_character_defs_reads_character_templates() -> None:
     defs = load_character_defs()
     assert "ai" in defs
+    assert Trait.NO_ACTION_CARDS in defs["phantom"].base_traits
+    assert len(defs["black_cat"].character_trait_abilities) == 1
 
     ai = defs["ai"]
     assert ai.name == "AI"
@@ -32,12 +34,30 @@ def test_load_character_defs_reads_character_templates() -> None:
     assert ai.goodwill_abilities[0].ability_id == "goodwill:ai:1"
 
 
+def test_black_cat_character_trait_ability_is_loaded_from_json() -> None:
+    defs = load_character_defs()
+    black_cat = defs["black_cat"]
+
+    assert [ability.ability_id for ability in black_cat.character_trait_abilities] == [
+        "character_trait_ability:black_cat:loop_start_place_intrigue"
+    ]
+    ability = black_cat.character_trait_abilities[0]
+    assert ability.timing.value == "loop_start"
+    assert ability.ability_type.value == "mandatory"
+    assert len(ability.effects) == 1
+    assert ability.effects[0].effect_type == EffectType.PLACE_TOKEN
+    assert ability.effects[0].target == {
+        "scope": "fixed_area",
+        "subject": "board",
+        "area": "shrine",
+    }
+
+
 @pytest.mark.parametrize(
     ("character_id", "ability_ids", "requirements", "once_per_loop"),
     [
         ("ai", ["goodwill:ai:1"], [3], [True]),
         ("streamer", ["goodwill:streamer:1"], [3], [False]),
-        ("servant", ["goodwill:servant:1"], [4], [True]),
         ("sister", ["goodwill:sister:1"], [5], [True]),
         ("informant", ["goodwill:informant:1"], [5], [True]),
         ("copycat", ["goodwill:copycat:1"], [3], [False]),
@@ -58,6 +78,24 @@ def test_data_only_structured_goodwill_migrations_preserve_legacy_empty_runtime(
     assert all(ability.effects == [] for ability in char_def.goodwill_abilities)
     assert all(ability.condition is None for ability in char_def.goodwill_abilities)
     assert all(ability.can_be_refused is True for ability in char_def.goodwill_abilities)
+
+
+def test_servant_structured_goodwill_loads_trait_target_override_effect() -> None:
+    defs = load_character_defs()
+    servant = defs["servant"]
+
+    assert [ability.ability_id for ability in servant.goodwill_abilities] == ["goodwill:servant:1"]
+    ability = servant.goodwill_abilities[0]
+    assert ability.goodwill_requirement == 4
+    assert ability.once_per_loop is True
+    assert ability.can_be_refused is True
+    assert len(ability.effects) == 1
+    assert ability.effects[0].effect_type == EffectType.ADD_TRAIT_TARGET_OVERRIDE
+    assert ability.effects[0].target == {
+        "scope": "any_area",
+        "subject": "other_character",
+    }
+    assert ability.effects[0].value == "servant"
 
 
 def test_structured_reveal_goodwill_characters_drop_legacy_fields_in_json() -> None:
@@ -117,6 +155,17 @@ def test_instantiate_character_state_applies_template_and_identity_alias() -> No
     assert len(state.goodwill_ability_once_per_loop) == 2
     assert len(state.goodwill_abilities) == 1
     assert state.goodwill_abilities[0].goodwill_requirement == 3
+
+
+def test_instantiate_character_state_keeps_character_trait_abilities() -> None:
+    defs = load_character_defs()
+    setup = CharacterSetup(character_id="black_cat", identity_id="commoner")
+    state = instantiate_character_state(setup, defs)
+
+    assert len(state.character_trait_abilities) == 1
+    assert state.character_trait_abilities[0].ability_id == (
+        "character_trait_ability:black_cat:loop_start_place_intrigue"
+    )
 
 
 def test_instantiate_character_state_keeps_entry_fields_for_supported_roles() -> None:
