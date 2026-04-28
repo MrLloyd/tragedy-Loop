@@ -8,7 +8,7 @@ from engine.models.board import BoardState
 from engine.models.ability import Ability
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, EffectType, GamePhase, Outcome, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CharacterLifeState, EffectType, GamePhase, Outcome, TokenType
 from engine.models.identity import IdentityDef
 from engine.phases.phase_base import LoopEndHandler, PhaseComplete
 from engine.resolvers.atomic_resolver import AtomicResolver
@@ -136,7 +136,7 @@ def test_character_state_activity_helpers_distinguish_removed_from_dead() -> Non
         initial_area=AreaId.SCHOOL,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     removed = CharacterState(
         character_id="removed",
@@ -145,15 +145,44 @@ def test_character_state_activity_helpers_distinguish_removed_from_dead() -> Non
         initial_area=AreaId.SCHOOL,
         identity_id="平民",
         original_identity_id="平民",
-        is_removed=True,
+        life_state=CharacterLifeState.REMOVED,
     )
 
     assert alive.is_active() is True
     assert alive.is_dead() is False
+    assert alive.life_state == CharacterLifeState.ALIVE
     assert corpse.is_active() is False
     assert corpse.is_dead() is True
+    assert corpse.life_state == CharacterLifeState.DEAD
     assert removed.is_active() is False
     assert removed.is_dead() is False
+    assert removed.life_state == CharacterLifeState.REMOVED
+    assert removed.is_removed() is True
+
+
+def test_character_life_state_helpers_switch_explicit_states() -> None:
+    character = CharacterState(
+        character_id="sample",
+        name="样本",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    assert character.life_state == CharacterLifeState.ALIVE
+
+    character.mark_dead()
+    assert character.life_state == CharacterLifeState.DEAD
+    assert character.is_dead() is True
+
+    character.mark_removed()
+    assert character.life_state == CharacterLifeState.REMOVED
+    assert character.is_removed() is True
+
+    character.mark_alive()
+    assert character.life_state == CharacterLifeState.ALIVE
+    assert character.is_active() is True
 
 
 def test_atomic_resolver_move_character_respects_forbidden_areas() -> None:
@@ -180,6 +209,28 @@ def test_atomic_resolver_move_character_respects_forbidden_areas() -> None:
     assert result.outcome == Outcome.NONE
     assert state.characters["mover"].area == AreaId.SHRINE
     assert not any(e.event_type == GameEventType.CHARACTER_MOVED for e in bus.log)
+
+
+def test_atomic_resolver_remove_character_uses_unified_life_state() -> None:
+    bus = EventBus()
+    resolver = AtomicResolver(bus, DeathResolver())
+    state = GameState.create_minimal_test_state()
+    state.characters["target"] = CharacterState(
+        character_id="target",
+        name="目标",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    resolver.resolve(
+        state,
+        effects=[Effect(effect_type=EffectType.REMOVE_CHARACTER, target="target")],
+        sequential=False,
+    )
+    assert state.characters["target"].life_state == CharacterLifeState.REMOVED
+    assert state.characters["target"].is_removed() is True
 
 
 def test_board_state_adjacency_handles_grid_and_faraway() -> None:
@@ -214,10 +265,10 @@ def test_game_state_move_character_handles_valid_and_invalid_targets() -> None:
     assert state.move_character("mover", AreaId.SHRINE.value) is True
     assert state.characters["mover"].area == AreaId.SHRINE
 
-    state.characters["mover"].is_alive = False
+    state.characters["mover"].mark_dead()
     assert state.move_character("mover", AreaId.SCHOOL) is False
-    state.characters["mover"].is_alive = True
-    state.characters["mover"].is_removed = True
+    state.characters["mover"].mark_alive()
+    state.characters["mover"].mark_removed()
     assert state.move_character("mover", AreaId.CITY) is False
 
 
@@ -421,8 +472,8 @@ def test_beloved_and_lover_do_not_gain_paranoia_when_they_die_simultaneously() -
     ]
 
     assert result.outcome == Outcome.NONE
-    assert state.characters["beloved"].is_alive is False
-    assert state.characters["lover"].is_alive is False
+    assert state.characters["beloved"].life_state == CharacterLifeState.DEAD
+    assert state.characters["lover"].life_state == CharacterLifeState.DEAD
     assert state.characters["beloved"].tokens.get(TokenType.PARANOIA) == 0
     assert state.characters["lover"].tokens.get(TokenType.PARANOIA) == 0
     assert "beloved_on_lover_death_gain_paranoia" not in declared_ids
@@ -480,8 +531,8 @@ def test_same_batch_deaths_still_collect_all_on_death_effects() -> None:
         sequential=False,
     )
 
-    assert state.characters["a"].is_alive is False
-    assert state.characters["b"].is_alive is False
+    assert state.characters["a"].life_state == CharacterLifeState.DEAD
+    assert state.characters["b"].life_state == CharacterLifeState.DEAD
     assert state.board.areas[AreaId.SCHOOL].tokens.get(TokenType.INTRIGUE) == 2
     declared_ids = [
         e.data.get("ability_id")
@@ -542,8 +593,8 @@ def test_same_batch_dead_character_does_not_trigger_on_other_death() -> None:
         sequential=False,
     )
 
-    assert state.characters["a"].is_alive is False
-    assert state.characters["b"].is_alive is False
+    assert state.characters["a"].life_state == CharacterLifeState.DEAD
+    assert state.characters["b"].life_state == CharacterLifeState.DEAD
     assert state.characters["a"].tokens.get(TokenType.PARANOIA) == 0
     assert state.characters["b"].tokens.get(TokenType.PARANOIA) == 0
 
@@ -599,7 +650,7 @@ def test_earlier_dead_character_is_not_targeted_by_later_death_trigger_without_c
         sequential=True,
     )
 
-    assert state.characters["a"].is_alive is False
-    assert state.characters["b"].is_alive is False
+    assert state.characters["a"].life_state == CharacterLifeState.DEAD
+    assert state.characters["b"].life_state == CharacterLifeState.DEAD
     assert state.characters["a"].tokens.get(TokenType.PARANOIA) == 0
     assert state.characters["b"].tokens.get(TokenType.PARANOIA) == 0

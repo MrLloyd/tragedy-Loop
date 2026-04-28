@@ -3,7 +3,7 @@ from __future__ import annotations
 from engine.display_names import area_name
 from engine.display_names import character_option_label
 from engine.models.cards import ActionCard, CardPlacement
-from engine.models.enums import AreaId, GamePhase, TokenType
+from engine.models.enums import AreaId, CharacterLifeState, GamePhase, TokenType
 from engine.models.enums import CardType, PlayerRole
 from ui.controllers.test_mode_controller import (
     TEST_MODE_DAYS_PER_LOOP,
@@ -88,7 +88,7 @@ def test_test_mode_controller_can_trigger_identity_ability_and_incident() -> Non
         perpetrator_id="ai",
         target_character_ids=["office_worker"],
     )
-    assert controller.session.state.characters["office_worker"].is_alive is False
+    assert controller.session.state.characters["office_worker"].life_state == CharacterLifeState.DEAD
 
 
 def test_test_mode_controller_can_trigger_cultist_action_resolve_ability() -> None:
@@ -577,7 +577,7 @@ def test_test_mode_controller_execute_loop_end_reports_triggered_failure_conditi
                 character_id="friend",
                 identity_id="friend",
                 area="school",
-                is_alive=False,
+                life_state=CharacterLifeState.DEAD.value,
                 revealed=False,
             ),
         ]
@@ -628,7 +628,7 @@ def test_test_mode_controller_incident_death_triggers_derived_on_death_failure()
     )
 
     assert controller.session is not None
-    assert controller.session.state.characters["ai"].is_alive is False
+    assert controller.session.state.characters["ai"].life_state == CharacterLifeState.DEAD
     assert "key_person_dead" in controller.session.state.failure_flags
     assert any(
         event["event_type"] == "ABILITY_DECLARED"

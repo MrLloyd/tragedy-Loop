@@ -82,6 +82,7 @@ def validate_basic_script(
             continue
         character_def = context.character_defs[setup.character_id]
         issues.extend(_validate_character_initial_area(path, setup, character_def))
+        issues.extend(_validate_character_territory_area(path, setup, character_def))
         identity_id = normalize_identity_id(setup.identity_id)
         if identity_id != "平民" and identity_id not in context.identity_defs:
             issues.append(ValidationIssue(f"{path}.identity_id", f"unknown identity: {setup.identity_id!r}"))
@@ -333,4 +334,53 @@ def _validate_character_initial_area(
                 "initial_area override is not allowed for this character",
             )
         )
+    return issues
+
+
+def _validate_character_territory_area(
+    path: str,
+    setup: CharacterSetup,
+    character_def: CharacterDef,
+) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    territory_area = str(setup.territory_area or "")
+
+    if setup.character_id != "vip":
+        if territory_area:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.territory_area",
+                    "territory_area is only allowed for vip",
+                )
+            )
+        return issues
+
+    if not territory_area:
+        issues.append(
+            ValidationIssue(
+                f"{path}.territory_area",
+                "territory_area is required for vip",
+            )
+        )
+        return issues
+
+    try:
+        selected_area = AreaId(territory_area)
+    except ValueError:
+        issues.append(
+            ValidationIssue(
+                f"{path}.territory_area",
+                f"unknown territory area: {territory_area!r}",
+            )
+        )
+        return issues
+
+    if selected_area == AreaId.FARAWAY:
+        issues.append(
+            ValidationIssue(
+                f"{path}.territory_area",
+                "faraway is not a valid territory area",
+            )
+        )
+
     return issues

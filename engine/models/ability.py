@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from engine.models.effects import Condition, Effect
-from engine.models.enums import AbilityTiming, AbilityType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId
 
 
 @dataclass
@@ -34,3 +34,11 @@ class Ability:
 
     # 是否可被拒绝（主人公友好能力默认可被拒绝）
     can_be_refused: bool = False
+
+
+@dataclass(frozen=True)
+class AbilityLocationContext:
+    """一次能力/事件/规则结算的临时位置上下文。"""
+
+    owner_area: AreaId | None = None
+    owner_initial_area: AreaId | None = None

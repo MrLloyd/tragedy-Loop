@@ -96,6 +96,7 @@ def instantiate_character_state(
     initial_area = char_def.initial_area
     if setup.initial_area:
         initial_area = AreaId(setup.initial_area)
+    territory_area = AreaId(setup.territory_area) if setup.territory_area else None
     return CharacterState(
         character_id=char_def.character_id,
         name=char_def.name,
@@ -108,6 +109,7 @@ def instantiate_character_state(
         paranoia_limit=char_def.paranoia_limit,
         base_forbidden_areas=list(char_def.forbidden_areas),
         forbidden_areas=list(char_def.forbidden_areas),
+        territory_area=territory_area,
         goodwill_abilities=list(char_def.goodwill_abilities),
         goodwill_ability_texts=list(char_def.goodwill_ability_texts),
         goodwill_ability_goodwill_requirements=list(char_def.goodwill_ability_goodwill_requirements),

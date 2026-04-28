@@ -11,6 +11,7 @@ class CharacterDraft:
     character_id: str
     identity_id: str
     initial_area_id: str = ""
+    territory_area_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class NewGameController:
                 character_id=item.character_id,
                 identity_id=item.identity_id,
                 initial_area=item.initial_area_id,
+                territory_area=item.territory_area_id,
             )
             for item in draft.characters
         ]

@@ -75,6 +75,7 @@ class CharacterSetup:
     identity_id: str = "平民"   # 分配的身份（非公开）
     is_incident_perpetrator: bool = False  # 是否为某事件当事人
     initial_area: str = ""       # 剧本指定的初始区域（特例角色用）
+    territory_area: str = ""     # 大人物领地（后续扩展共用）
 
 
 # ---------------------------------------------------------------------------

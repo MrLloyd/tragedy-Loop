@@ -5,7 +5,7 @@ from __future__ import annotations
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, EffectType, TokenType
+from engine.models.enums import AreaId, CharacterLifeState, EffectType, TokenType
 from engine.models.effects import Condition, Effect
 from engine.models.incident import IncidentDef, IncidentSchedule
 from engine.models.selectors import area_choice_selector, character_choice_selector
@@ -34,7 +34,7 @@ def _make_state_with_incident(
     day: int = 1,
     incident_id: str = "test_incident",
     perpetrator_id: str = "perp",
-    is_alive: bool = True,
+    life_state: CharacterLifeState = CharacterLifeState.ALIVE,
     incident_def: IncidentDef | None = None,
 ) -> GameState:
     """构造一个含单条事件日程的最小游戏状态"""
@@ -51,7 +51,7 @@ def _make_state_with_incident(
         original_identity_id="平民",
         paranoia_limit=paranoia_limit,
     )
-    state.characters[perpetrator_id].is_alive = is_alive
+    state.characters[perpetrator_id].life_state = life_state
     state.characters[perpetrator_id].tokens.paranoia = paranoia
 
     # 事件日程
@@ -91,7 +91,7 @@ def test_incident_does_not_trigger_when_paranoia_below_limit() -> None:
 
 def test_incident_does_not_trigger_when_perpetrator_dead() -> None:
     handler, bus = _make_handler()
-    state = _make_state_with_incident(paranoia=5, paranoia_limit=2, is_alive=False)
+    state = _make_state_with_incident(paranoia=5, paranoia_limit=2, life_state=CharacterLifeState.DEAD)
 
     signal = handler.execute(state)
 
@@ -129,7 +129,7 @@ def test_forced_incident_can_bypass_normal_threshold(monkeypatch) -> None:
 def test_forced_incident_does_not_bypass_dead_perpetrator_blocker(monkeypatch) -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
-    state = _make_state_with_incident(paranoia=0, paranoia_limit=2, is_alive=False)
+    state = _make_state_with_incident(paranoia=0, paranoia_limit=2, life_state=CharacterLifeState.DEAD)
     monkeypatch.setattr(resolver, "_incident_is_forced", lambda *_args, **_kwargs: True)
 
     result = resolver.resolve_schedule(state, state.script.incidents[0])
@@ -287,8 +287,8 @@ def test_incident_same_area_all_kills_all_in_area() -> None:
     handler.execute(state)
 
     # 当事人和受害者都应死亡
-    assert not state.characters["perp"].is_alive
-    assert not state.characters["victim"].is_alive
+    assert state.characters["perp"].life_state == CharacterLifeState.DEAD
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
 
 
 def test_incident_resolver_public_result_does_not_expose_perpetrator() -> None:
@@ -388,13 +388,13 @@ def test_hospital_accident_uses_board_intrigue_thresholds() -> None:
     result = resolver.resolve_schedule(state, schedule)
     assert result.occurred is True
     assert result.has_phenomenon is False
-    assert state.characters["victim"].is_alive is True
+    assert state.characters["victim"].life_state == CharacterLifeState.ALIVE
 
     schedule = IncidentSchedule("hospital_accident", day=1, perpetrator_id="perp")
     state.board.areas[AreaId.HOSPITAL].tokens.intrigue = 1
     result = resolver.resolve_schedule(state, schedule)
     assert result.has_phenomenon is True
-    assert state.characters["victim"].is_alive is False
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
     assert state.protagonist_dead is False
 
 
@@ -453,8 +453,8 @@ def test_murder_uses_scripted_character_choice_and_excludes_perpetrator() -> Non
     signal = handler.execute(state)
 
     assert isinstance(signal, PhaseComplete)
-    assert state.characters["perp"].is_alive is True
-    assert state.characters["victim"].is_alive is False
+    assert state.characters["perp"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
 
 
 def test_incident_resolver_does_not_auto_pick_character_when_choice_missing() -> None:
@@ -482,8 +482,8 @@ def test_incident_resolver_does_not_auto_pick_character_when_choice_missing() ->
 
     assert result.occurred is True
     assert result.has_phenomenon is False
-    assert state.characters["perp"].is_alive is True
-    assert state.characters["victim"].is_alive is True
+    assert state.characters["perp"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["victim"].life_state == CharacterLifeState.ALIVE
 
 
 def test_long_range_murder_can_only_target_character_with_two_intrigue() -> None:
@@ -518,8 +518,8 @@ def test_long_range_murder_can_only_target_character_with_two_intrigue() -> None
 
     assert result.occurred is True
     assert result.has_phenomenon is True
-    assert state.characters["safe"].is_alive is True
-    assert state.characters["victim"].is_alive is False
+    assert state.characters["safe"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
 
 
 def test_butterfly_effect_without_token_choice_occurs_but_has_no_phenomenon() -> None:

@@ -13,7 +13,7 @@ from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, EffectType, GamePhase, Outcome, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CharacterLifeState, EffectType, GamePhase, Outcome, TokenType
 from engine.models.incident import IncidentSchedule
 from engine.models.selectors import selector_is_self_ref, selector_literal_value, selector_requires_choice
 from engine.resolvers.ability_resolver import AbilityCandidate, AbilityResolver
@@ -39,8 +39,7 @@ class DebugCharacterSetup:
     character_id: str
     area: str | None = None
     tokens: dict[str, int] = field(default_factory=dict)
-    is_alive: bool | None = None
-    is_removed: bool | None = None
+    life_state: str | CharacterLifeState | None = None
     revealed: bool | None = None
     identity_id: str | None = None
     current_as_original: bool = False
@@ -288,8 +287,7 @@ def get_debug_snapshot(session: DebugSession) -> dict[str, Any]:
                 "identity_id": character.identity_id,
                 "original_identity_id": character.original_identity_id,
                 "revealed": character.revealed,
-                "is_alive": character.is_alive,
-                "is_removed": character.is_removed,
+                "life_state": character.life_state.value,
                 "tokens": _tokens_to_dict(character.tokens),
             }
             for character_id, character in state.characters.items()
@@ -322,10 +320,12 @@ def get_debug_snapshot(session: DebugSession) -> dict[str, Any]:
 def _apply_character_setup(character: CharacterState, setup: DebugCharacterSetup) -> None:
     if setup.area is not None:
         character.area = AreaId(setup.area)
-    if setup.is_alive is not None:
-        character.is_alive = setup.is_alive
-    if setup.is_removed is not None:
-        character.is_removed = setup.is_removed
+    if setup.life_state is not None:
+        character.life_state = (
+            setup.life_state
+            if isinstance(setup.life_state, CharacterLifeState)
+            else CharacterLifeState(str(setup.life_state))
+        )
     if setup.revealed is not None:
         character.revealed = setup.revealed
     if setup.identity_id is not None:

@@ -10,7 +10,7 @@ from engine.debug import (
     trigger_debug_ability,
     trigger_debug_incident,
 )
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, GamePhase, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CharacterLifeState, GamePhase, TokenType
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 
@@ -131,7 +131,7 @@ def test_debug_trigger_incident_records_public_result() -> None:
         perpetrator_id="ai",
     )
     assert result.resolution.has_phenomenon is True
-    assert session.state.characters["office_worker"].is_alive is False
+    assert session.state.characters["office_worker"].life_state == CharacterLifeState.DEAD
 
     snapshot = get_debug_snapshot(session)
     assert snapshot["incident_results"][-1]["incident_id"] == "hospital_accident"

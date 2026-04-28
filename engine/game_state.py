@@ -231,7 +231,7 @@ class GameState:
                 continue
             if alive_only and not ch.is_active():
                 continue
-            if ch.is_removed:
+            if ch.is_removed():
                 continue
             result.append(ch)
         return result
@@ -301,8 +301,7 @@ class GameState:
         for cid, ch in self.characters.items():
             char_snapshots[cid] = CharacterEndState(
                 character_id=cid,
-                is_alive=ch.is_alive,
-                is_removed=ch.is_removed,
+                life_state=ch.life_state,
                 tokens=ch.tokens.snapshot(),
                 identity_revealed=ch.revealed,
                 area=ch.area,

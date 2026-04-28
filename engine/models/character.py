@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from engine.models.ability import Ability
-from engine.models.enums import AreaId, Attribute, TokenType, Trait
+from engine.models.enums import AreaId, Attribute, CharacterLifeState, TokenType, Trait
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +71,7 @@ class CharacterState:
     area: AreaId = AreaId.CITY              # 当前所在区域
     initial_area: AreaId = AreaId.CITY      # 初始区域（剧本设定）
     tokens: TokenSet = field(default_factory=TokenSet)
-    is_alive: bool = True
-    is_removed: bool = False                # 是否被移除出游戏
+    life_state: CharacterLifeState = CharacterLifeState.ALIVE
 
     # --- 身份（非公开） ---
     identity_id: str = "平民"              # 当前生效身份
@@ -87,6 +86,7 @@ class CharacterState:
     # --- 区域限制 ---
     base_forbidden_areas: list[AreaId] = field(default_factory=list)
     forbidden_areas: list[AreaId] = field(default_factory=list)
+    territory_area: Optional[AreaId] = None
 
     # --- EX 牌（MZ/MC/HSA/AHR/LL 预留） ---
     ex_cards: list[str] = field(default_factory=list)
@@ -117,15 +117,26 @@ class CharacterState:
     suppressed_traits: set[Trait] = field(default_factory=set)
 
     def is_active(self) -> bool:
-        return self.is_alive and not self.is_removed
+        return self.life_state == CharacterLifeState.ALIVE
 
     def is_dead(self) -> bool:
-        return (not self.is_alive) and (not self.is_removed)
+        return self.life_state == CharacterLifeState.DEAD
+
+    def is_removed(self) -> bool:
+        return self.life_state == CharacterLifeState.REMOVED
+
+    def mark_alive(self) -> None:
+        self.life_state = CharacterLifeState.ALIVE
+
+    def mark_dead(self) -> None:
+        self.life_state = CharacterLifeState.DEAD
+
+    def mark_removed(self) -> None:
+        self.life_state = CharacterLifeState.REMOVED
 
     def reset_for_new_loop(self) -> None:
         """轮回重置：复活、清指示物、回初始位置"""
-        self.is_alive = True
-        self.is_removed = False
+        self.mark_alive()
         self.tokens.clear()
         self.area = self.initial_area
         self.forbidden_areas = list(self.base_forbidden_areas)
@@ -167,8 +178,7 @@ class CharacterState:
 @dataclass
 class CharacterEndState:
     character_id: str
-    is_alive: bool
-    is_removed: bool
+    life_state: CharacterLifeState
     tokens: TokenSet
     identity_revealed: bool
     area: AreaId

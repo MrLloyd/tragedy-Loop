@@ -18,7 +18,7 @@ from engine.display_names import (
     rule_option_label,
     token_name,
 )
-from engine.models.enums import GamePhase
+from engine.models.enums import CharacterLifeState, GamePhase
 from engine.models.incident import IncidentSchedule
 from engine.models.selectors import area_choice_selector, character_choice_selector
 from ui.controllers.test_mode_controller import (
@@ -471,8 +471,7 @@ else:
                         character_id=self._combo_value(row["character"]),  # type: ignore[arg-type]
                         identity_id=self._combo_value(row["identity"]),  # type: ignore[arg-type]
                         area=self._combo_value(row["area"]),  # type: ignore[arg-type]
-                        is_alive=row["alive"].isChecked(),  # type: ignore[index]
-                        is_removed=row["removed"].isChecked(),  # type: ignore[index]
+                        life_state=self._combo_value(row["life_state"]),  # type: ignore[arg-type]
                         revealed=row["revealed"].isChecked(),  # type: ignore[index]
                         tokens=tokens,
                     )
@@ -521,7 +520,7 @@ else:
             self._character_inputs.clear()
 
             headers = [
-                "角色", "身份", "区域", "存活", "移除", "公开",
+                "角色", "身份", "区域", "状态", "公开",
                 "不安", "密谋", "友好", "希望", "绝望", "护卫",
             ]
             for column, header in enumerate(headers):
@@ -551,24 +550,25 @@ else:
                 character_input = QComboBox()
                 identity_input = QComboBox()
                 area_input = QComboBox()
-                alive_input = QCheckBox()
-                removed_input = QCheckBox()
+                life_state_input = QComboBox()
                 revealed_input = QCheckBox()
                 self._set_combo_items(character_input, character_options, item.character_id)
                 self._set_combo_items(identity_input, identity_options, item.identity_id)
                 self._set_combo_items(area_input, area_options, item.area)
-                alive_input.setChecked(item.is_alive)
-                removed_input.setChecked(item.is_removed)
+                self._set_combo_items(
+                    life_state_input,
+                    [(state.value, state.value) for state in CharacterLifeState],
+                    item.life_state,
+                )
                 revealed_input.setChecked(item.revealed)
                 self.characters_grid.addWidget(character_input, row_index, 0)
                 self.characters_grid.addWidget(identity_input, row_index, 1)
                 self.characters_grid.addWidget(area_input, row_index, 2)
-                self.characters_grid.addWidget(alive_input, row_index, 3)
-                self.characters_grid.addWidget(removed_input, row_index, 4)
-                self.characters_grid.addWidget(revealed_input, row_index, 5)
+                self.characters_grid.addWidget(life_state_input, row_index, 3)
+                self.characters_grid.addWidget(revealed_input, row_index, 4)
 
                 token_spins: dict[str, QSpinBox] = {}
-                for column_offset, (token_id, _label) in enumerate(token_columns, start=6):
+                for column_offset, (token_id, _label) in enumerate(token_columns, start=5):
                     spin = QSpinBox()
                     spin.setMinimum(0)
                     spin.setMaximum(99)
@@ -581,8 +581,7 @@ else:
                         "character": character_input,
                         "identity": identity_input,
                         "area": area_input,
-                        "alive": alive_input,
-                        "removed": removed_input,
+                        "life_state": life_state_input,
                         "revealed": revealed_input,
                         "token_spins": token_spins,
                     }
@@ -701,7 +700,7 @@ else:
                 alive_count = sum(
                     1
                     for item in characters.values()
-                    if isinstance(item, dict) and bool(item.get("is_alive", False))
+                    if isinstance(item, dict) and str(item.get("life_state", "")) == CharacterLifeState.ALIVE.value
                 )
             self.character_summary_value.setText(f"{alive_count}/{total_count} 存活")
             failure_flags = snapshot.get("failure_flags", [])
@@ -861,9 +860,15 @@ else:
             else:
                 head = character_id
             status = []
-            status.append("存活" if bool(item.get("is_alive", False)) else "死亡")
-            if bool(item.get("is_removed", False)):
-                status.append("已移除")
+            life_state = str(item.get("life_state", CharacterLifeState.ALIVE.value))
+            if life_state == CharacterLifeState.ALIVE.value:
+                status.append("存活")
+            elif life_state == CharacterLifeState.DEAD.value:
+                status.append("死亡")
+            elif life_state == CharacterLifeState.REMOVED.value:
+                status.append("移除")
+            else:
+                status.append(life_state)
             if bool(item.get("revealed", False)):
                 status.append("已公开")
             return (

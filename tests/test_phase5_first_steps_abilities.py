@@ -3,7 +3,7 @@ from __future__ import annotations
 from engine.event_bus import EventBus
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.enums import AbilityTiming, AreaId, TokenType
+from engine.models.enums import AbilityTiming, AreaId, CharacterLifeState, TokenType
 from engine.phases.phase_base import (
     PhaseComplete,
     PlaywrightAbilityHandler,
@@ -381,8 +381,8 @@ def test_phase5_playwright_and_turn_end_identity_effects_execute() -> None:
         and option.ability.ability_id == "killer_turn_end_kill_key_person"
     )
     turn_signal.callback(killer_choice)
-    assert state.characters["female_student"].is_alive is False
+    assert state.characters["female_student"].life_state == CharacterLifeState.DEAD
 
     serial_signal = turn_end_handler.execute(state)
     assert isinstance(serial_signal, PhaseComplete)
-    assert state.characters["victim"].is_alive is False
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD

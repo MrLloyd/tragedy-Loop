@@ -16,7 +16,7 @@ from engine.display_names import (
     player_name,
     wait_type_name,
 )
-from engine.models.enums import AreaId
+from engine.models.enums import AreaId, CharacterLifeState
 from ui.controllers.game_session_controller import SessionViewState
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ class GameCharacterRow:
     name: str
     area_id: str
     area: str
-    is_alive: bool
+    life_state: CharacterLifeState
     identity_id: str
     identity: str
     tokens: dict[str, int]
@@ -82,7 +82,7 @@ class GameScreenModel:
                     name=character.name,
                     area_id=character.area.value,
                     area=area_name(character.area.value),
-                    is_alive=character.is_alive,
+                    life_state=character.life_state,
                     identity_id=character.identity,
                     identity=identity_name(character.identity),
                     tokens=dict(character.tokens),
@@ -341,7 +341,12 @@ else:
                     lines.append("- 无")
                 else:
                     for item in area_characters:
-                        status = "存活" if item.is_alive else "死亡"
+                        if item.life_state == CharacterLifeState.ALIVE:
+                            status = "存活"
+                        elif item.life_state == CharacterLifeState.DEAD:
+                            status = "死亡"
+                        else:
+                            status = "移除"
                         lines.append(
                             f"- {item.name or item.character_id}｜{status}｜"
                             f"身份：{item.identity}｜标记物：{format_tokens(item.tokens)}"

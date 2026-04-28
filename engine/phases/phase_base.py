@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from engine.models.cards import CardPlacement, PlacementIntent
-from engine.models.ability import Ability
+from engine.models.ability import Ability, AbilityLocationContext
 from engine.models.effects import Condition, Effect
-from engine.models.enums import AbilityTiming, AbilityType, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
 from engine.models.selectors import (
     area_choice_selector,
     parse_target_selector,
@@ -72,6 +72,7 @@ class PreparedAbilityCandidate:
 
     candidate: AbilityCandidate
     owner_id: str
+    location_context: AbilityLocationContext | None = None
     selected_targets: dict[int, str] = field(default_factory=dict)
 
 
@@ -169,13 +170,29 @@ class PhaseHandler(ABC):
         state: GameState,
         candidate: AbilityCandidate,
         *,
+        location_context_override: AbilityLocationContext | None = None,
         next_signal_factory: Callable[[], PhaseSignal],
     ) -> PhaseSignal:
         owner_id = self._candidate_owner_id(candidate)
+        location_options = self._candidate_location_options(
+            state,
+            candidate,
+            owner_id=owner_id,
+        )
+        if location_context_override is None and len(location_options) > 1:
+            return self._build_candidate_location_wait(
+                state,
+                candidate,
+                owner_id=owner_id,
+                location_options=location_options,
+                next_signal_factory=next_signal_factory,
+            )
+        location_context = location_context_override or location_options[0][1]
         prepared = self._prepare_effects_for_resolution(
             state,
             candidate,
             owner_id=owner_id,
+            location_context=location_context,
             next_signal_factory=next_signal_factory,
         )
         if isinstance(prepared, WaitForInput):
@@ -187,6 +204,7 @@ class PhaseHandler(ABC):
             prepared,
             sequential=candidate.ability.sequential,
             perpetrator_id=owner_id,
+            location_context=location_context,
         )
         self.ability_resolver.mark_ability_used(state, candidate)
         signal = self._resolution_result_to_signal(result, default_reason=candidate.ability.ability_id)
@@ -207,6 +225,11 @@ class PhaseHandler(ABC):
             PreparedAbilityCandidate(
                 candidate=candidate,
                 owner_id=self._candidate_owner_id(candidate),
+                location_context=self._candidate_location_context(
+                    state,
+                    candidate,
+                    owner_id=self._candidate_owner_id(candidate),
+                ),
             )
             for candidate in candidates
         ]
@@ -225,6 +248,73 @@ class PhaseHandler(ABC):
             return candidate.source_id
         return ""
 
+    def _candidate_location_options(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        owner_id: str,
+    ) -> list[tuple[str, AbilityLocationContext | None]]:
+        owner = state.characters.get(owner_id)
+        if owner is None:
+            return [("", None)]
+
+        default_context = AbilityLocationContext(
+            owner_area=owner.area,
+            owner_initial_area=owner.initial_area,
+        )
+        territory_area = getattr(owner, "territory_area", None)
+        if (
+            candidate.source_kind == "goodwill"
+            and owner.character_id == "vip"
+            and territory_area is not None
+            and self._ability_uses_owner_area_context(candidate.ability)
+        ):
+            return [
+                (
+                    territory_area.value,
+                    AbilityLocationContext(
+                        owner_area=territory_area,
+                        owner_initial_area=owner.initial_area,
+                    ),
+                )
+            ]
+        if (
+            candidate.source_kind not in {"identity", "derived"}
+            or owner.character_id != "vip"
+            or territory_area is None
+            or territory_area == owner.area
+            or not self._ability_uses_owner_area_context(candidate.ability)
+        ):
+            return [(owner.area.value, default_context)]
+
+        return [
+            (owner.area.value, default_context),
+            (
+                territory_area.value,
+                AbilityLocationContext(
+                    owner_area=territory_area,
+                    owner_initial_area=owner.initial_area,
+                ),
+            ),
+        ]
+
+    def _candidate_location_context(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        owner_id: str,
+    ) -> AbilityLocationContext | None:
+        location_options = self._candidate_location_options(
+            state,
+            candidate,
+            owner_id=owner_id,
+        )
+        if len(location_options) > 1:
+            return None
+        return location_options[0][1]
+
     def _filter_candidates_with_available_targets(
         self,
         state: GameState,
@@ -233,27 +323,135 @@ class PhaseHandler(ABC):
         filtered: list[AbilityCandidate] = []
         for candidate in candidates:
             owner_id = self._candidate_owner_id(candidate)
-            if all(
-                (
-                    choice_request is None
-                    or bool(choice_request.options)
+            location_options = self._candidate_location_options(
+                state,
+                candidate,
+                owner_id=owner_id,
+            )
+            if any(
+                self._candidate_has_available_targets_in_context(
+                    state,
+                    candidate,
+                    owner_id=owner_id,
+                    location_context=location_context,
                 )
-                for idx, effect in enumerate(candidate.ability.effects)
-                for choice_request in (
-                    self._resolve_effect_choice_options(
-                        state,
-                        owner_id=owner_id,
-                        effect=self._materialize_condition_target_effect(
-                            state,
-                            candidate.ability.effects,
-                            idx,
-                            effect,
-                        ),
-                    ),
-                )
+                for _, location_context in location_options
             ):
                 filtered.append(candidate)
         return filtered
+
+    def _candidate_has_available_targets_in_context(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        owner_id: str,
+        location_context: AbilityLocationContext | None,
+    ) -> bool:
+        if not self.ability_resolver.evaluate_condition(
+            state,
+            candidate.ability.condition,
+            owner_id=owner_id,
+            location_context=location_context,
+        ):
+            return False
+        return all(
+            (
+                choice_request is None
+                or bool(choice_request.options)
+            )
+            for idx, effect in enumerate(candidate.ability.effects)
+            for choice_request in (
+                self._resolve_effect_choice_options(
+                    state,
+                    owner_id=owner_id,
+                    location_context=location_context,
+                    effect=self._materialize_condition_target_effect(
+                        state,
+                        candidate.ability.effects,
+                        idx,
+                        effect,
+                    ),
+                ),
+            )
+        )
+
+    def _build_candidate_location_wait(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        owner_id: str,
+        location_options: list[tuple[str, AbilityLocationContext | None]],
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> WaitForInput:
+        options = [area_id for area_id, _ in location_options]
+        context_by_area = {area_id: context for area_id, context in location_options}
+
+        def _on_choice(choice: Any) -> PhaseSignal:
+            selected_area = self._coerce_area_choice(choice)
+            if selected_area not in context_by_area:
+                raise ValueError(f"invalid ability location: {choice!r}")
+            return self._resolve_candidate(
+                state,
+                candidate,
+                location_context_override=context_by_area[selected_area],
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_location",
+            prompt=f"请选择 {candidate.ability.name} 的发动位置",
+            options=options,
+            player="mastermind",
+            callback=_on_choice,
+        )
+
+    @staticmethod
+    def _coerce_area_choice(choice: Any) -> str | None:
+        selected_area = selector_area_id(choice)
+        if selected_area is not None:
+            return selected_area
+        if isinstance(choice, str):
+            try:
+                return AreaId(choice).value
+            except ValueError:
+                return None
+        return None
+
+    def _ability_uses_owner_area_context(self, ability: Ability) -> bool:
+        if self._condition_uses_owner_area_context(ability.condition):
+            return True
+        return any(self._effect_uses_owner_area_context(effect) for effect in ability.effects)
+
+    def _effect_uses_owner_area_context(self, effect: Effect) -> bool:
+        return (
+            self._raw_uses_owner_area_context(effect.target)
+            or self._raw_uses_owner_area_context(effect.value)
+            or self._condition_uses_owner_area_context(effect.condition)
+        )
+
+    def _condition_uses_owner_area_context(self, condition: Condition | None) -> bool:
+        if condition is None:
+            return False
+        if condition.condition_type in {"same_area_identity_token_check", "same_area_count"}:
+            return True
+        if condition.condition_type == "area_is":
+            target = condition.params.get("target", {"ref": "self"})
+            selector = parse_target_selector(target)
+            if selector.ref == "self":
+                return True
+        return self._raw_uses_owner_area_context(condition.params)
+
+    def _raw_uses_owner_area_context(self, raw: Any) -> bool:
+        if isinstance(raw, dict):
+            selector = parse_target_selector(raw)
+            if selector.scope in {"same_area", "adjacent_area", "diagonal_area"}:
+                return True
+            return any(self._raw_uses_owner_area_context(value) for value in raw.values())
+        if isinstance(raw, list):
+            return any(self._raw_uses_owner_area_context(item) for item in raw)
+        return False
 
     def _collect_mandatory_choices(
         self,
@@ -273,6 +471,44 @@ class PhaseHandler(ABC):
             )
 
         current = prepared[candidate_index]
+        if current.location_context is None:
+            location_options = self._candidate_location_options(
+                planning_state,
+                current.candidate,
+                owner_id=current.owner_id,
+            )
+            if len(location_options) > 1:
+                options = [area_id for area_id, _ in location_options]
+                context_by_area = {area_id: context for area_id, context in location_options}
+
+                def _on_location_choice(
+                    choice: Any,
+                    *,
+                    current_index: int = candidate_index,
+                    allowed: tuple[str, ...] = tuple(options),
+                ) -> PhaseSignal:
+                    selected_area = self._coerce_area_choice(choice)
+                    if selected_area not in allowed:
+                        raise ValueError(f"invalid ability location: {choice!r}")
+                    prepared[current_index].location_context = context_by_area[selected_area]
+                    return self._collect_mandatory_choices(
+                        state,
+                        planning_state,
+                        prepared,
+                        candidate_index=current_index,
+                        effect_index=effect_index,
+                        next_signal_factory=next_signal_factory,
+                    )
+
+                return WaitForInput(
+                    input_type="choose_ability_location",
+                    prompt=f"请选择 {current.candidate.ability.name} 的发动位置",
+                    options=options,
+                    player="mastermind",
+                    callback=_on_location_choice,
+                )
+            current.location_context = location_options[0][1]
+
         effects = current.candidate.ability.effects
         for index in range(effect_index, len(effects)):
             effect = self._materialize_condition_target_effect(
@@ -285,6 +521,7 @@ class PhaseHandler(ABC):
             choice_request = self._resolve_effect_choice_options(
                 planning_state,
                 owner_id=current.owner_id,
+                location_context=current.location_context,
                 effect=effect,
             )
             if choice_request is None or len(choice_request.options) <= 1:
@@ -379,7 +616,11 @@ class PhaseHandler(ABC):
         effect_index: int,
     ) -> ScopedEffect:
         effect = prepared.candidate.ability.effects[effect_index]
-        return ScopedEffect(effect=effect, perpetrator_id=prepared.owner_id)
+        return ScopedEffect(
+            effect=effect,
+            perpetrator_id=prepared.owner_id,
+            location_context=prepared.location_context,
+        )
 
     def _prepare_effects_for_resolution(
         self,
@@ -387,6 +628,7 @@ class PhaseHandler(ABC):
         candidate: AbilityCandidate,
         *,
         owner_id: str,
+        location_context: AbilityLocationContext | None,
         next_signal_factory: Callable[[], PhaseSignal],
     ) -> list[Effect] | WaitForInput:
         effects = list(candidate.ability.effects)
@@ -402,6 +644,7 @@ class PhaseHandler(ABC):
                 choice_request = self._resolve_effect_choice_options(
                     state,
                     owner_id=owner_id,
+                    location_context=location_context,
                     effect=current,
                 )
                 if choice_request is None:
@@ -451,6 +694,7 @@ class PhaseHandler(ABC):
                     return self._resolve_candidate(
                         state,
                         follow_up,
+                        location_context_override=location_context,
                         next_signal_factory=next_signal_factory,
                     )
 
@@ -469,6 +713,7 @@ class PhaseHandler(ABC):
         *,
         owner_id: str,
         effect: Effect,
+        location_context: AbilityLocationContext | None = None,
     ) -> EffectChoiceRequest | None:
         if (
             effect.condition is not None
@@ -477,6 +722,7 @@ class PhaseHandler(ABC):
                 state,
                 effect.condition,
                 owner_id=owner_id,
+                location_context=location_context,
             )
         ):
             return None
@@ -486,6 +732,7 @@ class PhaseHandler(ABC):
                 owner_id=owner_id,
                 selector=effect.target,
                 alive_only=True,
+                location_context=location_context,
             )
             if effect.condition is not None:
                 choices = [
@@ -496,6 +743,7 @@ class PhaseHandler(ABC):
                         effect.condition,
                         owner_id=owner_id,
                         other_id=target_id,
+                        location_context=location_context,
                     )
                 ]
             if effect.effect_type == EffectType.NULLIFY_CARD:
@@ -509,6 +757,7 @@ class PhaseHandler(ABC):
             choices = self._resolve_move_destination_options(
                 state,
                 owner_id=owner_id,
+                location_context=location_context,
                 effect=effect,
             )
             return EffectChoiceRequest(choice_kind="value", options=choices)
@@ -739,6 +988,7 @@ class PhaseHandler(ABC):
         state: GameState,
         *,
         owner_id: str,
+        location_context: AbilityLocationContext | None,
         effect: Effect,
     ) -> list[str]:
         mover_ids = self._resolve_move_effect_owners(state, owner_id=owner_id, effect=effect)
@@ -751,6 +1001,7 @@ class PhaseHandler(ABC):
                 owner_id=owner_id,
                 selector=effect.value,
                 alive_only=False,
+                location_context=location_context,
             ),
         )
 
@@ -1142,25 +1393,36 @@ class ActionResolveHandler(PhaseHandler):
             return True
 
         owner_id = self._candidate_owner_id(candidate)
-        for effect in candidate.ability.effects:
-            if effect.effect_type != EffectType.NULLIFY_CARD:
-                return True
+        for _, location_context in self._candidate_location_options(
+            state,
+            candidate,
+            owner_id=owner_id,
+        ):
+            for effect in candidate.ability.effects:
+                if effect.effect_type != EffectType.NULLIFY_CARD:
+                    return True
 
-            choice_request = self._resolve_effect_choice_options(state, owner_id=owner_id, effect=effect)
-            if choice_request is not None and bool(choice_request.options):
-                return True
+                choice_request = self._resolve_effect_choice_options(
+                    state,
+                    owner_id=owner_id,
+                    effect=effect,
+                    location_context=location_context,
+                )
+                if choice_request is not None and bool(choice_request.options):
+                    return True
 
-            target_ids = self.ability_resolver.resolve_targets(
-                state,
-                owner_id=owner_id,
-                selector=effect.target,
-                alive_only=False,
-            )
-            if any(
-                self._matches_nullify_card_target(state, target_id=target_id, effect=effect)
-                for target_id in target_ids
-            ):
-                return True
+                target_ids = self.ability_resolver.resolve_targets(
+                    state,
+                    owner_id=owner_id,
+                    selector=effect.target,
+                    alive_only=False,
+                    location_context=location_context,
+                )
+                if any(
+                    self._matches_nullify_card_target(state, target_id=target_id, effect=effect)
+                    for target_id in target_ids
+                ):
+                    return True
 
         return False
 
@@ -1599,10 +1861,25 @@ class LoopEndHandler(PhaseHandler):
 
         candidate = candidates[0]
         owner_id = self._candidate_owner_id(candidate)
+        location_options = self._candidate_location_options(
+            state,
+            candidate,
+            owner_id=owner_id,
+        )
+        if len(location_options) > 1:
+            return self._build_candidate_location_wait(
+                state,
+                candidate,
+                owner_id=owner_id,
+                location_options=location_options,
+                next_signal_factory=lambda: self._execute_loop_end_candidates(state, candidates[1:]),
+            )
+        location_context = location_options[0][1]
         prepared = self._prepare_effects_for_resolution(
             state,
             candidate,
             owner_id=owner_id,
+            location_context=location_context,
             next_signal_factory=lambda: self._execute_loop_end_candidates(state, candidates[1:]),
         )
         if isinstance(prepared, WaitForInput):
@@ -1614,6 +1891,7 @@ class LoopEndHandler(PhaseHandler):
             prepared,
             sequential=candidate.ability.sequential,
             perpetrator_id=owner_id,
+            location_context=location_context,
         )
         self.ability_resolver.mark_ability_used(state, candidate)
         return self._execute_loop_end_candidates(state, candidates[1:])

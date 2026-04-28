@@ -203,6 +203,25 @@ def test_build_game_state_from_module_applies_script_selected_initial_area() -> 
     assert state.characters["servant"].area == AreaId.CITY
 
 
+def test_build_game_state_from_module_applies_vip_territory_area() -> None:
+    setups = [
+        CharacterSetup(character_id="vip", identity_id="killer", initial_area="city", territory_area="shrine"),
+    ]
+
+    state = build_game_state_from_module(
+        "first_steps",
+        character_setups=setups,
+        incidents=[],
+        rule_y_id="fs_murder_plan",
+        rule_x_ids=["fs_ripper_shadow"],
+        skip_script_validation=True,
+    )
+
+    assert state.characters["vip"].initial_area == AreaId.CITY
+    assert state.characters["vip"].area == AreaId.CITY
+    assert state.characters["vip"].territory_area == AreaId.SHRINE
+
+
 def test_build_game_state_from_module_rejects_unknown_identity() -> None:
     setups = [CharacterSetup(character_id="ai", identity_id="unknown_identity")]
     with pytest.raises(ValueError, match="Unknown identity_id"):

@@ -9,7 +9,7 @@ from engine.game_controller import GameController
 from engine.game_state import GameState
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, EffectType, GamePhase, TokenType, Trait
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CharacterLifeState, EffectType, GamePhase, TokenType, Trait
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.resolvers.ability_resolver import AbilityResolver
@@ -228,7 +228,7 @@ def test_paranoia_expansion_virus_ignores_non_original_commoner_and_corpses() ->
         initial_area=AreaId.CITY,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["non_original_commoner"].tokens.add(TokenType.PARANOIA, 3)
     state.characters["corpse"].tokens.add(TokenType.PARANOIA, 3)
@@ -313,7 +313,7 @@ def test_time_traveler_immortal_trait_uses_current_identity_traits() -> None:
         [Effect(effect_type=EffectType.KILL_CHARACTER, target="traveler")],
     )
 
-    assert state.characters["traveler"].is_alive is True
+    assert state.characters["traveler"].life_state == CharacterLifeState.ALIVE
 
 
 def test_btx_script_validator_accepts_valid_cursed_contract_script() -> None:

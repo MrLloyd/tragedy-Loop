@@ -6,7 +6,7 @@ from engine.models.ability import Ability
 from engine.models.cards import CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, PlayerRole, TokenType, Trait
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CharacterLifeState, EffectType, PlayerRole, TokenType, Trait
 from engine.models.identity import IdentityDef
 from engine.models.script import CharacterSetup, IncidentSchedule
 from engine.phases.phase_base import IncidentHandler, PhaseComplete, PlaywrightAbilityHandler, ProtagonistAbilityHandler, WaitForInput
@@ -91,7 +91,7 @@ def test_resolve_targets_supports_extended_structured_selectors() -> None:
         initial_area=AreaId.SCHOOL,
         identity_id="cultist",
         original_identity_id="cultist",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["other_limit"] = CharacterState(
         character_id="other_limit",
@@ -459,7 +459,7 @@ def test_appraiser_structured_goodwill_reveals_selected_corpse() -> None:
         initial_area=AreaId.CITY,
         identity_id="mastermind",
         original_identity_id="mastermind",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["corpse_b"] = CharacterState(
         character_id="corpse_b",
@@ -468,7 +468,7 @@ def test_appraiser_structured_goodwill_reveals_selected_corpse() -> None:
         initial_area=AreaId.HOSPITAL,
         identity_id="killer",
         original_identity_id="killer",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["alive"] = CharacterState(
         character_id="alive",
@@ -790,7 +790,7 @@ def test_alien_structured_goodwill_revives_dead_character() -> None:
         initial_area=AreaId.CITY,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["corpse_b"] = CharacterState(
         character_id="corpse_b",
@@ -799,7 +799,7 @@ def test_alien_structured_goodwill_revives_dead_character() -> None:
         initial_area=AreaId.CITY,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["living"] = CharacterState(
         character_id="living",
@@ -820,9 +820,8 @@ def test_alien_structured_goodwill_revives_dead_character() -> None:
 
     result = target_wait.callback("corpse_a")
     assert isinstance(result, (WaitForInput, PhaseComplete))
-    assert state.characters["corpse_a"].is_alive is True
-    assert state.characters["corpse_a"].is_removed is False
-    assert state.characters["corpse_b"].is_alive is False
+    assert state.characters["corpse_a"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["corpse_b"].life_state == CharacterLifeState.DEAD
 
 
 def test_alien_structured_goodwill_kills_same_area_target_via_death_resolver(monkeypatch) -> None:
@@ -868,8 +867,8 @@ def test_alien_structured_goodwill_kills_same_area_target_via_death_resolver(mon
     result = target_wait.callback("victim_a")
     assert isinstance(result, PhaseComplete)
     assert calls == ["victim_a"]
-    assert state.characters["victim_a"].is_alive is False
-    assert state.characters["victim_b"].is_alive is True
+    assert state.characters["victim_a"].life_state == CharacterLifeState.DEAD
+    assert state.characters["victim_b"].life_state == CharacterLifeState.ALIVE
 
 
 def test_nurse_structured_goodwill_is_hidden_without_limit_reached_target() -> None:
@@ -1116,6 +1115,22 @@ def test_phantom_structured_goodwill_moves_same_area_target_via_game_state_move_
     assert calls == [("target", AreaId.HOSPITAL.value)]
 
 
+def test_phantom_structured_goodwill_removes_self_via_unified_life_state() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["phantom"] = _instantiate("phantom")
+    state.characters["phantom"].tokens.add(TokenType.GOODWILL, 4)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:phantom:2")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["phantom"].life_state == CharacterLifeState.REMOVED
+    assert state.characters["phantom"].is_removed() is True
+
+
 def test_little_girl_structured_goodwill_moves_to_adjacent_area_only_via_game_state_move_character(monkeypatch) -> None:
     bus, atomic = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, atomic)
@@ -1148,6 +1163,77 @@ def test_little_girl_structured_goodwill_moves_to_adjacent_area_only_via_game_st
     assert isinstance(result, WaitForInput)
     assert state.characters["little_girl"].area == AreaId.CITY
     assert calls == [("little_girl", AreaId.CITY.value)]
+
+
+def test_doctor_structured_goodwill_lifts_inpatient_forbidden_areas_for_current_loop() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["doctor"] = _instantiate("doctor")
+    state.characters["doctor"].tokens.add(TokenType.GOODWILL, 3)
+    state.characters["inpatient"] = _instantiate("inpatient")
+
+    assert state.characters["inpatient"].forbidden_areas == [AreaId.SHRINE, AreaId.SCHOOL, AreaId.CITY]
+    assert state.move_character("inpatient", AreaId.CITY) is False
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:doctor:2")
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert state.characters["inpatient"].forbidden_areas == []
+    assert state.move_character("inpatient", AreaId.CITY) is True
+    assert state.characters["inpatient"].area == AreaId.CITY
+
+
+def test_vip_structured_goodwill_reveals_territory_character_identity() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["vip"] = _instantiate("vip")
+    state.characters["vip"].area = AreaId.CITY
+    state.characters["vip"].initial_area = AreaId.CITY
+    state.characters["vip"].territory_area = AreaId.SHRINE
+    state.characters["vip"].tokens.add(TokenType.GOODWILL, 5)
+    state.characters["office_worker"] = _instantiate("office_worker", identity_id="killer")
+    state.characters["office_worker"].area = AreaId.SHRINE
+    state.characters["office_worker"].initial_area = AreaId.SHRINE
+    state.characters["teacher"] = _instantiate("teacher", identity_id="cultist")
+    state.characters["teacher"].area = AreaId.CITY
+    state.characters["teacher"].initial_area = AreaId.CITY
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:vip:1")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["office_worker"].revealed is True
+    assert state.characters["teacher"].revealed is False
+    assert state.characters["vip"].revealed is False
+
+
+def test_vip_structured_goodwill_in_territory_does_not_reveal_vip_self() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["vip"] = _instantiate("vip")
+    state.characters["vip"].area = AreaId.SHRINE
+    state.characters["vip"].initial_area = AreaId.CITY
+    state.characters["vip"].territory_area = AreaId.SHRINE
+    state.characters["vip"].tokens.add(TokenType.GOODWILL, 5)
+    state.characters["office_worker"] = _instantiate("office_worker", identity_id="killer")
+    state.characters["office_worker"].area = AreaId.SHRINE
+    state.characters["office_worker"].initial_area = AreaId.SHRINE
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    result = _choose_goodwill(signal, "goodwill:vip:1")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["office_worker"].revealed is True
+    assert state.characters["vip"].revealed is False
 
 
 def test_nurse_structured_goodwill_removes_paranoia_from_limit_reached_target() -> None:

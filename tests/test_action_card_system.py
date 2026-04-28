@@ -6,7 +6,7 @@ from engine.event_bus import EventBus
 from engine.game_state import GameState
 from engine.models.cards import ActionCard, CardPlacement, PlacementIntent, create_mastermind_hand, create_protagonist_hand
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, CardType, EffectType, PlayerRole, TokenType, Trait
+from engine.models.enums import AreaId, CardType, CharacterLifeState, EffectType, PlayerRole, TokenType, Trait
 from engine.phases.phase_base import ActionResolveHandler, MastermindActionHandler, ProtagonistActionHandler, PhaseComplete, WaitForInput
 from engine.resolvers.atomic_resolver import AtomicResolver
 from engine.resolvers.death_resolver import DeathResolver
@@ -89,7 +89,7 @@ def _make_state_for_placement() -> GameState:
         initial_area=AreaId.SHRINE,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
 
     return state
@@ -652,7 +652,7 @@ def test_movement_card_on_dead_character_stays_in_place():
     resolver = SpyAtomicResolver(bus)
     handler = ActionResolveHandler(bus, resolver)
     state = _make_state_for_placement()
-    state.characters["char_1"].is_alive = False
+    state.characters["char_1"].mark_dead()
 
     state.placed_cards = [
         CardPlacement(ActionCard(CardType.MOVE_VERTICAL, PlayerRole.MASTERMIND), PlayerRole.MASTERMIND, "character", "char_1", face_down=True),

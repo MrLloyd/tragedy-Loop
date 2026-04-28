@@ -6,7 +6,7 @@ from engine.models.ability import Ability
 from engine.models.cards import ActionCard, CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, EffectType, PlayerRole, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, EffectType, PlayerRole, TokenType
 from engine.models.identity import IdentityDef
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
@@ -94,7 +94,7 @@ def test_loop_start_handler_applies_causal_line_from_last_snapshot() -> None:
         initial_area=AreaId.SCHOOL,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["survivor"].tokens.add(TokenType.GOODWILL, 1)
     state.characters["dead"].tokens.add(TokenType.GOODWILL, 2)
@@ -458,6 +458,127 @@ def test_action_resolve_handler_executes_cultist_board_nullify_without_target_pr
     assert state.board.areas[AreaId.SCHOOL].tokens.get(TokenType.INTRIGUE) == 1
 
 
+def test_vip_cultist_can_nullify_forbid_intrigue_at_territory_board() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ActionResolveHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        territory_area=AreaId.SHRINE,
+        identity_id="cultist",
+        original_identity_id="cultist",
+    )
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "board",
+            AreaId.SHRINE.value,
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "board",
+            AreaId.SHRINE.value,
+            face_down=True,
+        ),
+    ]
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "cultist_action_resolve_nullify_forbid_intrigue_board")
+
+    location_wait = signal.callback(choice)
+    assert isinstance(location_wait, WaitForInput)
+    assert location_wait.input_type == "choose_ability_location"
+    assert set(location_wait.options) == {AreaId.CITY.value, AreaId.SHRINE.value}
+
+    result = location_wait.callback(AreaId.SHRINE.value)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.placed_cards[0].nullified is True
+    assert state.placed_cards[1].nullified is False
+    assert state.board.areas[AreaId.SHRINE].tokens.get(TokenType.INTRIGUE) == 1
+
+
+def test_vip_cultist_can_choose_body_area_to_nullify_character_forbid_intrigue() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ActionResolveHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        territory_area=AreaId.SHRINE,
+        identity_id="cultist",
+        original_identity_id="cultist",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="教师",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["shrine_maiden"] = CharacterState(
+        character_id="shrine_maiden",
+        name="巫女",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.placed_cards = [
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_0),
+            PlayerRole.PROTAGONIST_0,
+            "character",
+            "teacher",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.INTRIGUE_PLUS_1, PlayerRole.MASTERMIND),
+            PlayerRole.MASTERMIND,
+            "character",
+            "teacher",
+            face_down=True,
+        ),
+        CardPlacement(
+            ActionCard(CardType.FORBID_INTRIGUE, PlayerRole.PROTAGONIST_1),
+            PlayerRole.PROTAGONIST_1,
+            "character",
+            "shrine_maiden",
+            face_down=True,
+        ),
+    ]
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "cultist_action_resolve_nullify_forbid_intrigue_character")
+
+    location_wait = signal.callback(choice)
+    assert isinstance(location_wait, WaitForInput)
+    assert location_wait.input_type == "choose_ability_location"
+
+    next_wait = location_wait.callback(AreaId.CITY.value)
+    assert isinstance(next_wait, WaitForInput)
+    assert next_wait.input_type == "choose_action_resolve_ability"
+    result = next_wait.callback("pass")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.placed_cards[0].nullified is True
+    assert state.placed_cards[1].nullified is False
+    assert state.placed_cards[2].nullified is False
+
+
 def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
@@ -593,7 +714,7 @@ def test_turn_end_handler_executes_mandatory_then_optional() -> None:
     signal = handler.execute(state)
 
     assert isinstance(signal, WaitForInput)
-    assert not state.characters["victim"].is_alive
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
     assert signal.input_type == "choose_turn_end_ability"
 
 
@@ -628,7 +749,58 @@ def test_killer_turn_end_ability_kills_key_person_and_forces_loop_end() -> None:
 
     assert isinstance(result, ForceLoopEnd)
     assert result.reason == "killer_turn_end_kill_key_person"
-    assert not state.characters["key"].is_alive
+    assert state.characters["key"].life_state == CharacterLifeState.DEAD
+    assert "key_person_dead" in state.failure_flags
+
+
+def test_vip_killer_can_choose_territory_to_kill_key_person_without_hitting_body_area() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        territory_area=AreaId.SHRINE,
+        identity_id="killer",
+        original_identity_id="killer",
+    )
+    state.characters["key"] = CharacterState(
+        character_id="key",
+        name="关键人物",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="key_person",
+        original_identity_id="key_person",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="教师",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["key"].tokens.add(TokenType.INTRIGUE, 2)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "killer_turn_end_kill_key_person")
+
+    location_wait = signal.callback(choice)
+    assert isinstance(location_wait, WaitForInput)
+    assert location_wait.input_type == "choose_ability_location"
+    assert set(location_wait.options) == {AreaId.CITY.value, AreaId.SHRINE.value}
+
+    result = location_wait.callback(AreaId.SHRINE.value)
+
+    assert isinstance(result, ForceLoopEnd)
+    assert result.reason == "killer_turn_end_kill_key_person"
+    assert state.characters["key"].life_state == CharacterLifeState.DEAD
+    assert state.characters["teacher"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["vip"].life_state == CharacterLifeState.ALIVE
     assert "key_person_dead" in state.failure_flags
 
 
@@ -683,13 +855,57 @@ def test_serial_killer_mandatory_turn_end_ability_kills_other_lone_character() -
     signal = handler.execute(state)
 
     assert isinstance(signal, PhaseComplete)
-    assert state.characters["serial"].is_alive
-    assert not state.characters["victim"].is_alive
+    assert state.characters["serial"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
     assert any(
         event.event_type == GameEventType.ABILITY_DECLARED
         and event.data.get("ability_id") == "serial_killer_turn_end_kill_lone_target"
         for event in bus.log
     )
+
+
+def test_vip_serial_killer_can_choose_territory_to_kill_lone_target_without_killing_teacher_in_body_area() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    state.characters["vip"] = CharacterState(
+        character_id="vip",
+        name="大人物",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        territory_area=AreaId.SHRINE,
+        identity_id="serial_killer",
+        original_identity_id="serial_killer",
+    )
+    state.characters["shrine_maiden"] = CharacterState(
+        character_id="shrine_maiden",
+        name="巫女",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="教师",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_ability_location"
+    assert set(signal.options) == {AreaId.CITY.value, AreaId.SHRINE.value}
+
+    result = signal.callback(AreaId.SHRINE.value)
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["shrine_maiden"].life_state == CharacterLifeState.DEAD
+    assert state.characters["teacher"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["vip"].life_state == CharacterLifeState.ALIVE
 
 
 def test_turn_end_handler_batches_mandatory_effects_in_same_window() -> None:
@@ -759,8 +975,8 @@ def test_turn_end_handler_batches_mandatory_effects_in_same_window() -> None:
     signal = handler.execute(state)
 
     assert isinstance(signal, PhaseComplete)
-    assert state.characters["beloved"].is_alive is False
-    assert state.characters["lover"].is_alive is False
+    assert state.characters["beloved"].life_state == CharacterLifeState.DEAD
+    assert state.characters["lover"].life_state == CharacterLifeState.DEAD
     assert state.characters["beloved"].tokens.get(TokenType.PARANOIA) == 0
     assert state.characters["lover"].tokens.get(TokenType.PARANOIA) == 0
 
@@ -939,7 +1155,7 @@ def test_loop_end_handler_resolves_loss_conditions_and_saves_snapshot() -> None:
         initial_area=AreaId.SCHOOL,
         identity_id="friend",
         original_identity_id="friend",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
 
     signal = handler.execute(state)
@@ -963,7 +1179,7 @@ def test_friend_death_failure_reveals_identity_to_protagonist_view() -> None:
         initial_area=AreaId.SCHOOL,
         identity_id="friend",
         original_identity_id="friend",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
 
     before = Visibility.filter_for_role(state, PlayerRole.PROTAGONIST_0)

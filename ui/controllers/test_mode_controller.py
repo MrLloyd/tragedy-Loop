@@ -24,7 +24,7 @@ from engine.display_names import (
     rule_option_label,
     token_name,
 )
-from engine.models.enums import AreaId, GamePhase, TokenType
+from engine.models.enums import AreaId, CharacterLifeState, GamePhase, TokenType
 from engine.models.incident import IncidentSchedule
 from engine.models.selectors import (
     area_choice_selector,
@@ -50,8 +50,7 @@ class TestCharacterDraft:
     character_id: str
     identity_id: str = "平民"
     area: str = AreaId.CITY.value
-    is_alive: bool = True
-    is_removed: bool = False
+    life_state: str = CharacterLifeState.ALIVE.value
     revealed: bool = False
     tokens: dict[str, int] = field(default_factory=dict)
 
@@ -344,8 +343,7 @@ class TestModeController:
                         character_id=item.character_id,
                         area=item.area,
                         tokens=dict(item.tokens),
-                        is_alive=item.is_alive,
-                        is_removed=item.is_removed,
+                        life_state=item.life_state,
                         revealed=item.revealed,
                         identity_id=item.identity_id,
                         current_as_original=True,
@@ -631,7 +629,7 @@ class TestModeController:
                 ) or "无"
                 lines.append(
                     f"- {character_option_label(character_id)}｜区域={area_name(str(item.get('area', '')))}"
-                    f"｜身份={item.get('identity_id', '?')}｜存活={item.get('is_alive', False)}"
+                    f"｜身份={item.get('identity_id', '?')}｜状态={item.get('life_state', CharacterLifeState.ALIVE.value)}"
                     f"｜公开={item.get('revealed', False)}｜标记={token_text}"
                 )
         lines.append("")
@@ -853,8 +851,7 @@ class TestModeController:
             character_id=character_id,
             identity_id=identity_id,
             area=area,
-            is_alive=item.is_alive,
-            is_removed=item.is_removed,
+            life_state=item.life_state if item.life_state in {state.value for state in CharacterLifeState} else CharacterLifeState.ALIVE.value,
             revealed=item.revealed,
             tokens=tokens,
         )

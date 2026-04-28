@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.ability import Ability
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
+from engine.models.ability import Ability, AbilityLocationContext
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CharacterLifeState, EffectType, TokenType, Trait
 from engine.models.effects import Condition, Effect
 from engine.models.identity import IdentityDef
 from engine.resolvers.ability_resolver import AbilityResolver
@@ -221,7 +221,7 @@ def test_character_alive_and_dead_conditions_use_character_state_methods() -> No
         initial_area=AreaId.CITY,
         identity_id="friend",
         original_identity_id="friend",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["removed"] = CharacterState(
         character_id="removed",
@@ -230,7 +230,7 @@ def test_character_alive_and_dead_conditions_use_character_state_methods() -> No
         initial_area=AreaId.CITY,
         identity_id="friend",
         original_identity_id="friend",
-        is_removed=True,
+        life_state=CharacterLifeState.REMOVED,
     )
 
     resolver = AbilityResolver()
@@ -643,7 +643,7 @@ def test_btx_rule_identity_and_derived_abilities_are_collected() -> None:
         identity_id="friend",
         original_identity_id="friend",
         revealed=True,
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["unstable"] = CharacterState(
         character_id="unstable",
@@ -852,6 +852,124 @@ def test_resolve_targets_basic_selectors() -> None:
     assert condition_target == ["b"]
 
 
+def test_resolve_targets_same_area_respects_location_context() -> None:
+    state = _build_state_with_module()
+    state.characters["owner"] = CharacterState(
+        character_id="owner",
+        name="拥有者",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["hospital"] = CharacterState(
+        character_id="hospital",
+        name="医院角色",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["shrine"] = CharacterState(
+        character_id="shrine",
+        name="神社角色",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    resolver = AbilityResolver()
+    context = AbilityLocationContext(
+        owner_area=AreaId.SHRINE,
+        owner_initial_area=AreaId.SCHOOL,
+    )
+
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"scope": "same_area", "subject": "character"},
+        location_context=context,
+    ) == ["shrine"]
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"scope": "same_area", "subject": "board"},
+        location_context=context,
+    ) == [AreaId.SHRINE.value]
+    assert resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={"scope": "initial_area", "subject": "board"},
+        location_context=context,
+    ) == [AreaId.SCHOOL.value]
+
+
+def test_location_sensitive_conditions_respect_location_context() -> None:
+    state = _build_state_with_module()
+    state.characters["owner"] = CharacterState(
+        character_id="owner",
+        name="拥有者",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["teacher"] = CharacterState(
+        character_id="teacher",
+        name="教师",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="teacher",
+        original_identity_id="teacher",
+    )
+    state.characters["office_worker"] = CharacterState(
+        character_id="office_worker",
+        name="职员",
+        area=AreaId.SCHOOL,
+        initial_area=AreaId.SCHOOL,
+        identity_id="office_worker",
+        original_identity_id="office_worker",
+    )
+    state.characters["teacher"].tokens.add(TokenType.INTRIGUE, 2)
+
+    resolver = AbilityResolver()
+    context = AbilityLocationContext(owner_area=AreaId.SCHOOL)
+
+    assert resolver.evaluate_condition(
+        state,
+        Condition(
+            "area_is",
+            {"target": {"ref": "self"}, "value": AreaId.SCHOOL.value},
+        ),
+        owner_id="owner",
+        location_context=context,
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition(
+            "same_area_count",
+            {"target": {"ref": "self"}, "operator": "==", "value": 2},
+        ),
+        owner_id="owner",
+        location_context=context,
+    ) is True
+    assert resolver.evaluate_condition(
+        state,
+        Condition(
+            "same_area_identity_token_check",
+            {
+                "identity_id": "teacher",
+                "token": TokenType.INTRIGUE.value,
+                "operator": ">=",
+                "value": 2,
+            },
+        ),
+        owner_id="owner",
+        location_context=context,
+    ) is True
+
+
 def test_resolve_targets_direct_refs_exclude_removed_but_do_not_apply_alive_only() -> None:
     state = _build_state_with_module()
     state.characters["owner"] = CharacterState(
@@ -869,7 +987,7 @@ def test_resolve_targets_direct_refs_exclude_removed_but_do_not_apply_alive_only
         initial_area=AreaId.HOSPITAL,
         identity_id="平民",
         original_identity_id="平民",
-        is_removed=True,
+        life_state=CharacterLifeState.REMOVED,
     )
     state.characters["corpse"] = CharacterState(
         character_id="corpse",
@@ -878,7 +996,7 @@ def test_resolve_targets_direct_refs_exclude_removed_but_do_not_apply_alive_only
         initial_area=AreaId.HOSPITAL,
         identity_id="平民",
         original_identity_id="平民",
-        is_alive=False,
+        life_state=CharacterLifeState.DEAD,
     )
     state.characters["removed_target"] = CharacterState(
         character_id="removed_target",
@@ -887,7 +1005,7 @@ def test_resolve_targets_direct_refs_exclude_removed_but_do_not_apply_alive_only
         initial_area=AreaId.CITY,
         identity_id="平民",
         original_identity_id="平民",
-        is_removed=True,
+        life_state=CharacterLifeState.REMOVED,
     )
 
     resolver = AbilityResolver()

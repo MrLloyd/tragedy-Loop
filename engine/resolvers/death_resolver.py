@@ -53,7 +53,7 @@ class DeathResolver:
        
 
         # ---- 层 3：实际死亡 ----
-        character.is_alive = False
+        character.mark_dead()
         return DeathResult.DIED
 
     def _get_active_traits(self, character: CharacterState,

@@ -188,7 +188,7 @@ def test_forced_loop_end_still_runs_loop_end_resolution() -> None:
         incidents=[],
         skip_script_validation=True,
     )
-    controller.state.characters["doctor"].is_alive = False
+    controller.state.characters["doctor"].mark_dead()
     controller.state.failure_flags.add("key_person_dead")
     controller.state_machine.current_phase = GamePhase.INCIDENT
 

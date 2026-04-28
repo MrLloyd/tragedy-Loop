@@ -44,6 +44,23 @@ def test_new_game_screen_model_starts_with_phase5_default() -> None:
     assert model.rule_x_count() == 1
 
 
+def test_new_game_screen_model_exposes_vip_territory_options_only_for_vip() -> None:
+    model = NewGameScreenModel()
+
+    options, enabled = model.character_territory_area_options("vip")
+    assert enabled is True
+    assert {value for value, _ in options} == {
+        AreaId.HOSPITAL.value,
+        AreaId.SHRINE.value,
+        AreaId.CITY.value,
+        AreaId.SCHOOL.value,
+    }
+
+    options, enabled = model.character_territory_area_options("male_student")
+    assert enabled is False
+    assert options == [("", "无领地")]
+
+
 def test_game_prepare_rejects_invalid_incident_perpetrator() -> None:
     model = NewGameScreenModel()
     model.update_incident(2, perpetrator_id="ghost")
@@ -103,6 +120,78 @@ def test_new_game_controller_builds_initial_area_into_character_setup() -> None:
     assert isinstance(setups, list)
     assert setups[0].character_id == "servant"
     assert setups[0].initial_area == "city"
+
+
+def test_new_game_controller_builds_vip_territory_area_into_character_setup() -> None:
+    draft = default_phase5_draft()
+    characters = list(draft.characters)
+    characters[0] = CharacterDraft("vip", "killer", "city", "shrine")
+    payload = NewGameController.build_payload(NewGameDraft(
+        module_id=draft.module_id,
+        loop_count=draft.loop_count,
+        days_per_loop=draft.days_per_loop,
+        rule_y_id=draft.rule_y_id,
+        rule_x_ids=list(draft.rule_x_ids),
+        characters=characters,
+        incidents=list(draft.incidents),
+    ))
+
+    setups = payload["character_setups"]
+    assert isinstance(setups, list)
+    assert setups[0].character_id == "vip"
+    assert setups[0].initial_area == "city"
+    assert setups[0].territory_area == "shrine"
+
+
+def test_game_prepare_requires_vip_territory_area() -> None:
+    model = NewGameScreenModel()
+    model.update_character(0, character_id="vip", identity_id="killer")
+
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(model.draft)
+    )
+
+    assert any("territory_area is required for vip" in error for error in errors)
+
+
+def test_game_prepare_rejects_non_vip_territory_area() -> None:
+    draft = default_phase5_draft()
+    characters = list(draft.characters)
+    characters[0] = CharacterDraft("male_student", "mastermind", "", "shrine")
+
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(NewGameDraft(
+            module_id=draft.module_id,
+            loop_count=draft.loop_count,
+            days_per_loop=draft.days_per_loop,
+            rule_y_id=draft.rule_y_id,
+            rule_x_ids=list(draft.rule_x_ids),
+            characters=characters,
+            incidents=list(draft.incidents),
+        ))
+    )
+
+    assert any("territory_area is only allowed for vip" in error for error in errors)
+
+
+def test_game_prepare_allows_vip_territory_same_as_initial_area() -> None:
+    draft = default_phase5_draft()
+    characters = list(draft.characters)
+    characters[0] = CharacterDraft("vip", "killer", "city", "city")
+
+    errors = _submit_script_setup_and_collect_errors(
+        NewGameController.build_payload(NewGameDraft(
+            module_id=draft.module_id,
+            loop_count=draft.loop_count,
+            days_per_loop=draft.days_per_loop,
+            rule_y_id=draft.rule_y_id,
+            rule_x_ids=list(draft.rule_x_ids),
+            characters=characters,
+            incidents=list(draft.incidents),
+        ))
+    )
+
+    assert not any("territory_area" in error for error in errors)
 
 
 def test_new_game_controller_builds_engine_input_payload() -> None:

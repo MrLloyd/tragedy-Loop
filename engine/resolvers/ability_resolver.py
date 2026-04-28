@@ -13,7 +13,7 @@ from typing import Any
 from typing import Optional
 
 from engine.game_state import GameState
-from engine.models.ability import Ability
+from engine.models.ability import Ability, AbilityLocationContext
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, EffectType, TokenType, Trait
 from engine.models.selectors import TargetSelector, parse_target_selector
@@ -177,7 +177,11 @@ class AbilityResolver:
                     continue
                 if ability_type is not None and ability.ability_type != ability_type:
                     continue
-                if not self.evaluate_condition(state, ability.condition, owner_id=ch.character_id):
+                if not self._evaluate_condition_for_owner_contexts(
+                    state,
+                    ability.condition,
+                    owner_id=ch.character_id,
+                ):
                     continue
                 candidate = AbilityCandidate(
                     source_kind="identity",
@@ -339,12 +343,13 @@ class AbilityResolver:
         condition_target: str | None = None,
         other_id: str | None = None,
         alive_only: bool = True,
+        location_context: AbilityLocationContext | None = None,
     ) -> list[str]:
         """目标解析统一入口。"""
         spec = parse_target_selector(selector)
         owner = state.characters.get(owner_id)
         if spec.ref == "self":
-            if owner is None or owner.is_removed:
+            if owner is None or owner.is_removed():
                 return []
             return [owner_id]
         if spec.ref == "none":
@@ -373,9 +378,15 @@ class AbilityResolver:
                 owner=owner,
                 spec=spec,
                 alive_only=alive_only,
+                location_context=location_context,
             )
         if spec.subject == "board":
-            return self._resolve_board_targets(state=state, owner=owner, spec=spec)
+            return self._resolve_board_targets(
+                state=state,
+                owner=owner,
+                spec=spec,
+                location_context=location_context,
+            )
         if spec.subject == "character_or_board":
             if owner is None and spec.scope != "any_area":
                 return []
@@ -392,6 +403,7 @@ class AbilityResolver:
                         area=spec.area,
                     ),
                     alive_only=alive_only,
+                    location_context=location_context,
                 ),
                 *self._resolve_board_targets(
                     state=state,
@@ -403,6 +415,7 @@ class AbilityResolver:
                         filters=spec.filters,
                         area=spec.area,
                     ),
+                    location_context=location_context,
                 ),
             ]
         return []
@@ -412,7 +425,7 @@ class AbilityResolver:
         if not target_id:
             return []
         character = state.characters.get(target_id)
-        if character is not None and character.is_removed:
+        if character is not None and character.is_removed():
             return []
         return [target_id]
 
@@ -424,10 +437,16 @@ class AbilityResolver:
         owner: Any,
         spec: TargetSelector,
         alive_only: bool,
+        location_context: AbilityLocationContext | None,
     ) -> list[str]:
         if spec.scope != "any_area" and owner is None:
             return []
-        area_ids = self._resolve_scope_area_ids(state=state, owner=owner, spec=spec)
+        area_ids = self._resolve_scope_area_ids(
+            state=state,
+            owner=owner,
+            spec=spec,
+            location_context=location_context,
+        )
         targets: list[str] = []
         for ch in state.characters.values():
             if area_ids is not None and ch.area not in area_ids:
@@ -448,20 +467,25 @@ class AbilityResolver:
         state: GameState,
         owner: Any,
         spec: TargetSelector,
+        location_context: AbilityLocationContext | None,
     ) -> list[str]:
         if spec.scope in {"same_area", "initial_area", "adjacent_area", "diagonal_area"} and owner is None:
             return []
         if spec.scope == "same_area":
-            return [owner.area.value] if owner is not None else []
+            owner_area = self._effective_owner_area(owner, location_context)
+            return [owner_area.value] if owner_area is not None else []
         if spec.scope == "initial_area":
-            return [owner.initial_area.value] if owner is not None else []
+            owner_initial_area = self._effective_owner_initial_area(owner, location_context)
+            return [owner_initial_area.value] if owner_initial_area is not None else []
         if spec.scope == "any_area":
             return [area_id.value for area_id in state.board.areas]
         if spec.scope == "fixed_area":
             return [spec.area] if spec.area else []
         if owner is None:
             return []
-        current_area = owner.area
+        current_area = self._effective_owner_area(owner, location_context)
+        if current_area is None:
+            return []
         if spec.scope == "adjacent_area":
             if current_area == AreaId.FARAWAY:
                 return []
@@ -479,15 +503,18 @@ class AbilityResolver:
         state: GameState,
         owner: Any,
         spec: TargetSelector,
+        location_context: AbilityLocationContext | None,
     ) -> set[AreaId] | None:
         if spec.scope == "any_area":
             return None
         if owner is None:
             return set()
         if spec.scope == "same_area":
-            return {owner.area}
+            owner_area = self._effective_owner_area(owner, location_context)
+            return {owner_area} if owner_area is not None else set()
         if spec.scope == "initial_area":
-            return {owner.initial_area}
+            owner_initial_area = self._effective_owner_initial_area(owner, location_context)
+            return {owner_initial_area} if owner_initial_area is not None else set()
         if spec.scope == "fixed_area":
             if spec.area is None:
                 return set()
@@ -495,12 +522,13 @@ class AbilityResolver:
                 return {AreaId(spec.area)}
             except ValueError:
                 return set()
-        if owner.area == AreaId.FARAWAY:
+        owner_area = self._effective_owner_area(owner, location_context)
+        if owner_area is None or owner_area == AreaId.FARAWAY:
             return set()
         if spec.scope == "adjacent_area":
-            return set(state.board.get_all_adjacent(owner.area))
+            return set(state.board.get_all_adjacent(owner_area))
         if spec.scope == "diagonal_area":
-            diagonal = state.board.get_diagonal_adjacent(owner.area)
+            diagonal = state.board.get_diagonal_adjacent(owner_area)
             return {diagonal} if diagonal is not None else set()
         return set()
 
@@ -512,7 +540,7 @@ class AbilityResolver:
         spec: TargetSelector,
         alive_only: bool,
     ) -> bool:
-        if character.is_removed:
+        if character.is_removed():
             return False
         if spec.subject == "other_character" and character.character_id == owner_id:
             return False
@@ -563,6 +591,7 @@ class AbilityResolver:
         *,
         owner_id: str = "",
         other_id: str = "",
+        location_context: AbilityLocationContext | None = None,
     ) -> bool:
         """基础 Condition 求值；未知 condition_type 视为 False。"""
         if condition is None:
@@ -581,6 +610,7 @@ class AbilityResolver:
                     self._coerce_condition(item),
                     owner_id=owner_id,
                     other_id=other_id,
+                    location_context=location_context,
                 )
                 for item in raw_items
             ]
@@ -690,10 +720,22 @@ class AbilityResolver:
             )
             expected_area = str(params.get("value", ""))
             target = state.characters.get(target_id)
-            return bool(target is not None and target.area.value == expected_area)
+            target_area = self._effective_character_area(
+                state,
+                target_id,
+                owner_id=owner_id,
+                location_context=location_context,
+            )
+            return bool(target is not None and target_area is not None and target_area.value == expected_area)
 
         if cond_type == "token_check":
-            return self._evaluate_token_check(state, params, owner_id=owner_id, other_id=other_id)
+            return self._evaluate_token_check(
+                state,
+                params,
+                owner_id=owner_id,
+                other_id=other_id,
+                location_context=location_context,
+            )
 
         if cond_type == "identity_token_check":
             return self._evaluate_identity_token_check(state, params)
@@ -702,7 +744,12 @@ class AbilityResolver:
             return self._evaluate_identity_initial_area_board_token_check(state, params)
 
         if cond_type == "same_area_identity_token_check":
-            return self._evaluate_same_area_identity_token_check(state, params, owner_id=owner_id)
+            return self._evaluate_same_area_identity_token_check(
+                state,
+                params,
+                owner_id=owner_id,
+                location_context=location_context,
+            )
 
         if cond_type == "same_area_count":
             target_id = self._resolve_target_ref(
@@ -710,13 +757,25 @@ class AbilityResolver:
                 params.get("target", owner_id),
                 owner_id=owner_id,
                 other_id=other_id,
+                location_context=location_context,
             )
-            target = state.characters.get(target_id)
-            if target is None:
+            target_area = self._effective_character_area(
+                state,
+                target_id,
+                owner_id=owner_id,
+                location_context=location_context,
+            )
+            if target_area is None:
                 return False
             operator = str(params.get("operator", "=="))
             value = int(params.get("value", 0))
-            count = len(state.characters_in_area(target.area, alive_only=True))
+            count = len(
+                [
+                    character
+                    for character in state.characters.values()
+                    if character.is_active() and character.area == target_area
+                ]
+            )
             return _compare_number(count, operator, value)
 
         if cond_type == "loop_number_check":
@@ -771,7 +830,11 @@ class AbilityResolver:
                 continue
             if ability_type is not None and ability.ability_type != ability_type:
                 continue
-            if not self.evaluate_condition(state, ability.condition, owner_id=owner_id):
+            if not self._evaluate_condition_for_owner_contexts(
+                state,
+                ability.condition,
+                owner_id=owner_id,
+            ):
                 continue
             candidate = AbilityCandidate(
                 source_kind="derived",
@@ -903,12 +966,14 @@ class AbilityResolver:
         *,
         owner_id: str,
         other_id: str = "",
+        location_context: AbilityLocationContext | None = None,
     ) -> bool:
         target = self._resolve_target_ref(
             state,
             params.get("target", owner_id),
             owner_id=owner_id,
             other_id=other_id,
+            location_context=location_context,
         )
         token_name = params.get("token")
         if not isinstance(token_name, str):
@@ -953,7 +1018,7 @@ class AbilityResolver:
         value = int(params.get("value", 0))
 
         for ch in state.characters.values():
-            if ch.is_removed:
+            if ch.is_removed():
                 continue
             if ch.identity_id != identity_id:
                 continue
@@ -978,7 +1043,7 @@ class AbilityResolver:
         value = int(params.get("value", 0))
 
         for ch in state.characters.values():
-            if ch.is_removed:
+            if ch.is_removed():
                 continue
             if ch.identity_id != identity_id:
                 continue
@@ -995,9 +1060,15 @@ class AbilityResolver:
         params: dict[str, object],
         *,
         owner_id: str,
+        location_context: AbilityLocationContext | None = None,
     ) -> bool:
-        owner = state.characters.get(owner_id)
-        if owner is None:
+        owner_area = self._effective_character_area(
+            state,
+            owner_id,
+            owner_id=owner_id,
+            location_context=location_context,
+        )
+        if owner_area is None:
             return False
         identity_id = str(params.get("identity_id", ""))
         token_name = params.get("token")
@@ -1010,7 +1081,9 @@ class AbilityResolver:
         operator = str(params.get("operator", "=="))
         value = int(params.get("value", 0))
 
-        for ch in state.characters_in_area(owner.area, alive_only=True):
+        for ch in state.characters.values():
+            if not ch.is_active() or ch.area != owner_area:
+                continue
             if ch.identity_id != identity_id:
                 continue
             if _compare_number(ch.tokens.get(token_type), operator, value):
@@ -1036,6 +1109,7 @@ class AbilityResolver:
         *,
         owner_id: str,
         other_id: str = "",
+        location_context: AbilityLocationContext | None = None,
     ) -> str:
         selector = parse_target_selector(raw_target)
         if selector.ref == "self":
@@ -1052,8 +1126,87 @@ class AbilityResolver:
             selector=raw_target,
             condition_target=other_id,
             alive_only=False,
+            location_context=location_context,
         )
         return resolved[0] if len(resolved) == 1 else ""
+
+    def _evaluate_condition_for_owner_contexts(
+        self,
+        state: GameState,
+        condition: Condition | None,
+        *,
+        owner_id: str,
+        other_id: str = "",
+    ) -> bool:
+        for location_context in self._owner_location_context_variants(state, owner_id):
+            if self.evaluate_condition(
+                state,
+                condition,
+                owner_id=owner_id,
+                other_id=other_id,
+                location_context=location_context,
+            ):
+                return True
+        return False
+
+    def _owner_location_context_variants(
+        self,
+        state: GameState,
+        owner_id: str,
+    ) -> list[AbilityLocationContext | None]:
+        owner = state.characters.get(owner_id)
+        if owner is None:
+            return [None]
+        territory_area = getattr(owner, "territory_area", None)
+        if owner.character_id != "vip" or territory_area is None or territory_area == owner.area:
+            return [None]
+        return [
+            None,
+            AbilityLocationContext(
+                owner_area=territory_area,
+                owner_initial_area=owner.initial_area,
+            ),
+        ]
+
+    @staticmethod
+    def _effective_owner_area(
+        owner: Any,
+        location_context: AbilityLocationContext | None,
+    ) -> AreaId | None:
+        if owner is None:
+            return None
+        if location_context is not None and location_context.owner_area is not None:
+            return location_context.owner_area
+        return owner.area
+
+    @staticmethod
+    def _effective_owner_initial_area(
+        owner: Any,
+        location_context: AbilityLocationContext | None,
+    ) -> AreaId | None:
+        if owner is None:
+            return None
+        if location_context is not None and location_context.owner_initial_area is not None:
+            return location_context.owner_initial_area
+        return owner.initial_area
+
+    def _effective_character_area(
+        self,
+        state: GameState,
+        character_id: str,
+        *,
+        owner_id: str,
+        location_context: AbilityLocationContext | None,
+        use_initial_area: bool = False,
+    ) -> AreaId | None:
+        character = state.characters.get(character_id)
+        if character is None:
+            return None
+        if character_id == owner_id:
+            if use_initial_area:
+                return self._effective_owner_initial_area(character, location_context)
+            return self._effective_owner_area(character, location_context)
+        return character.initial_area if use_initial_area else character.area
 
 
 def _compare_number(left: int, operator: str, right: int) -> bool:

@@ -6,7 +6,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from engine.models.enums import GamePhase, TokenType
+from engine.models.enums import CharacterLifeState, GamePhase, TokenType
 from engine.event_bus import GameEvent, GameEventType
 from engine.display_names import character_name, identity_name, incident_name
 from ui.controllers.game_session_controller import GameSessionController
@@ -493,7 +493,7 @@ def test_test_mode_screen_shows_triggered_failure_condition(monkeypatch) -> None
                 character_id="friend",
                 identity_id="friend",
                 area="school",
-                is_alive=False,
+                life_state=CharacterLifeState.DEAD.value,
             ),
         ]
     )

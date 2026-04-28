@@ -23,7 +23,7 @@ from engine.display_names import (
     outcome_name,
     token_name,
 )
-from engine.models.enums import AreaId, PlayerRole, TokenType
+from engine.models.enums import AreaId, CharacterLifeState, PlayerRole, TokenType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
 
@@ -36,7 +36,7 @@ class VisibleCharacter:
     character_id: str
     name: str
     area: AreaId
-    is_alive: bool
+    life_state: CharacterLifeState
     tokens: dict[str, int]       # token_type -> count（全部可见）
     identity: str                # "???" 或已公开的身份名
     attributes: list[str]        # 属性标签（公开）
@@ -83,7 +83,7 @@ class Visibility:
                 character_id=ch.character_id,
                 name=ch.name,
                 area=ch.area,
-                is_alive=ch.is_alive,
+                life_state=ch.life_state,
                 tokens=Visibility._tokens_to_dict(ch.tokens),
                 identity=ch.identity_id,  # 剧作家可见全部身份
                 attributes=[a.value for a in ch.attributes],
@@ -116,7 +116,7 @@ class Visibility:
                 character_id=ch.character_id,
                 name=ch.name,
                 area=ch.area,
-                is_alive=ch.is_alive,
+                life_state=ch.life_state,
                 tokens=Visibility._tokens_to_dict(ch.tokens),
                 identity=identity,
                 attributes=[a.value for a in ch.attributes],

@@ -17,6 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from engine.models.ability import AbilityLocationContext
 from engine.models.enums import AbilityTiming, AreaId, CardType, DeathResult, EffectType, Outcome, TokenType, Trait
 from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.resolvers.ability_resolver import AbilityResolver
@@ -49,6 +50,7 @@ class Trigger:
     is_terminal: bool = False    # 是否为终局效果
     effects: list = field(default_factory=list)
     sequential: bool = False
+    location_context: AbilityLocationContext | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ class ScopedEffect:
 
     effect: Effect
     perpetrator_id: str = ""
+    location_context: AbilityLocationContext | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +90,8 @@ class AtomicResolver:
 
     def resolve(self, state: GameState, effects: list[Effect | ScopedEffect],
                 sequential: bool = False,
-                perpetrator_id: str = "") -> ResolutionResult:
+                perpetrator_id: str = "",
+                location_context: AbilityLocationContext | None = None) -> ResolutionResult:
         """
         执行一次原子结算。
 
@@ -98,8 +102,18 @@ class AtomicResolver:
             perpetrator_id: 事件当事人 ID，用于解析 same_area_* 等符号目标
         """
         if sequential:
-            return self._resolve_sequential(state, effects, perpetrator_id)
-        return self._resolve_simultaneous(state, effects, perpetrator_id)
+            return self._resolve_sequential(
+                state,
+                effects,
+                perpetrator_id,
+                location_context=location_context,
+            )
+        return self._resolve_simultaneous(
+            state,
+            effects,
+            perpetrator_id,
+            location_context=location_context,
+        )
 
     # ==================================================================
     # 同时生效结算
@@ -107,11 +121,13 @@ class AtomicResolver:
 
     def _resolve_simultaneous(self, state: GameState,
                               effects: list[Effect | ScopedEffect],
-                              perpetrator_id: str = "") -> ResolutionResult:
+                              perpetrator_id: str = "",
+                              location_context: AbilityLocationContext | None = None) -> ResolutionResult:
         planned_mutations = self._apply_effect_batch(
             state,
             effects,
             perpetrator_id=perpetrator_id,
+            location_context=location_context,
         )
 
         # ③ 触发：收集并处理链式效果
@@ -123,13 +139,19 @@ class AtomicResolver:
 
     def _resolve_sequential(self, state: GameState,
                             effects: list[Effect | ScopedEffect],
-                            perpetrator_id: str = "") -> ResolutionResult:
+                            perpetrator_id: str = "",
+                            location_context: AbilityLocationContext | None = None) -> ResolutionResult:
         all_mutations: list[Mutation] = []
         final_outcome = Outcome.NONE
 
         for effect in effects:
             # 每步独立走完三步法
-            sub_result = self._resolve_simultaneous(state, [effect], perpetrator_id)
+            sub_result = self._resolve_simultaneous(
+                state,
+                [effect],
+                perpetrator_id,
+                location_context=location_context,
+            )
             all_mutations.extend(sub_result.mutations)
 
             # 如果产生终局效果，记录但继续（后续步骤基于新状态）
@@ -146,31 +168,40 @@ class AtomicResolver:
         effect: Effect | ScopedEffect,
         *,
         default_perpetrator_id: str,
+        default_location_context: AbilityLocationContext | None,
     ) -> ScopedEffect:
         if isinstance(effect, ScopedEffect):
             return effect
-        return ScopedEffect(effect=effect, perpetrator_id=default_perpetrator_id)
+        return ScopedEffect(
+            effect=effect,
+            perpetrator_id=default_perpetrator_id,
+            location_context=default_location_context,
+        )
 
     # ==================================================================
     # 第一步：读 — 在快照上规划变更
     # ==================================================================
 
     def _resolve_target_ids(self, snapshot: GameState, target: Any,
-                            perpetrator_id: str) -> list[str]:
+                            perpetrator_id: str,
+                            location_context: AbilityLocationContext | None = None) -> list[str]:
         return self.ability_resolver.resolve_targets(
             snapshot,
             owner_id=perpetrator_id,
             selector=target,
             alive_only=True,
+            location_context=location_context,
         )
 
     def _plan_effect(self, snapshot: GameState, effect: Effect,
-                     perpetrator_id: str = "") -> list[Mutation]:
+                     perpetrator_id: str = "",
+                     location_context: AbilityLocationContext | None = None) -> list[Mutation]:
         """根据效果类型规划 mutations（不修改状态）"""
         if effect.condition is not None and not self.ability_resolver.evaluate_condition(
             snapshot,
             effect.condition,
             owner_id=perpetrator_id,
+            location_context=location_context,
         ):
             return []
         mutations = []
@@ -178,7 +209,12 @@ class AtomicResolver:
         match effect.effect_type:
 
             case EffectType.PLACE_TOKEN:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     mutations.append(Mutation(
                         mutation_type="token_change",
                         target_id=tid,
@@ -189,7 +225,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.REMOVE_TOKEN:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     mutations.append(Mutation(
                         mutation_type="token_change",
                         target_id=tid,
@@ -200,7 +241,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.REMOVE_ALL_TOKENS:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid in snapshot.characters:
                         ch = snapshot.characters[tid]
                         token_types = [effect.token_type] if effect.token_type else list(TokenType)
@@ -226,7 +272,12 @@ class AtomicResolver:
                 remaining = source.tokens.get(effect.token_type)
                 if remaining <= 0:
                     return mutations
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if remaining <= 0:
                         break
                     moved = min(effect.amount or 1, remaining)
@@ -242,7 +293,12 @@ class AtomicResolver:
                     remaining -= moved
 
             case EffectType.KILL_CHARACTER:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     mutations.append(Mutation(
                         mutation_type="character_death",
                         target_id=tid,
@@ -250,7 +306,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.REVIVE_CHARACTER:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid not in snapshot.characters:
                         continue
                     mutations.append(Mutation(
@@ -267,7 +328,12 @@ class AtomicResolver:
                     destination_area = AreaId(str(destination))
                 except ValueError:
                     return mutations
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid not in snapshot.characters:
                         continue
                     if not snapshot.can_character_enter_area(tid, destination_area):
@@ -279,7 +345,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.LIFT_FORBIDDEN_AREAS:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid not in snapshot.characters:
                         continue
                     mutations.append(Mutation(
@@ -317,7 +388,12 @@ class AtomicResolver:
                 ))
 
             case EffectType.REVEAL_IDENTITY:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     mutations.append(Mutation(
                         mutation_type="reveal_identity",
                         target_id=tid,
@@ -335,7 +411,12 @@ class AtomicResolver:
 
             case EffectType.CHANGE_IDENTITY:
                 identity_id = str(effect.value or "")
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     mutations.append(Mutation(
                         mutation_type="identity_change",
                         target_id=tid,
@@ -347,7 +428,14 @@ class AtomicResolver:
                     card_type = CardType(str(effect.value or ""))
                 except ValueError:
                     return mutations
-                target_ids = set(self._resolve_target_ids(snapshot, effect.target, perpetrator_id))
+                target_ids = set(
+                    self._resolve_target_ids(
+                        snapshot,
+                        effect.target,
+                        perpetrator_id,
+                        location_context,
+                    )
+                )
                 for index, placement in enumerate(snapshot.placed_cards):
                     if placement.nullified:
                         continue
@@ -387,7 +475,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.REMOVE_CHARACTER:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid not in snapshot.characters:
                         continue
                     mutations.append(Mutation(
@@ -397,7 +490,12 @@ class AtomicResolver:
                     ))
 
             case EffectType.SUPPRESS_INCIDENT:
-                for tid in self._resolve_target_ids(snapshot, effect.target, perpetrator_id):
+                for tid in self._resolve_target_ids(
+                    snapshot,
+                    effect.target,
+                    perpetrator_id,
+                    location_context,
+                ):
                     if tid not in snapshot.characters:
                         continue
                     mutations.append(Mutation(
@@ -496,13 +594,12 @@ class AtomicResolver:
                 cid = mutation.target_id
                 if cid in state.characters:
                     ch = state.characters[cid]
-                    ch.is_alive = True
-                    ch.is_removed = False
+                    ch.mark_alive()
 
             case "character_remove":
                 cid = mutation.target_id
                 if cid in state.characters:
-                    state.characters[cid].is_removed = True
+                    state.characters[cid].mark_removed()
                     self.event_bus.emit(GameEvent(
                         GameEventType.CHARACTER_REMOVED,
                         {"character_id": cid},
@@ -597,6 +694,7 @@ class AtomicResolver:
         effects: list[Effect | ScopedEffect],
         *,
         perpetrator_id: str = "",
+        location_context: AbilityLocationContext | None = None,
     ) -> list[Mutation]:
         """仅执行读写两步，不进入触发处理。"""
         settle_persistent_effects(state)
@@ -606,9 +704,15 @@ class AtomicResolver:
             scoped = self._coerce_scoped_effect(
                 effect,
                 default_perpetrator_id=perpetrator_id,
+                default_location_context=location_context,
             )
             planned_mutations.extend(
-                self._plan_effect(snapshot, scoped.effect, scoped.perpetrator_id)
+                self._plan_effect(
+                    snapshot,
+                    scoped.effect,
+                    scoped.perpetrator_id,
+                    scoped.location_context,
+                )
             )
 
         for mutation in planned_mutations:
@@ -649,6 +753,7 @@ class AtomicResolver:
                         state,
                         effect_batch,
                         perpetrator_id=trigger.source_id,
+                        location_context=trigger.location_context,
                     )
                     for sm in sub_mutations:
                         new_triggers = self._collect_triggers_from_mutation(sm, state)
