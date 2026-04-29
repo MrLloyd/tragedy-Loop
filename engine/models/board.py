@@ -65,6 +65,12 @@ DEFAULT_LAYOUT: dict[AreaId, tuple[int, int]] = {
     AreaId.CITY:     (1, 0),
     AreaId.SCHOOL:   (1, 1),
 }
+_CLOCKWISE_ORDER: tuple[AreaId, ...] = (
+    AreaId.HOSPITAL,
+    AreaId.SHRINE,
+    AreaId.SCHOOL,
+    AreaId.CITY,
+)
 
 
 @dataclass
@@ -126,6 +132,24 @@ class BoardState:
     def is_adjacent(self, a: AreaId, b: AreaId) -> bool:
         """判断两个区域是否相邻（横或竖）"""
         return b in self.get_all_adjacent(a)
+
+    def get_clockwise_adjacent(self, area_id: AreaId) -> Optional[AreaId]:
+        """顺时针相邻（仅 2x2 版图有效，远方无相邻）"""
+        if area_id == AreaId.FARAWAY:
+            return None
+        if area_id not in _CLOCKWISE_ORDER:
+            return None
+        index = _CLOCKWISE_ORDER.index(area_id)
+        return _CLOCKWISE_ORDER[(index + 1) % len(_CLOCKWISE_ORDER)]
+
+    def get_counterclockwise_adjacent(self, area_id: AreaId) -> Optional[AreaId]:
+        """逆时针相邻（仅 2x2 版图有效，远方无相邻）"""
+        if area_id == AreaId.FARAWAY:
+            return None
+        if area_id not in _CLOCKWISE_ORDER:
+            return None
+        index = _CLOCKWISE_ORDER.index(area_id)
+        return _CLOCKWISE_ORDER[(index - 1) % len(_CLOCKWISE_ORDER)]
 
     # ---- 状态操作 ----
 

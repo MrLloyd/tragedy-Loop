@@ -18,6 +18,14 @@ from engine.models.script import ModuleDef
 from engine.validation.common import ValidationIssue
 
 _SPECIAL_SCRIPT_CREATION_IDENTITY_CHARACTER_IDS = {"outsider", "copycat"}
+_HERMIT_CHARACTER_ID = "hermit"
+_IGNORE_GOODWILL_TRAITS = frozenset(
+    {
+        Trait.IGNORE_GOODWILL,
+        Trait.MUST_IGNORE_GOODWILL,
+        Trait.PUPPET_IGNORE_GOODWILL,
+    }
+)
 
 
 @dataclass
@@ -102,6 +110,22 @@ def validate_basic_script(
                 ValidationIssue(
                     f"{path}.entry_day",
                     f"{character_def.name} cannot set entry_day",
+                )
+            )
+        hermit_x = int(getattr(setup, "hermit_x", 0) or 0)
+        if setup.character_id == _HERMIT_CHARACTER_ID:
+            if hermit_x < 0:
+                issues.append(
+                    ValidationIssue(
+                        f"{path}.hermit_x",
+                        f"{character_def.name} requires hermit_x >= 0",
+                    )
+                )
+        elif hermit_x != 0:
+            issues.append(
+                ValidationIssue(
+                    f"{path}.hermit_x",
+                    f"{character_def.name} cannot set hermit_x",
                 )
             )
         if setup.character_id in ENTRY_LOOP_CHARACTER_IDS:
@@ -248,7 +272,7 @@ def validate_script_creation_constraints(
 
         if _has_script_constraint(char_def, "cannot_ignore_goodwill_identity"):
             traits = identity_def.traits if identity_def is not None else set()
-            if Trait.IGNORE_GOODWILL in traits or Trait.MUST_IGNORE_GOODWILL in traits:
+            if traits & _IGNORE_GOODWILL_TRAITS:
                 issues.append(
                     ValidationIssue(
                         f"{path}.identity_id",

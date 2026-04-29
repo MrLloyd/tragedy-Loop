@@ -251,6 +251,26 @@ def test_build_game_state_from_module_supports_test_instance_import() -> None:
     assert state.script.incident_public[0]["day"] == 1
 
 
+def test_build_game_state_from_module_syncs_temp_worker_alt_identity_to_temp_worker_setup() -> None:
+    setups = [
+        CharacterSetup(character_id="temp_worker", identity_id="mastermind", is_incident_perpetrator=True),
+        CharacterSetup(character_id="temp_worker_alt", identity_id="friend", is_incident_perpetrator=False),
+    ]
+
+    state = build_game_state_from_module(
+        "first_steps",
+        character_setups=setups,
+        incidents=[],
+        skip_script_validation=True,
+    )
+
+    assert state.characters["temp_worker_alt"].identity_id == "mastermind"
+    assert state.characters["temp_worker_alt"].original_identity_id == "mastermind"
+    by_id = {setup.character_id: setup for setup in state.script.private_table.characters}
+    assert by_id["temp_worker_alt"].identity_id == "mastermind"
+    assert by_id["temp_worker_alt"].is_incident_perpetrator is True
+
+
 def test_build_script_setup_context_hides_disabled_streamer() -> None:
     context = build_script_setup_context("first_steps")
 
@@ -258,6 +278,9 @@ def test_build_script_setup_context_hides_disabled_streamer() -> None:
     assert "streamer" not in context["character_initial_area_specs"]
     assert context["entry_loop_character_ids"] == ["deity"]
     assert context["entry_day_character_ids"] == ["transfer_student"]
+    assert context["hermit_x_character_ids"] == ["hermit"]
+    assert context["character_hermit_x_specs"]["hermit"]["required"] is True
+    assert context["character_hermit_x_specs"]["hermit"]["min"] == 0
 
 
 def test_build_game_state_from_module_applies_script_selected_initial_area() -> None:

@@ -27,6 +27,7 @@ KNOWN_CONDITION_TYPES = frozenset(
         "all_of",
         "any_of",
         "token_check",
+        "token_total_check",
         "identity_token_check",
         "identity_initial_area_board_token_check",
         "same_area_identity_token_check",

@@ -7,7 +7,7 @@ from engine.models.ability import Ability
 from engine.models.cards import ActionCard, CardPlacement
 from engine.models.character import CharacterState
 from engine.models.effects import Effect
-from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, DeathResult, EffectType, GamePhase, Outcome, PlayerRole, TokenType
+from engine.models.enums import AbilityTiming, AbilityType, AreaId, CardType, CharacterLifeState, DeathResult, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
 from engine.models.identity import IdentityDef
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
@@ -122,6 +122,77 @@ def test_entry_sync_handles_deity_loop_and_transfer_student_day_gates() -> None:
     assert controller.state.characters["transfer_student"].is_active()
 
 
+def test_turn_start_sync_spawns_temp_worker_alt_in_city_when_temp_worker_is_dead() -> None:
+    controller = GameController()
+    controller.state.characters["temp_worker"] = CharacterState(
+        character_id="temp_worker",
+        name="临时工",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+    controller.state.characters["temp_worker_alt"] = CharacterState(
+        character_id="temp_worker_alt",
+        name="临时工？",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.REMOVED,
+    )
+
+    controller._sync_entry_characters_for_phase(GamePhase.TURN_START)
+
+    assert controller.state.characters["temp_worker_alt"].is_active()
+    assert controller.state.characters["temp_worker_alt"].area == AreaId.CITY
+
+
+def test_turn_start_sync_does_not_spawn_temp_worker_alt_when_temp_worker_is_alive() -> None:
+    controller = GameController()
+    controller.state.characters["temp_worker"] = CharacterState(
+        character_id="temp_worker",
+        name="临时工",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.ALIVE,
+    )
+    controller.state.characters["temp_worker_alt"] = CharacterState(
+        character_id="temp_worker_alt",
+        name="临时工？",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.REMOVED,
+    )
+
+    controller._sync_entry_characters_for_phase(GamePhase.TURN_START)
+
+    assert controller.state.characters["temp_worker_alt"].is_removed()
+    assert controller.state.characters["temp_worker_alt"].area == AreaId.HOSPITAL
+
+
+def test_turn_start_sync_skips_temp_worker_alt_spawn_when_alt_missing() -> None:
+    controller = GameController()
+    controller.state.characters["temp_worker"] = CharacterState(
+        character_id="temp_worker",
+        name="临时工",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+
+    controller._sync_entry_characters_for_phase(GamePhase.TURN_START)
+
+    assert controller.state.characters["temp_worker"].is_dead()
+
+
 def test_loop_start_handler_executes_friend_reveal_effect() -> None:
     bus, resolver = _resolver_bundle()
     handler = LoopStartHandler(bus, resolver)
@@ -226,6 +297,262 @@ def test_loop_start_handler_executes_black_cat_character_trait_ability() -> None
 
     assert isinstance(signal, PhaseComplete)
     assert state.board.areas[AreaId.SHRINE].tokens.get(TokenType.INTRIGUE) == 1
+
+
+def test_loop_start_handler_executes_scholar_character_trait_ability_with_token_choice() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = LoopStartHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.characters["scholar"] = instantiate_character_state(
+        CharacterSetup(character_id="scholar", identity_id="commoner"),
+        defs,
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_ability_target"
+    assert set(signal.options) == {"goodwill", "paranoia", "intrigue"}
+
+    result = signal.callback("paranoia")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["scholar"].tokens.get(TokenType.PARANOIA) == 1
+    assert state.characters["scholar"].tokens.get(TokenType.GOODWILL) == 0
+    assert state.characters["scholar"].tokens.get(TokenType.INTRIGUE) == 0
+
+
+def test_playwright_mandatory_identity_runs_before_character_trait() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, resolver)
+    state = GameState()
+    _install_identity(
+        state,
+        "clerk_identity",
+        [
+            Ability(
+                ability_id="identity_remove_paranoia",
+                name="身份强制：移除同区域1枚不安",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.REMOVE_TOKEN,
+                        target={"scope": "same_area", "subject": "character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=1,
+                    ),
+                ],
+            )
+        ],
+    )
+    state.characters["sacred_tree"] = CharacterState(
+        character_id="sacred_tree",
+        name="御神木",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        character_trait_abilities=[
+            Ability(
+                ability_id="character_trait_ability:sacred_tree:forced_move_paranoia",
+                name="御神木强制特性：转移不安",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.MOVE_TOKEN,
+                        target={"scope": "same_area", "subject": "other_character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=1,
+                    )
+                ],
+            )
+        ],
+    )
+    state.characters["sacred_tree"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="clerk_identity",
+        original_identity_id="clerk_identity",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_ability_target"
+    result = signal.callback("sacred_tree")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["sacred_tree"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["clerk"].tokens.get(TokenType.PARANOIA) == 0
+
+
+def test_playwright_mandatory_identity_targeting_clerk_does_not_remove_moved_paranoia() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, resolver)
+    state = GameState()
+    _install_identity(
+        state,
+        "clerk_identity",
+        [
+            Ability(
+                ability_id="identity_remove_paranoia",
+                name="身份强制：移除同区域1枚不安",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.REMOVE_TOKEN,
+                        target={"scope": "same_area", "subject": "character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=1,
+                    ),
+                ],
+            )
+        ],
+    )
+    state.characters["sacred_tree"] = CharacterState(
+        character_id="sacred_tree",
+        name="御神木",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        character_trait_abilities=[
+            Ability(
+                ability_id="character_trait_ability:sacred_tree:forced_move_paranoia",
+                name="御神木强制特性：转移不安",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.PLAYWRIGHT_ABILITY,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.MOVE_TOKEN,
+                        target={"scope": "same_area", "subject": "other_character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=1,
+                    )
+                ],
+            )
+        ],
+    )
+    state.characters["sacred_tree"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="clerk_identity",
+        original_identity_id="clerk_identity",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_ability_target"
+    result = signal.callback("clerk")
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["sacred_tree"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["clerk"].tokens.get(TokenType.PARANOIA) == 1
+
+
+def test_protagonist_can_declare_sacred_tree_trait_even_with_puppet_ignore_goodwill() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.identity_defs["puppet_ignore_identity"] = IdentityDef(
+        identity_id="puppet_ignore_identity",
+        name="傀儡无视友好身份",
+        module="test",
+        traits={Trait.PUPPET_IGNORE_GOODWILL},
+    )
+    state.characters["sacred_tree"] = instantiate_character_state(
+        CharacterSetup(character_id="sacred_tree", identity_id="puppet_ignore_identity"),
+        defs,
+    )
+    state.characters["sacred_tree"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员A",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["staff"] = CharacterState(
+        character_id="staff",
+        name="职员B",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "character_trait_ability:sacred_tree:protagonist_move_token")
+    target_wait = signal.callback(choice)
+    assert isinstance(target_wait, WaitForInput)
+    assert target_wait.input_type == "choose_ability_target"
+    assert set(target_wait.options) == {"clerk", "staff"}
+
+    result = target_wait.callback("clerk")
+
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert state.characters["sacred_tree"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["clerk"].tokens.get(TokenType.PARANOIA) == 1
+    assert state.characters["staff"].tokens.get(TokenType.PARANOIA) == 0
+
+
+def test_playwright_mandatory_executes_sacred_tree_trait_when_puppet_ignore_goodwill() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = PlaywrightAbilityHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.identity_defs["puppet_ignore_identity"] = IdentityDef(
+        identity_id="puppet_ignore_identity",
+        name="傀儡无视友好身份",
+        module="test",
+        traits={Trait.PUPPET_IGNORE_GOODWILL},
+    )
+    state.characters["sacred_tree"] = instantiate_character_state(
+        CharacterSetup(character_id="sacred_tree", identity_id="puppet_ignore_identity"),
+        defs,
+    )
+    state.characters["sacred_tree"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员A",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["staff"] = CharacterState(
+        character_id="staff",
+        name="职员B",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_ability_target"
+    assert set(signal.options) == {"clerk", "staff"}
+    result = signal.callback("clerk")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["sacred_tree"].tokens.get(TokenType.PARANOIA) == 0
+    assert state.characters["clerk"].tokens.get(TokenType.PARANOIA) == 1
+    assert state.characters["staff"].tokens.get(TokenType.PARANOIA) == 0
 
 
 def test_playwright_ability_handler_waits_for_servant_follow_choice() -> None:
@@ -890,7 +1217,7 @@ def test_protagonist_ability_refuse_consumes_once_per_loop_without_spending_good
     assert any(event.event_type == GameEventType.ABILITY_REFUSED for event in bus.log)
 
 
-def test_protagonist_ability_ignores_refusal_when_identity_ignores_goodwill() -> None:
+def test_protagonist_ability_offers_refusal_choice_when_identity_ignores_goodwill() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
     state = GameState()
@@ -914,7 +1241,36 @@ def test_protagonist_ability_ignores_refusal_when_identity_ignores_goodwill() ->
     follow_up = signal.callback(choice)
 
     assert isinstance(follow_up, WaitForInput)
+    assert follow_up.input_type == "respond_goodwill_ability"
     assert state.characters["killer"].tokens.get(TokenType.GOODWILL) == 1
+
+
+def test_protagonist_ability_must_refuse_when_identity_must_ignore_goodwill() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    state.characters["cultist"] = CharacterState(
+        character_id="cultist",
+        name="邪教徒",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="cultist",
+        original_identity_id="cultist",
+        goodwill_ability_texts=["能力1", "", "", ""],
+        goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
+        goodwill_ability_once_per_loop=[True],
+    )
+    state.characters["cultist"].tokens.add(TokenType.GOODWILL, 1)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    choice = next(option for option in signal.options if getattr(option, "ability", None) is not None)
+    follow_up = signal.callback(choice)
+
+    assert isinstance(follow_up, PhaseComplete)
+    assert state.characters["cultist"].tokens.get(TokenType.GOODWILL) == 1
+    assert any(event.event_type == GameEventType.ABILITY_REFUSED for event in bus.log)
 
 
 def test_ai_goodwill_uses_public_incident_and_does_not_mark_incident_occurred() -> None:
@@ -963,6 +1319,9 @@ def test_ai_goodwill_uses_public_incident_and_does_not_mark_incident_occurred() 
 
     public_wait = signal.callback(_ability_choice(signal, "goodwill:ai:1"))
     assert isinstance(public_wait, WaitForInput)
+    if public_wait.input_type == "respond_goodwill_ability":
+        public_wait = public_wait.callback("allow")
+        assert isinstance(public_wait, WaitForInput)
     assert public_wait.input_type == "choose_public_incident"
     assert public_wait.player == "protagonist_0"
     assert len(public_wait.options) == 1
@@ -1317,6 +1676,148 @@ def test_turn_end_handler_executes_mandatory_then_optional() -> None:
     assert isinstance(signal, WaitForInput)
     assert state.characters["victim"].life_state == CharacterLifeState.DEAD
     assert signal.input_type == "choose_turn_end_ability"
+
+
+def test_temp_worker_turn_end_pre_mandatory_kills_self_when_total_tokens_at_least_three() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.characters["temp_worker"] = instantiate_character_state(
+        CharacterSetup(character_id="temp_worker", identity_id="平民"),
+        defs,
+    )
+    state.characters["temp_worker"].tokens.add(TokenType.GOODWILL, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.INTRIGUE, 1)
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["temp_worker"].life_state == CharacterLifeState.DEAD
+
+
+def test_temp_worker_turn_end_pre_mandatory_does_not_kill_self_when_total_tokens_below_three() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.characters["temp_worker"] = instantiate_character_state(
+        CharacterSetup(character_id="temp_worker", identity_id="平民"),
+        defs,
+    )
+    state.characters["temp_worker"].tokens.add(TokenType.GOODWILL, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.PARANOIA, 1)
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["temp_worker"].life_state == CharacterLifeState.ALIVE
+
+
+def test_turn_end_recollects_non_trait_mandatory_after_temp_worker_pre_mandatory_death() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
+    defs = load_character_defs()
+    state.characters["temp_worker"] = instantiate_character_state(
+        CharacterSetup(character_id="temp_worker", identity_id="平民"),
+        defs,
+    )
+    state.characters["temp_worker"].area = AreaId.SHRINE
+    state.characters["temp_worker"].initial_area = AreaId.SHRINE
+    state.characters["temp_worker"].tokens.add(TokenType.GOODWILL, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.INTRIGUE, 1)
+    state.characters["serial"] = CharacterState(
+        character_id="serial",
+        name="杀人狂",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="serial_killer",
+        original_identity_id="serial_killer",
+    )
+    state.characters["victim"] = CharacterState(
+        character_id="victim",
+        name="牺牲者",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["temp_worker"].life_state == CharacterLifeState.DEAD
+    assert state.characters["victim"].life_state == CharacterLifeState.DEAD
+    assert state.characters["serial"].life_state == CharacterLifeState.ALIVE
+    assert any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "serial_killer_turn_end_kill_lone_target"
+        for event in bus.log
+    )
+    assert not any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "character_trait_ability:temp_worker:turn_end_kill_when_token_total_ge_3"
+        for event in bus.log
+    )
+
+
+def test_temp_worker_pre_mandatory_death_happens_before_turn_end_mandatory_target_selection() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = TurnEndHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    _install_identity(
+        state,
+        "clerk_turn_end_mandatory",
+        [
+            Ability(
+                ability_id="clerk_turn_end_mandatory_place_intrigue",
+                name="职员回合结束强制：放置密谋",
+                ability_type=AbilityType.MANDATORY,
+                timing=AbilityTiming.TURN_END,
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target={"scope": "same_area", "subject": "character"},
+                        token_type=TokenType.INTRIGUE,
+                        amount=1,
+                    )
+                ],
+            )
+        ],
+    )
+    state.characters["temp_worker"] = instantiate_character_state(
+        CharacterSetup(character_id="temp_worker", identity_id="平民"),
+        defs,
+    )
+    state.characters["temp_worker"].area = AreaId.SHRINE
+    state.characters["temp_worker"].initial_area = AreaId.SHRINE
+    state.characters["temp_worker"].tokens.add(TokenType.GOODWILL, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.PARANOIA, 1)
+    state.characters["temp_worker"].tokens.add(TokenType.INTRIGUE, 1)
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="clerk_turn_end_mandatory",
+        original_identity_id="clerk_turn_end_mandatory",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["temp_worker"].life_state == CharacterLifeState.DEAD
+    assert state.characters["clerk"].tokens.get(TokenType.INTRIGUE) == 1
+    assert any(
+        event.event_type == GameEventType.ABILITY_DECLARED
+        and event.data.get("ability_id") == "clerk_turn_end_mandatory_place_intrigue"
+        for event in bus.log
+    )
 
 
 def test_killer_turn_end_ability_kills_key_person_and_forces_loop_end() -> None:

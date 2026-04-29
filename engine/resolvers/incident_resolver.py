@@ -16,8 +16,9 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from engine.event_bus import GameEvent, GameEventType
+from engine.models.ability import AbilityLocationContext
 from engine.models.effects import Effect
-from engine.models.enums import EffectType, Outcome, TokenType
+from engine.models.enums import AreaId, EffectType, Outcome, TokenType
 from engine.models.incident import IncidentPublicResult
 from engine.models.selectors import (
     area_choice_selector,
@@ -104,8 +105,14 @@ class IncidentResolver:
             schedule,
             incident_def,
         )
+        location_context = self._incident_location_context(state, schedule)
 
-        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
+        if self.next_runtime_choice(
+            state,
+            schedule,
+            effective_incident_def,
+            location_context=location_context,
+        ) is not None:
             resolution.public_result = self._build_public_result(
                 state,
                 schedule,
@@ -115,18 +122,18 @@ class IncidentResolver:
             self._record_public_result(state, resolution.public_result)
             return resolution
 
-        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
-        result = self.atomic_resolver.resolve(
+        repeat_count = self._incident_effect_repeat_count(state, schedule)
+        effects_result = self._resolve_incident_effects(
             state,
-            effects,
-            sequential=effective_incident_def.sequential,
-            perpetrator_id=schedule.perpetrator_id,
+            schedule,
+            effective_incident_def,
+            repeat_count=repeat_count,
+            location_context=location_context,
             servant_follow_choices=servant_follow_choices,
         )
-
-        resolution.mutations = result.mutations
-        resolution.outcome = result.outcome
-        resolution.has_phenomenon = len(result.mutations) > 0
+        resolution.mutations = effects_result.mutations
+        resolution.outcome = effects_result.outcome
+        resolution.has_phenomenon = effects_result.has_phenomenon
         resolution.public_result = self._build_public_result(
             state,
             schedule,
@@ -155,22 +162,28 @@ class IncidentResolver:
             schedule,
             resolved_incident_def,
         )
+        location_context = self._incident_location_context(state, schedule)
 
-        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
+        if self.next_runtime_choice(
+            state,
+            schedule,
+            effective_incident_def,
+            location_context=location_context,
+        ) is not None:
             return resolution
 
-        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
-        result = self.atomic_resolver.resolve(
+        repeat_count = self._incident_effect_repeat_count(state, schedule)
+        effects_result = self._resolve_incident_effects(
             state,
-            effects,
-            sequential=effective_incident_def.sequential,
-            perpetrator_id=schedule.perpetrator_id,
+            schedule,
+            effective_incident_def,
+            repeat_count=repeat_count,
+            location_context=location_context,
             servant_follow_choices=servant_follow_choices,
         )
-
-        resolution.mutations = result.mutations
-        resolution.outcome = result.outcome
-        resolution.has_phenomenon = len(result.mutations) > 0
+        resolution.mutations = effects_result.mutations
+        resolution.outcome = effects_result.outcome
+        resolution.has_phenomenon = effects_result.has_phenomenon
         return resolution
 
     def next_servant_follow_choice(
@@ -190,14 +203,26 @@ class IncidentResolver:
             schedule,
             incident_def,
         )
-        if self.next_runtime_choice(state, schedule, effective_incident_def) is not None:
+        location_context = self._incident_location_context(state, schedule)
+        if self.next_runtime_choice(
+            state,
+            schedule,
+            effective_incident_def,
+            location_context=location_context,
+        ) is not None:
             return None
-        effects = self._materialize_effects(state, schedule, effective_incident_def.effects)
+        effects = self._materialize_effects(
+            state,
+            schedule,
+            effective_incident_def.effects,
+            location_context=location_context,
+        )
         return self.atomic_resolver.next_servant_follow_choice(
             state,
             effects,
             sequential=effective_incident_def.sequential,
             perpetrator_id=schedule.perpetrator_id,
+            location_context=location_context,
             servant_follow_choices=servant_follow_choices,
         )
 
@@ -269,10 +294,32 @@ class IncidentResolver:
     ) -> int:
         """事件触发阈值；默认使用当事人不安限度，预留事件/身份修正入口。"""
         perpetrator = state.characters[schedule.perpetrator_id]
-        threshold = perpetrator.paranoia_limit
+        threshold = self._incident_paranoia_limit(state, schedule, perpetrator)
         if incident_def is not None:
-            threshold += incident_def.modifies_paranoia_limit
+            repeat_count = self._incident_effect_repeat_count(state, schedule)
+            threshold += incident_def.modifies_paranoia_limit * repeat_count
         return threshold
+
+    def _incident_paranoia_limit(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        perpetrator: Any,
+    ) -> int:
+        if perpetrator.character_id != "hermit":
+            return int(perpetrator.paranoia_limit)
+        script_x = self._scripted_hermit_x(state, schedule.perpetrator_id)
+        if script_x is not None:
+            return script_x
+        return int(perpetrator.paranoia_limit)
+
+    @staticmethod
+    def _scripted_hermit_x(state: GameState, character_id: str) -> int | None:
+        for setup in state.script.private_table.characters:
+            if setup.character_id != character_id:
+                continue
+            return int(getattr(setup, "hermit_x", 0) or 0)
+        return None
 
     def _incident_def_with_perpetrator_overrides(
         self,
@@ -297,6 +344,65 @@ class IncidentResolver:
             )
 
         return incident_def
+
+    @staticmethod
+    def _incident_effect_repeat_count(state: GameState, schedule: IncidentSchedule) -> int:
+        perpetrator = state.characters.get(schedule.perpetrator_id)
+        if perpetrator is not None and perpetrator.character_id == "cult_leader":
+            return 2
+        return 1
+
+    def _resolve_incident_effects(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        incident_def: IncidentDef,
+        *,
+        repeat_count: int,
+        location_context: AbilityLocationContext | None,
+        servant_follow_choices: dict[str, str] | None,
+    ) -> IncidentResolution:
+        merged = IncidentResolution(schedule=schedule, incident_def=incident_def)
+        for _ in range(max(1, repeat_count)):
+            if incident_def.ex_gauge_increment != 0:
+                ex_result = self.atomic_resolver.resolve(
+                    state,
+                    [
+                        Effect(
+                            effect_type=EffectType.MODIFY_EX_GAUGE,
+                            value=incident_def.ex_gauge_increment,
+                        )
+                    ],
+                    perpetrator_id=schedule.perpetrator_id,
+                    location_context=location_context,
+                )
+                merged.mutations.extend(ex_result.mutations)
+                merged.has_phenomenon = merged.has_phenomenon or bool(ex_result.mutations)
+                if merged.outcome == Outcome.NONE:
+                    merged.outcome = ex_result.outcome
+
+            effects = self._materialize_effects(
+                state,
+                schedule,
+                incident_def.effects,
+                location_context=location_context,
+            )
+            result = self.atomic_resolver.resolve(
+                state,
+                effects,
+                sequential=incident_def.sequential,
+                perpetrator_id=schedule.perpetrator_id,
+                location_context=location_context,
+                servant_follow_choices=servant_follow_choices,
+            )
+            merged.mutations.extend(result.mutations)
+            merged.has_phenomenon = merged.has_phenomenon or bool(result.mutations)
+            if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
+                merged.outcome = result.outcome
+                break
+            if merged.outcome == Outcome.NONE:
+                merged.outcome = result.outcome
+        return merged
 
     def _mark_occurred(self, state: GameState, schedule: IncidentSchedule) -> None:
         schedule.occurred = True
@@ -337,6 +443,8 @@ class IncidentResolver:
         state: GameState,
         schedule: IncidentSchedule,
         incident_def: IncidentDef,
+        *,
+        location_context: AbilityLocationContext | None = None,
     ) -> tuple[str, list[str]] | None:
         target_selectors: deque[Any] = deque(schedule.target_selectors)
         character_choices: deque[str] = deque(schedule.target_character_ids)
@@ -352,6 +460,7 @@ class IncidentResolver:
                     effect,
                     selector=effect.target,
                     chosen_characters=chosen_characters,
+                    location_context=location_context,
                 )
                 selected_character = self._consume_matching_target_choice(
                     target_selectors,
@@ -370,6 +479,7 @@ class IncidentResolver:
                     schedule,
                     effect,
                     chosen_characters=chosen_characters,
+                    location_context=location_context,
                 )
                 selected_area = self._consume_matching_target_choice(
                     target_selectors,
@@ -393,6 +503,8 @@ class IncidentResolver:
         state: GameState,
         schedule: IncidentSchedule,
         effects: list[Effect],
+        *,
+        location_context: AbilityLocationContext | None = None,
     ) -> list[Effect]:
         target_selectors: deque[Any] = deque(schedule.target_selectors)
         character_choices: deque[str] = deque(schedule.target_character_ids)
@@ -413,6 +525,7 @@ class IncidentResolver:
                 target_selectors=target_selectors,
                 character_choices=character_choices,
                 chosen_characters=chosen_characters,
+                location_context=location_context,
             )
             resolved_target_character = updated.target if isinstance(updated.target, str) and updated.target in state.characters else None
             updated.value = self._resolve_effect_value(
@@ -426,6 +539,7 @@ class IncidentResolver:
                     *chosen_characters,
                     *([resolved_target_character] if resolved_target_character is not None else []),
                 ],
+                location_context=location_context,
             )
             if chosen_token_type is not None:
                 updated.token_type = chosen_token_type
@@ -446,6 +560,7 @@ class IncidentResolver:
         target_selectors: deque[Any],
         character_choices: deque[str],
         chosen_characters: list[str],
+        location_context: AbilityLocationContext | None,
     ) -> Any:
         selector = effect.target
         if not selector_is_character_choice(selector):
@@ -457,6 +572,7 @@ class IncidentResolver:
             effect,
             selector=selector,
             chosen_characters=chosen_characters,
+            location_context=location_context,
         )
         if not candidates:
             return {"ref": "none"}
@@ -482,14 +598,16 @@ class IncidentResolver:
         area_choices: deque[str],
         chosen_token_type: TokenType | None,
         chosen_characters: list[str],
+        location_context: AbilityLocationContext | None,
     ) -> object:
         if effect.effect_type.name == "MOVE_CHARACTER" and selector_requires_choice(effect.value):
             candidates = self._resolve_move_area_candidates(
                 state,
                 schedule,
-                    effect,
-                    chosen_characters=chosen_characters,
-                )
+                effect,
+                chosen_characters=chosen_characters,
+                location_context=location_context,
+            )
             scripted_choice = self._peek_matching_target_choice(
                 target_selectors,
                 legacy_choices=area_choices,
@@ -526,6 +644,7 @@ class IncidentResolver:
         *,
         selector: str,
         chosen_characters: list[str],
+        location_context: AbilityLocationContext | None,
     ) -> list[str]:
         owner_id = schedule.perpetrator_id
         if parse_target_selector(selector).ref == "another_character":
@@ -535,6 +654,7 @@ class IncidentResolver:
                 state,
                 owner_id=owner_id,
                 selector={"scope": "any_area", "subject": "character"},
+                location_context=location_context,
             )
             if chosen_characters:
                 base_candidates = [cid for cid in base_candidates if cid != chosen_characters[-1]]
@@ -543,6 +663,7 @@ class IncidentResolver:
                 state,
                 owner_id=owner_id,
                 selector=selector,
+                location_context=location_context,
             )
 
         result: list[str] = []
@@ -552,6 +673,7 @@ class IncidentResolver:
                 effect.condition,
                 owner_id=owner_id,
                 other_id=candidate,
+                location_context=location_context,
             ):
                 continue
             result.append(candidate)
@@ -564,12 +686,14 @@ class IncidentResolver:
         effect: Effect,
         *,
         chosen_characters: list[str],
+        location_context: AbilityLocationContext | None,
     ) -> list[str]:
         mover_ids = self._resolve_move_target_characters(
             state,
             schedule,
             effect,
             chosen_characters=chosen_characters,
+            location_context=location_context,
         )
         if len(mover_ids) != 1:
             return []
@@ -578,6 +702,7 @@ class IncidentResolver:
             owner_id=schedule.perpetrator_id,
             selector=effect.value,
             alive_only=False,
+            location_context=location_context,
         )
         return state.available_enterable_areas(mover_ids[0], all_areas)
 
@@ -588,6 +713,7 @@ class IncidentResolver:
         effect: Effect,
         *,
         chosen_characters: list[str],
+        location_context: AbilityLocationContext | None,
     ) -> list[str]:
         if selector_is_self_ref(effect.target):
             return [schedule.perpetrator_id]
@@ -602,10 +728,84 @@ class IncidentResolver:
                 target_selectors=deque(schedule.target_selectors),
                 character_choices=deque(schedule.target_character_ids),
                 chosen_characters=chosen_characters,
+                location_context=location_context,
             )
             if resolved in state.characters:
                 return [resolved]
         return []
+
+    def _incident_location_context(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+    ) -> AbilityLocationContext | None:
+        perpetrator = state.characters.get(schedule.perpetrator_id)
+        if perpetrator is None or perpetrator.character_id != "hermit":
+            return None
+        origin_area = perpetrator.area
+        if origin_area == AreaId.FARAWAY:
+            return None
+        override_area = self._incident_location_override_area(state, schedule, origin_area)
+        if override_area is None:
+            return None
+        return AbilityLocationContext(
+            owner_area=override_area,
+            owner_initial_area=perpetrator.initial_area,
+        )
+
+    def _incident_location_override_area(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        origin_area: AreaId,
+    ) -> AreaId | None:
+        if self._is_twins_identity(state, schedule.perpetrator_id):
+            diagonal = state.board.get_diagonal_adjacent(origin_area)
+            counterclockwise = state.board.get_counterclockwise_adjacent(origin_area)
+            candidates = [
+                area
+                for area in (diagonal, counterclockwise)
+                if area is not None
+            ]
+            if not candidates:
+                return None
+            selected = self._coerce_area_id(schedule.perpetrator_area)
+            if selected in candidates:
+                return selected
+            return candidates[0]
+
+        clockwise = state.board.get_clockwise_adjacent(origin_area)
+        if clockwise is None:
+            return None
+        selected = self._coerce_area_id(schedule.perpetrator_area)
+        if selected == origin_area:
+            return None
+        if selected == clockwise:
+            return clockwise
+        return clockwise
+
+    @staticmethod
+    def _is_twins_identity(state: GameState, character_id: str) -> bool:
+        character = state.characters.get(character_id)
+        if character is None:
+            return False
+        identity_id = str(character.identity_id or "")
+        if identity_id in {"twins", "双胞胎"}:
+            return True
+        identity_def = state.identity_defs.get(identity_id)
+        if identity_def is None:
+            return False
+        name = str(identity_def.name or "")
+        return name in {"twins", "双胞胎"}
+
+    @staticmethod
+    def _coerce_area_id(raw: str | None) -> AreaId | None:
+        if not raw:
+            return None
+        try:
+            return AreaId(raw)
+        except ValueError:
+            return None
 
     @staticmethod
     def _consume_matching_choice(

@@ -37,12 +37,14 @@ _PLAYWRIGHT_GOODWILL_ABILITY_IDS = frozenset(
         "goodwill:doctor:1",
     }
 )
-_PLAYWRIGHT_GOODWILL_TRAITS = frozenset(
+_IGNORE_GOODWILL_TRAITS = frozenset(
     {
         Trait.IGNORE_GOODWILL,
         Trait.MUST_IGNORE_GOODWILL,
+        Trait.PUPPET_IGNORE_GOODWILL,
     }
 )
+_PLAYWRIGHT_GOODWILL_TRAITS = _IGNORE_GOODWILL_TRAITS
 
 
 class AbilityResolver:
@@ -497,6 +499,7 @@ class AbilityResolver:
             if area_ids is not None and ch.area not in area_ids:
                 continue
             if not self._matches_character_selector(
+                state=state,
                 character=ch,
                 owner_id=owner_id,
                 spec=spec,
@@ -580,6 +583,7 @@ class AbilityResolver:
     def _matches_character_selector(
         self,
         *,
+        state: GameState,
         character: Any,
         owner_id: str,
         spec: TargetSelector,
@@ -605,25 +609,32 @@ class AbilityResolver:
                 return False
             if attribute not in character.attributes:
                 return False
-        if spec.filters.limit_reached and not self._character_reached_paranoia_limit(character):
+        if spec.filters.limit_reached and not self._character_reached_paranoia_limit(state, character):
             return False
         return True
 
+    def _character_reached_paranoia_limit(self, state: GameState, character: Any) -> bool:
+        limit = self._effective_paranoia_limit_for_non_incident(state, character)
+        return character.tokens.paranoia >= limit
+
     @staticmethod
-    def _character_reached_paranoia_limit(character: Any) -> bool:
-        return character.tokens.paranoia >= character.paranoia_limit
+    def _effective_paranoia_limit_for_non_incident(state: GameState, character: Any) -> int:
+        if getattr(character, "character_id", "") == "hermit":
+            return 0
+        return int(getattr(character, "paranoia_limit", 0))
 
     def active_traits(self, state: GameState, character_id: str) -> set[Trait]:
         """角色当前生效特性：基础特性 + 当前身份特性 + 独立派生层。"""
         return resolve_active_traits(state, character_id)
 
     def goodwill_should_be_ignored(self, state: GameState, character_id: str) -> bool:
-        """用于主人公能力阶段：判断是否应视为无视友好。"""
+        """判断角色当前是否属于“无视友好”家族特性。"""
         traits = self.active_traits(state, character_id)
-        return (
-            Trait.MUST_IGNORE_GOODWILL in traits
-            or Trait.IGNORE_GOODWILL in traits
-        )
+        return bool(traits & _IGNORE_GOODWILL_TRAITS)
+
+    def goodwill_refusal_is_mandatory(self, state: GameState, character_id: str) -> bool:
+        """主人公声明友好能力时：必定无视友好必须被拒绝。"""
+        return Trait.MUST_IGNORE_GOODWILL in self.active_traits(state, character_id)
 
     def _has_playwright_goodwill_trait(self, state: GameState, character_id: str) -> bool:
         traits = self.active_traits(state, character_id)
@@ -782,6 +793,21 @@ class AbilityResolver:
                 location_context=location_context,
             )
 
+        if cond_type == "token_total_check":
+            target_id = self._resolve_target_ref(
+                state,
+                params.get("target", owner_id),
+                owner_id=owner_id,
+                other_id=other_id,
+                location_context=location_context,
+            )
+            target = state.characters.get(target_id)
+            if target is None:
+                return False
+            operator = str(params.get("operator", "=="))
+            value = int(params.get("value", 0))
+            return _compare_number(target.tokens.total(), operator, value)
+
         if cond_type == "identity_token_check":
             return self._evaluate_identity_token_check(state, params)
 
@@ -848,7 +874,8 @@ class AbilityResolver:
                 return False
             operator = str(params.get("operator", "=="))
             value = int(params.get("value", 0))
-            return _compare_number(target.paranoia_limit, operator, value)
+            actual_limit = self._effective_paranoia_limit_for_non_incident(state, target)
+            return _compare_number(actual_limit, operator, value)
 
         if cond_type == "incident_occurred":
             incident_id = str(params.get("incident_id", ""))

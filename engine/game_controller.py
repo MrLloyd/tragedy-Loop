@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional
 
 from engine.event_bus import EventBus, GameEvent, GameEventType
 from engine.game_state import GameState
-from engine.models.enums import GamePhase, Outcome
+from engine.models.enums import AreaId, GamePhase, Outcome
 from engine.models.incident import IncidentSchedule
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import (
@@ -290,13 +290,18 @@ class GameController:
 
         if phase == GamePhase.TURN_START:
             transfer_student = self.state.characters.get("transfer_student")
-            if transfer_student is None:
-                return
-            entry_day = transfer_student.entry_day or 0
-            if entry_day > 0 and self.state.current_day >= entry_day:
-                transfer_student.mark_alive()
-            elif entry_day > 0:
-                transfer_student.mark_removed()
+            if transfer_student is not None:
+                entry_day = transfer_student.entry_day or 0
+                if entry_day > 0 and self.state.current_day >= entry_day:
+                    transfer_student.mark_alive()
+                elif entry_day > 0:
+                    transfer_student.mark_removed()
+
+            temp_worker = self.state.characters.get("temp_worker")
+            temp_worker_alt = self.state.characters.get("temp_worker_alt")
+            if temp_worker is not None and temp_worker_alt is not None and temp_worker.is_dead():
+                temp_worker_alt.mark_alive()
+                temp_worker_alt.area = AreaId.CITY
 
     def _record_runtime_error(self, message: str) -> None:
         self.runtime_debug.last_error = message

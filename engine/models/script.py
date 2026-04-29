@@ -78,6 +78,7 @@ class CharacterSetup:
     territory_area: str = ""     # 大人物领地（后续扩展共用）
     entry_loop: int = 0          # 第几轮登场（神灵）
     entry_day: int = 0           # 第几天登场（转校生）
+    hermit_x: int = 0            # 仙人 X（剧本非公开输入）
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,8 @@ from pathlib import Path
 from engine.validation.modules import validate_module_file
 from engine.validation.runner import default_data_dir, validate_data_root
 from engine.validation.static_data import validate_characters
+from engine.models.enums import Trait
+from engine.models.identity import IdentityDef
 from engine.models.script import CharacterSetup, ModuleDef, PrivateScriptInfo, RuleDef
 from engine.rules.character_loader import load_character_defs
 from engine.rules.module_loader import load_module
@@ -252,6 +254,48 @@ def test_validate_script_rejects_streamer_until_ex_rules_exist() -> None:
     assert any("disabled until EX-card rules are implemented" in issue.message for issue in issues)
 
 
+def test_validate_script_rejects_sister_with_puppet_ignore_goodwill_identity() -> None:
+    character_defs = load_character_defs()
+    sister = character_defs["sister"]
+    context = ScriptValidationContext(
+        module_def=ModuleDef(
+            module_id="basic_tragedy_x",
+            name="basic_tragedy_x",
+            rule_x_count=0,
+            has_final_guess=False,
+            rules_y=[
+                RuleDef(
+                    rule_id="rule_y",
+                    name="rule y",
+                    rule_type="Y",
+                    module="basic_tragedy_x",
+                    identity_slots={"puppet_ignore": 1},
+                )
+            ],
+        ),
+        identity_defs={
+            "puppet_ignore": IdentityDef(
+                identity_id="puppet_ignore",
+                name="puppet ignore",
+                module="basic_tragedy_x",
+                traits={Trait.PUPPET_IGNORE_GOODWILL},
+            ),
+        },
+        incident_defs={},
+        character_defs=character_defs,
+    )
+    script = PrivateScriptInfo(
+        module_id="basic_tragedy_x",
+        rule_y=context.module_def.rules_y[0],
+        characters=[CharacterSetup(character_id=sister.character_id, identity_id="puppet_ignore")],
+        incidents=[],
+    )
+
+    issues = validate_script(script, context)
+
+    assert any("cannot be assigned an identity with ignore-goodwill trait" in issue.message for issue in issues)
+
+
 def test_validate_script_allows_only_deity_and_transfer_student_entry_fields() -> None:
     character_defs = load_character_defs()
     context = ScriptValidationContext(
@@ -283,6 +327,58 @@ def test_validate_script_allows_only_deity_and_transfer_student_entry_fields() -
     assert not any(issue.path.endswith("transfer_student.entry_day") for issue in issues)
     assert any(issue.path.endswith(".entry_loop") and "cannot set entry_loop" in issue.message for issue in issues)
     assert any(issue.path.endswith(".entry_day") and "cannot set entry_day" in issue.message for issue in issues)
+
+
+def test_validate_script_allows_hermit_x_zero_for_hermit() -> None:
+    character_defs = load_character_defs()
+    context = ScriptValidationContext(
+        module_def=ModuleDef(
+            module_id="test_module",
+            name="test module",
+            rule_x_count=0,
+            has_final_guess=False,
+            rules_y=[RuleDef(rule_id="rule_y", name="rule y", rule_type="Y", module="test_module")],
+        ),
+        identity_defs={},
+        incident_defs={},
+        character_defs=character_defs,
+    )
+    script = PrivateScriptInfo(
+        module_id="test_module",
+        rule_y=context.module_def.rules_y[0],
+        characters=[CharacterSetup(character_id="hermit", identity_id="平民", hermit_x=0)],
+        incidents=[],
+    )
+
+    issues = validate_script(script, context)
+
+    assert not any(issue.path.endswith(".hermit_x") for issue in issues)
+
+
+def test_validate_script_rejects_hermit_x_for_non_hermit() -> None:
+    character_defs = load_character_defs()
+    context = ScriptValidationContext(
+        module_def=ModuleDef(
+            module_id="test_module",
+            name="test module",
+            rule_x_count=0,
+            has_final_guess=False,
+            rules_y=[RuleDef(rule_id="rule_y", name="rule y", rule_type="Y", module="test_module")],
+        ),
+        identity_defs={},
+        incident_defs={},
+        character_defs=character_defs,
+    )
+    script = PrivateScriptInfo(
+        module_id="test_module",
+        rule_y=context.module_def.rules_y[0],
+        characters=[CharacterSetup(character_id="office_worker", identity_id="平民", hermit_x=1)],
+        incidents=[],
+    )
+
+    issues = validate_script(script, context)
+
+    assert any(issue.path.endswith(".hermit_x") and "cannot set hermit_x" in issue.message for issue in issues)
 
 
 def test_validate_script_allows_outsider_to_use_identity_outside_rule_pool() -> None:

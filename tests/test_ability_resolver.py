@@ -540,6 +540,45 @@ def test_evaluate_condition_for_attribute_and_paranoia_limit() -> None:
     assert resolver.evaluate_condition(state, paranoia_limit_check) is True
 
 
+def test_hermit_non_incident_paranoia_limit_is_treated_as_zero() -> None:
+    state = _build_state_with_module()
+    state.characters["owner"] = CharacterState(
+        character_id="owner",
+        name="拥有者",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["hermit"] = CharacterState(
+        character_id="hermit",
+        name="仙人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=7,
+    )
+    resolver = AbilityResolver()
+
+    targets = resolver.resolve_targets(
+        state,
+        owner_id="owner",
+        selector={
+            "scope": "same_area",
+            "subject": "other_character",
+            "filters": {"limit_reached": True},
+        },
+    )
+    assert set(targets) == {"hermit"}
+
+    paranoia_limit_check = Condition(
+        condition_type="paranoia_limit_check",
+        params={"target": "hermit", "operator": "==", "value": 0},
+    )
+    assert resolver.evaluate_condition(state, paranoia_limit_check) is True
+
+
 def test_collect_identity_abilities_respects_unified_once_limits() -> None:
     state = _build_state_with_module()
     state.characters["x"] = CharacterState(

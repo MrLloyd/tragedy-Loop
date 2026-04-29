@@ -239,6 +239,8 @@ def test_board_state_adjacency_handles_grid_and_faraway() -> None:
     assert board.get_horizontal_adjacent(AreaId.HOSPITAL) == AreaId.SHRINE
     assert board.get_vertical_adjacent(AreaId.HOSPITAL) == AreaId.CITY
     assert board.get_diagonal_adjacent(AreaId.HOSPITAL) == AreaId.SCHOOL
+    assert board.get_clockwise_adjacent(AreaId.HOSPITAL) == AreaId.SHRINE
+    assert board.get_counterclockwise_adjacent(AreaId.HOSPITAL) == AreaId.CITY
     assert board.get_all_adjacent(AreaId.HOSPITAL) == [AreaId.SHRINE, AreaId.CITY]
     assert board.is_adjacent(AreaId.HOSPITAL, AreaId.SHRINE) is True
     assert board.is_adjacent(AreaId.HOSPITAL, AreaId.SCHOOL) is False
@@ -246,6 +248,8 @@ def test_board_state_adjacency_handles_grid_and_faraway() -> None:
     assert board.get_horizontal_adjacent(AreaId.FARAWAY) is None
     assert board.get_vertical_adjacent(AreaId.FARAWAY) is None
     assert board.get_diagonal_adjacent(AreaId.FARAWAY) is None
+    assert board.get_clockwise_adjacent(AreaId.FARAWAY) is None
+    assert board.get_counterclockwise_adjacent(AreaId.FARAWAY) is None
     assert board.get_all_adjacent(AreaId.FARAWAY) == []
     assert board.is_adjacent(AreaId.FARAWAY, AreaId.HOSPITAL) is False
 

@@ -860,6 +860,92 @@ def test_alien_structured_goodwill_revives_dead_character() -> None:
     assert state.characters["corpse_b"].life_state == CharacterLifeState.DEAD
 
 
+def test_hermit_goodwill_moves_then_revives_selected_corpse_and_places_scripted_x_goodwill() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["hermit"] = _instantiate("hermit")
+    state.characters["hermit"].tokens.add(TokenType.GOODWILL, 5)
+    state.script.private_table.characters = [
+        CharacterSetup(character_id="hermit", identity_id="平民", hermit_x=2),
+    ]
+    state.characters["corpse_city_a"] = CharacterState(
+        character_id="corpse_city_a",
+        name="都市尸体A",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+    state.characters["corpse_city_b"] = CharacterState(
+        character_id="corpse_city_b",
+        name="都市尸体B",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+    state.characters["corpse_hospital"] = CharacterState(
+        character_id="corpse_hospital",
+        name="医院尸体",
+        area=AreaId.HOSPITAL,
+        initial_area=AreaId.HOSPITAL,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+    state.characters["corpse_faraway"] = CharacterState(
+        character_id="corpse_faraway",
+        name="远方尸体",
+        area=AreaId.FARAWAY,
+        initial_area=AreaId.FARAWAY,
+        identity_id="平民",
+        original_identity_id="平民",
+        life_state=CharacterLifeState.DEAD,
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+
+    destination_wait = _choose_goodwill(signal, "goodwill:hermit:1")
+    assert isinstance(destination_wait, WaitForInput)
+    assert destination_wait.input_type == "choose_ability_target"
+    assert AreaId.CITY.value in destination_wait.options
+    assert AreaId.FARAWAY.value in destination_wait.options
+
+    corpse_wait = destination_wait.callback(AreaId.CITY.value)
+    assert isinstance(corpse_wait, WaitForInput)
+    assert corpse_wait.input_type == "choose_ability_target"
+    assert set(corpse_wait.options) == {"corpse_city_a", "corpse_city_b"}
+
+    result = corpse_wait.callback("corpse_city_b")
+
+    assert isinstance(result, PhaseComplete)
+    assert state.characters["hermit"].area == AreaId.CITY
+    assert state.characters["corpse_city_a"].life_state == CharacterLifeState.DEAD
+    assert state.characters["corpse_city_b"].life_state == CharacterLifeState.ALIVE
+    assert state.characters["corpse_city_b"].tokens.get(TokenType.GOODWILL) == 2
+    assert state.characters["corpse_hospital"].life_state == CharacterLifeState.DEAD
+    assert state.characters["corpse_faraway"].life_state == CharacterLifeState.DEAD
+
+
+def test_hermit_goodwill_is_hidden_without_any_destination_with_a_corpse() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["hermit"] = _instantiate("hermit")
+    state.characters["hermit"].tokens.add(TokenType.GOODWILL, 5)
+    state.script.private_table.characters = [
+        CharacterSetup(character_id="hermit", identity_id="平民", hermit_x=2),
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+
+
 def test_alien_structured_goodwill_kills_same_area_target_via_death_resolver(monkeypatch) -> None:
     bus, atomic = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, atomic)

@@ -10,6 +10,7 @@ from engine.models.cards import CardPlacement, PlacementIntent
 from engine.models.ability import Ability, AbilityLocationContext
 from engine.models.effects import Condition, Effect
 from engine.models.enums import AbilityTiming, AbilityType, AreaId, Attribute, CardType, EffectType, GamePhase, Outcome, PlayerRole, TokenType, Trait
+from engine.models.incident import IncidentSchedule
 from engine.models.selectors import (
     area_choice_selector,
     character_choice_selector,
@@ -75,6 +76,17 @@ class PreparedAbilityCandidate:
     owner_id: str
     location_context: AbilityLocationContext | None = None
     selected_targets: dict[int, str] = field(default_factory=dict)
+
+
+_HERMIT_GOODWILL_ABILITY_ID = "goodwill:hermit:1"
+_HERMIT_GOODWILL_DESTINATION_SELECTORS = (
+    {"scope": "any_area", "subject": "board"},
+    {"scope": "fixed_area", "subject": "board", "area": AreaId.FARAWAY.value},
+)
+_HERMIT_GOODWILL_CORPSE_SELECTOR = {
+    "scope": "same_area",
+    "subject": "dead_character",
+}
 
 
 @dataclass
@@ -228,6 +240,7 @@ class PhaseHandler(ABC):
     ) -> PhaseSignal:
         if not candidates:
             return next_signal_factory()
+        ordered_candidates = self._order_mandatory_candidates(candidates)
         prepared = [
             PreparedAbilityCandidate(
                 candidate=candidate,
@@ -238,7 +251,7 @@ class PhaseHandler(ABC):
                     owner_id=self._candidate_owner_id(candidate),
                 ),
             )
-            for candidate in candidates
+            for candidate in ordered_candidates
         ]
         planning_state = state.snapshot()
         return self._collect_mandatory_choices(
@@ -249,6 +262,27 @@ class PhaseHandler(ABC):
             effect_index=0,
             next_signal_factory=next_signal_factory,
         )
+
+    @staticmethod
+    def _mandatory_priority(source_kind: str) -> int:
+        if source_kind == "identity":
+            return 0
+        if source_kind == "character_trait_ability":
+            return 2
+        return 1
+
+    def _order_mandatory_candidates(
+        self,
+        candidates: list[AbilityCandidate],
+    ) -> list[AbilityCandidate]:
+        indexed = list(enumerate(candidates))
+        indexed.sort(
+            key=lambda item: (
+                self._mandatory_priority(item[1].source_kind),
+                item[0],
+            )
+        )
+        return [candidate for _, candidate in indexed]
 
     def _candidate_owner_id(self, candidate: AbilityCandidate) -> str:
         if candidate.source_kind in {"identity", "goodwill", "derived", "character_trait_ability"}:
@@ -362,6 +396,20 @@ class PhaseHandler(ABC):
             location_context=location_context,
         ):
             return False
+        if self._is_hermit_goodwill_candidate(candidate):
+            return any(
+                bool(
+                    self._hermit_goodwill_corpse_options(
+                        state,
+                        owner_id=owner_id,
+                        location_context=destination_context,
+                    )
+                )
+                for _, destination_context in self._hermit_goodwill_destination_options(
+                    state,
+                    owner_id=owner_id,
+                )
+            )
         return all(
             (
                 choice_request is None
@@ -381,6 +429,69 @@ class PhaseHandler(ABC):
                     ),
                 ),
             )
+        )
+
+    @staticmethod
+    def _is_hermit_goodwill_candidate(candidate: AbilityCandidate) -> bool:
+        return (
+            candidate.source_kind == "goodwill"
+            and candidate.ability.ability_id == _HERMIT_GOODWILL_ABILITY_ID
+        )
+
+    def _hermit_goodwill_destination_options(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+    ) -> list[tuple[str, AbilityLocationContext]]:
+        owner = state.characters.get(owner_id)
+        if owner is None:
+            return []
+
+        raw_destinations: list[str] = []
+        for selector in _HERMIT_GOODWILL_DESTINATION_SELECTORS:
+            raw_destinations.extend(
+                self.ability_resolver.resolve_targets(
+                    state,
+                    owner_id=owner_id,
+                    selector=selector,
+                    alive_only=False,
+                )
+            )
+
+        results: list[tuple[str, AbilityLocationContext]] = []
+        seen: set[str] = set()
+        for area_id in state.available_enterable_areas(owner_id, raw_destinations):
+            if area_id in seen:
+                continue
+            seen.add(area_id)
+            try:
+                destination_area = AreaId(area_id)
+            except ValueError:
+                continue
+            results.append(
+                (
+                    area_id,
+                    AbilityLocationContext(
+                        owner_area=destination_area,
+                        owner_initial_area=owner.initial_area,
+                    ),
+                )
+            )
+        return results
+
+    def _hermit_goodwill_corpse_options(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+        location_context: AbilityLocationContext,
+    ) -> list[str]:
+        return self.ability_resolver.resolve_targets(
+            state,
+            owner_id=owner_id,
+            selector=_HERMIT_GOODWILL_CORPSE_SELECTOR,
+            location_context=location_context,
         )
 
     def _build_candidate_location_wait(
@@ -531,7 +642,17 @@ class PhaseHandler(ABC):
                 location_context=current.location_context,
                 effect=effect,
             )
-            if choice_request is None or len(choice_request.options) <= 1:
+            if choice_request is None:
+                continue
+            if not choice_request.options:
+                current.candidate.ability.effects = []
+                break
+            if len(choice_request.options) == 1:
+                effects[index] = self._apply_effect_choice(
+                    effect,
+                    choice_kind=choice_request.choice_kind,
+                    selected=str(choice_request.options[0]),
+                )
                 continue
 
             def _on_choice(
@@ -555,7 +676,7 @@ class PhaseHandler(ABC):
                     planning_state,
                     prepared,
                     candidate_index=current_index,
-                    effect_index=effect_choice_index + 1,
+                    effect_index=effect_choice_index,
                     next_signal_factory=next_signal_factory,
                 )
 
@@ -1874,15 +1995,22 @@ class ProtagonistAbilityHandler(PhaseHandler):
     _AI_ABILITY_ID = "goodwill:ai:1"
     _INFORMANT_ABILITY_ID = "goodwill:informant:1"
     _APPRAISER_ABILITY_ID = "goodwill:appraiser:1"
+    _HERMIT_ABILITY_ID = _HERMIT_GOODWILL_ABILITY_ID
     _SISTER_ABILITY_ID = "goodwill:sister:1"
 
     def execute(self, state: GameState) -> PhaseSignal:
         return self._request_goodwill_ability(state)
 
     def _request_goodwill_ability(self, state: GameState) -> PhaseSignal:
+        goodwill_candidates = self.ability_resolver.collect_goodwill_abilities(state)
+        trait_candidates = self.ability_resolver.collect_character_trait_abilities(
+            state,
+            timing=AbilityTiming.PROTAGONIST_ABILITY,
+            ability_type=AbilityType.OPTIONAL,
+        )
         candidates = self._filter_candidates_with_available_targets(
             state,
-            self.ability_resolver.collect_goodwill_abilities(state),
+            [*goodwill_candidates, *trait_candidates],
         )
         if not candidates:
             return PhaseComplete()
@@ -2009,18 +2137,15 @@ class ProtagonistAbilityHandler(PhaseHandler):
         if candidate.ability.ability_id == self._SISTER_ABILITY_ID:
             return self._resolve_goodwill_ability(state, candidate)
         owner_id = candidate.source_id
-        should_ignore = self.ability_resolver.goodwill_should_be_ignored(state, owner_id)
-        if candidate.ability.can_be_refused and not should_ignore:
+        if candidate.ability.can_be_refused:
+            if self.ability_resolver.goodwill_refusal_is_mandatory(state, owner_id):
+                return self._refuse_goodwill_ability(state, candidate)
+
             def _on_refuse(choice: Any) -> PhaseSignal:
                 if choice not in {"allow", "refuse"}:
                     raise ValueError("invalid goodwill response")
                 if choice == "refuse":
-                    self.event_bus.emit(GameEvent(
-                        GameEventType.ABILITY_REFUSED,
-                        {"character_id": owner_id, "ability_id": candidate.ability.ability_id},
-                    ))
-                    self.ability_resolver.mark_ability_used(state, candidate)
-                    return self._request_goodwill_ability(state)
+                    return self._refuse_goodwill_ability(state, candidate)
                 return self._resolve_goodwill_ability(state, candidate)
 
             return WaitForInput(
@@ -2032,6 +2157,18 @@ class ProtagonistAbilityHandler(PhaseHandler):
             )
         return self._resolve_goodwill_ability(state, candidate)
 
+    def _refuse_goodwill_ability(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+    ) -> PhaseSignal:
+        self.event_bus.emit(GameEvent(
+            GameEventType.ABILITY_REFUSED,
+            {"character_id": candidate.source_id, "ability_id": candidate.ability.ability_id},
+        ))
+        self.ability_resolver.mark_ability_used(state, candidate)
+        return self._request_goodwill_ability(state)
+
     def _resolve_goodwill_ability(
         self,
         state: GameState,
@@ -2041,6 +2178,12 @@ class ProtagonistAbilityHandler(PhaseHandler):
             return self._request_sister_goodwill_ability(state)
         if candidate.source_id not in state.characters:
             return self._request_goodwill_ability(state)
+        if candidate.ability.ability_id == self._HERMIT_ABILITY_ID:
+            return self._resolve_hermit_goodwill(
+                state,
+                candidate,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
+            )
         if candidate.ability.ability_id == self._AI_ABILITY_ID:
             return self._resolve_ai_goodwill(
                 state,
@@ -2064,6 +2207,176 @@ class ProtagonistAbilityHandler(PhaseHandler):
             candidate,
             next_signal_factory=lambda: self._request_goodwill_ability(state),
         )
+
+    def _resolve_hermit_goodwill(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        owner = state.characters.get(candidate.source_id)
+        if owner is None:
+            return next_signal_factory()
+
+        destination_options = [
+            (area_id, location_context)
+            for area_id, location_context in self._hermit_goodwill_destination_options(
+                state,
+                owner_id=owner.character_id,
+            )
+            if self._hermit_goodwill_corpse_options(
+                state,
+                owner_id=owner.character_id,
+                location_context=location_context,
+            )
+        ]
+        if not destination_options:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+
+        if len(destination_options) == 1:
+            area_id, location_context = destination_options[0]
+            return self._request_hermit_goodwill_corpse(
+                state,
+                candidate,
+                destination_area_id=area_id,
+                destination_context=location_context,
+                next_signal_factory=next_signal_factory,
+            )
+
+        context_by_area = {
+            area_id: location_context
+            for area_id, location_context in destination_options
+        }
+        options = [area_id for area_id, _ in destination_options]
+
+        def _on_destination(choice: Any) -> PhaseSignal:
+            area_id = self._coerce_area_choice(choice)
+            if area_id not in context_by_area:
+                raise ValueError(f"invalid hermit destination: {choice!r}")
+            return self._request_hermit_goodwill_corpse(
+                state,
+                candidate,
+                destination_area_id=area_id,
+                destination_context=context_by_area[area_id],
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt=f"请选择 {owner.name} 的移动目的地",
+            options=options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_destination,
+        )
+
+    def _request_hermit_goodwill_corpse(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        destination_area_id: str,
+        destination_context: AbilityLocationContext,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        corpse_options = self._hermit_goodwill_corpse_options(
+            state,
+            owner_id=candidate.source_id,
+            location_context=destination_context,
+        )
+        if not corpse_options:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            return next_signal_factory()
+        if len(corpse_options) == 1:
+            return self._execute_hermit_goodwill(
+                state,
+                candidate,
+                destination_area_id=destination_area_id,
+                revived_character_id=corpse_options[0],
+                next_signal_factory=next_signal_factory,
+            )
+
+        def _on_corpse(choice: Any) -> PhaseSignal:
+            revived_character_id = str(choice)
+            if revived_character_id not in corpse_options:
+                raise ValueError(f"invalid hermit corpse target: {choice!r}")
+            return self._execute_hermit_goodwill(
+                state,
+                candidate,
+                destination_area_id=destination_area_id,
+                revived_character_id=revived_character_id,
+                next_signal_factory=next_signal_factory,
+            )
+
+        return WaitForInput(
+            input_type="choose_ability_target",
+            prompt="请选择要复活的尸体",
+            options=corpse_options,
+            player=f"protagonist_{state.leader_index}",
+            callback=_on_corpse,
+        )
+
+    def _execute_hermit_goodwill(
+        self,
+        state: GameState,
+        candidate: AbilityCandidate,
+        *,
+        destination_area_id: str,
+        revived_character_id: str,
+        next_signal_factory: Callable[[], PhaseSignal],
+    ) -> PhaseSignal:
+        goodwill_amount = self._scripted_hermit_x(state, candidate.source_id)
+        effects = [
+            Effect(
+                effect_type=EffectType.MOVE_CHARACTER,
+                target={"ref": "self"},
+                value=destination_area_id,
+            ),
+            Effect(
+                effect_type=EffectType.REVIVE_CHARACTER,
+                target=revived_character_id,
+            ),
+        ]
+        if goodwill_amount > 0:
+            effects.append(
+                Effect(
+                    effect_type=EffectType.PLACE_TOKEN,
+                    target=revived_character_id,
+                    token_type=TokenType.GOODWILL,
+                    amount=goodwill_amount,
+                )
+            )
+
+        def _before_resolve() -> None:
+            self._emit_ability_declared(candidate)
+
+        def _on_resolved(result: Any) -> PhaseSignal:
+            self.ability_resolver.mark_ability_used(state, candidate)
+            signal = self._resolution_result_to_signal(
+                result,
+                default_reason=candidate.ability.ability_id,
+            )
+            if signal is not None:
+                return signal
+            return next_signal_factory()
+
+        return self._resolve_effect_batch_with_servant_follow(
+            state,
+            effects,
+            sequential=True,
+            perpetrator_id=candidate.source_id,
+            location_context=None,
+            before_resolve=_before_resolve,
+            on_resolved=_on_resolved,
+        )
+
+    @staticmethod
+    def _scripted_hermit_x(state: GameState, character_id: str) -> int:
+        for setup in state.script.private_table.characters:
+            if setup.character_id == character_id:
+                return int(getattr(setup, "hermit_x", 0) or 0)
+        return 0
 
     def _resolve_ai_goodwill(
         self,
@@ -2546,7 +2859,10 @@ class IncidentHandler(PhaseHandler):
         阶段处理器只负责当天事件调度；事件触发判定、公开语义与
         效果结算由 IncidentResolver 统一负责。
         """
-        schedules = state.get_incidents_for_day(state.current_day)
+        schedules = self._expand_temp_worker_mirror_schedules(
+            state,
+            state.get_incidents_for_day(state.current_day),
+        )
         return self._resolve_schedules(state, schedules, index=0)
 
     def _resolve_schedules(
@@ -2561,6 +2877,17 @@ class IncidentHandler(PhaseHandler):
             return PhaseComplete()
 
         schedule = schedules[index]
+        if self._is_temp_worker_mirror_pair(schedules, index):
+            pair_signal = self._resolve_temp_worker_mirror_pair_simultaneous(
+                state,
+                schedules[index],
+                schedules[index + 1],
+            )
+            if pair_signal is not None:
+                if isinstance(pair_signal, ForceLoopEnd):
+                    return pair_signal
+                return self._resolve_schedules(state, schedules, index=index + 2)
+
         choices = dict(servant_follow_choices or {})
         request = self.incident_resolver.next_servant_follow_choice(
             state,
@@ -2584,6 +2911,134 @@ class IncidentHandler(PhaseHandler):
         if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
             return ForceLoopEnd(reason=schedule.incident_id)
         return self._resolve_schedules(state, schedules, index=index + 1)
+
+    @staticmethod
+    def _is_temp_worker_mirror_pair(schedules: list[Any], index: int) -> bool:
+        if index + 1 >= len(schedules):
+            return False
+        left = schedules[index]
+        right = schedules[index + 1]
+        if not isinstance(left, IncidentSchedule) or not isinstance(right, IncidentSchedule):
+            return False
+        return (
+            left.perpetrator_id == "temp_worker"
+            and right.perpetrator_id == "temp_worker_alt"
+            and left.incident_id == right.incident_id
+            and left.day == right.day
+        )
+
+    @staticmethod
+    def _expand_temp_worker_mirror_schedules(
+        state: GameState,
+        schedules: list[Any],
+    ) -> list[IncidentSchedule]:
+        expanded: list[IncidentSchedule] = []
+        has_temp_worker_alt = state.characters.get("temp_worker_alt") is not None
+        for raw in schedules:
+            if not isinstance(raw, IncidentSchedule):
+                continue
+            expanded.append(raw)
+            if raw.perpetrator_id != "temp_worker" or not has_temp_worker_alt:
+                continue
+            expanded.append(
+                IncidentSchedule(
+                    incident_id=raw.incident_id,
+                    day=raw.day,
+                    perpetrator_id="temp_worker_alt",
+                    perpetrator_area=raw.perpetrator_area,
+                    target_selectors=list(raw.target_selectors),
+                    target_character_ids=list(raw.target_character_ids),
+                    target_area_ids=list(raw.target_area_ids),
+                    chosen_token_types=list(raw.chosen_token_types),
+                    occurred=False,
+                )
+            )
+        return expanded
+
+    def _resolve_temp_worker_mirror_pair_simultaneous(
+        self,
+        state: GameState,
+        primary: IncidentSchedule,
+        mirror: IncidentSchedule,
+    ) -> PhaseSignal | None:
+        schedules = [primary, mirror]
+        prepared: list[tuple[IncidentSchedule, Any, AbilityLocationContext | None]] = []
+        for schedule in schedules:
+            incident_def = state.incident_defs.get(schedule.incident_id)
+            if incident_def is None:
+                return None
+            if not self.incident_resolver.can_occur(state, schedule, incident_def):
+                return None
+            effective_incident_def = self.incident_resolver._incident_def_with_perpetrator_overrides(
+                state,
+                schedule,
+                incident_def,
+            )
+            if effective_incident_def.sequential:
+                return None
+            if self.incident_resolver._incident_effect_repeat_count(state, schedule) != 1:
+                return None
+            location_context = self.incident_resolver._incident_location_context(state, schedule)
+            if self.incident_resolver.next_runtime_choice(
+                state,
+                schedule,
+                effective_incident_def,
+                location_context=location_context,
+            ) is not None:
+                return None
+            if self.incident_resolver.next_servant_follow_choice(state, schedule) is not None:
+                return None
+            prepared.append((schedule, effective_incident_def, location_context))
+
+        scoped_effects: list[ScopedEffect] = []
+        for schedule, effective_incident_def, location_context in prepared:
+            self.incident_resolver._mark_occurred(state, schedule)
+            self.incident_resolver._emit_occurred(state, schedule)
+            effects = self.incident_resolver._materialize_effects(
+                state,
+                schedule,
+                effective_incident_def.effects,
+                location_context=location_context,
+            )
+            if effective_incident_def.ex_gauge_increment != 0:
+                scoped_effects.append(
+                    ScopedEffect(
+                        effect=Effect(
+                            effect_type=EffectType.MODIFY_EX_GAUGE,
+                            value=effective_incident_def.ex_gauge_increment,
+                        ),
+                        perpetrator_id=schedule.perpetrator_id,
+                        location_context=location_context,
+                    )
+                )
+            scoped_effects.extend(
+                ScopedEffect(
+                    effect=effect,
+                    perpetrator_id=schedule.perpetrator_id,
+                    location_context=location_context,
+                )
+                for effect in effects
+            )
+
+        result = self.atomic_resolver.resolve(
+            state,
+            scoped_effects,
+            sequential=False,
+        )
+
+        has_phenomenon = bool(result.mutations)
+        for schedule, _effective_incident_def, _location_context in prepared:
+            public_result = self.incident_resolver._build_public_result(
+                state,
+                schedule,
+                occurred=True,
+                has_phenomenon=has_phenomenon,
+            )
+            self.incident_resolver._record_public_result(state, public_result)
+
+        if result.outcome in (Outcome.PROTAGONIST_DEATH, Outcome.PROTAGONIST_FAILURE):
+            return ForceLoopEnd(reason=primary.incident_id)
+        return PhaseComplete()
 
     def _build_servant_follow_wait(
         self,
@@ -2656,10 +3111,56 @@ class TurnEndHandler(PhaseHandler):
         if state.is_final_day:
             timings.append(AbilityTiming.FINAL_DAY_TURN_END)
 
-        mandatory: list[AbilityCandidate] = []
+        pre_mandatory_signal = self._resolve_temp_worker_pre_mandatory_death(state)
+        if pre_mandatory_signal is not None:
+            return pre_mandatory_signal
+
+        return self._execute_turn_end_trait_mandatory(
+            state,
+            timings,
+        )
+
+    def _resolve_temp_worker_pre_mandatory_death(
+        self,
+        state: GameState,
+    ) -> PhaseSignal | None:
+        targets = [
+            character.character_id
+            for character in state.characters.values()
+            if character.is_active()
+            and character.character_id == "temp_worker"
+            and character.tokens.total() >= 3
+        ]
+        if not targets:
+            return None
+
+        result = self.atomic_resolver.resolve(
+            state,
+            [
+                Effect(
+                    effect_type=EffectType.KILL_CHARACTER,
+                    target=target_id,
+                )
+                for target_id in targets
+            ],
+            sequential=False,
+            perpetrator_id="",
+            location_context=None,
+        )
+        return self._resolution_result_to_signal(
+            result,
+            default_reason="temp_worker_pre_turn_end_death",
+        )
+
+    def _execute_turn_end_trait_mandatory(
+        self,
+        state: GameState,
+        timings: list[AbilityTiming],
+    ) -> PhaseSignal:
+        trait_mandatory: list[AbilityCandidate] = []
         for timing in timings:
-            mandatory.extend(
-                self.ability_resolver.collect_abilities(
+            trait_mandatory.extend(
+                self.ability_resolver.collect_character_trait_abilities(
                     state,
                     timing=timing,
                     ability_type=AbilityType.MANDATORY,
@@ -2667,7 +3168,30 @@ class TurnEndHandler(PhaseHandler):
             )
         return self._execute_mandatory_batch(
             state,
-            mandatory,
+            trait_mandatory,
+            next_signal_factory=lambda: self._execute_turn_end_non_trait_mandatory(state, timings),
+        )
+
+    def _execute_turn_end_non_trait_mandatory(
+        self,
+        state: GameState,
+        timings: list[AbilityTiming],
+    ) -> PhaseSignal:
+        non_trait_mandatory: list[AbilityCandidate] = []
+        for timing in timings:
+            non_trait_mandatory.extend(
+                candidate
+                for candidate in self.ability_resolver.collect_abilities(
+                    state,
+                    timing=timing,
+                    ability_type=AbilityType.MANDATORY,
+                )
+                if candidate.source_kind != "character_trait_ability"
+            )
+
+        return self._execute_mandatory_batch(
+            state,
+            non_trait_mandatory,
             next_signal_factory=lambda: self._request_optional_turn_end_ability(state, timings),
         )
 

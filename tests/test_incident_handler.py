@@ -5,9 +5,10 @@ from __future__ import annotations
 from engine.event_bus import EventBus, GameEventType
 from engine.game_state import GameState
 from engine.models.character import CharacterState
-from engine.models.enums import AreaId, CharacterLifeState, EffectType, TokenType
+from engine.models.enums import AreaId, CharacterLifeState, EffectType, Outcome, TokenType
 from engine.models.effects import Condition, Effect
 from engine.models.incident import IncidentDef, IncidentSchedule
+from engine.models.script import CharacterSetup
 from engine.models.selectors import area_choice_selector, character_choice_selector
 from engine.phases.phase_base import ForceLoopEnd, IncidentHandler, PhaseComplete, WaitForInput
 from engine.resolvers.atomic_resolver import AtomicResolver
@@ -160,6 +161,52 @@ def test_incident_triggers_and_marks_occurred() -> None:
     assert emitted[0].data["perpetrator_id"] == "perp"
 
 
+def test_temp_worker_and_alt_trigger_same_incident_with_simultaneous_resolution() -> None:
+    handler, bus = _make_handler()
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("first_steps"))
+    state.current_day = 1
+    state.characters["temp_worker"] = CharacterState(
+        character_id="temp_worker",
+        name="临时工",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=1,
+    )
+    state.characters["temp_worker_alt"] = CharacterState(
+        character_id="temp_worker_alt",
+        name="临时工？",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=1,
+    )
+    state.characters["temp_worker"].tokens.paranoia = 1
+    state.characters["temp_worker_alt"].tokens.paranoia = 1
+    state.script.incidents = [
+        IncidentSchedule(
+            incident_id="murder",
+            day=1,
+            perpetrator_id="temp_worker",
+            target_character_ids=["temp_worker_alt", "temp_worker"],
+        )
+    ]
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    assert state.characters["temp_worker"].life_state == CharacterLifeState.DEAD
+    assert state.characters["temp_worker_alt"].life_state == CharacterLifeState.DEAD
+    occurred_events = [event for event in bus.log if event.event_type == GameEventType.INCIDENT_OCCURRED]
+    assert len(occurred_events) == 2
+    assert {event.data["perpetrator_id"] for event in occurred_events} == {"temp_worker", "temp_worker_alt"}
+    assert len(state.incident_results_this_loop) == 2
+    assert all(item.occurred for item in state.incident_results_this_loop)
+
+
 # ---------------------------------------------------------------------------
 # 测试 4：无 incident_defs 时安全降级
 # ---------------------------------------------------------------------------
@@ -242,6 +289,33 @@ def test_ai_incident_check_counts_all_tokens_as_paranoia() -> None:
     assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 2
 
 
+def test_hermit_incident_threshold_uses_scripted_x_value() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="hermit_x_gate",
+        name="仙人X阈值",
+        module="test",
+        effects=[Effect(effect_type=EffectType.NO_EFFECT)],
+    )
+    state = _make_state_with_incident(
+        paranoia=0,
+        paranoia_limit=2,
+        incident_id="hermit_x_gate",
+        perpetrator_id="hermit",
+        incident_def=incident_def,
+    )
+    state.characters["hermit"].character_id = "hermit"
+    state.script.private_table.characters = [
+        CharacterSetup(character_id="hermit", identity_id="平民", hermit_x=0),
+    ]
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.script.incidents[0].occurred is True
+
+
 def test_black_cat_incident_effect_is_overridden_to_no_phenomenon() -> None:
     bus = EventBus()
     resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
@@ -277,6 +351,258 @@ def test_black_cat_incident_effect_is_overridden_to_no_phenomenon() -> None:
     assert result.has_phenomenon is False
     assert result.mutations == []
     assert state.board.areas[AreaId.SHRINE].tokens.intrigue == 0
+
+
+def test_hermit_disappearance_moves_self_but_resolves_same_area_effect_on_clockwise_area() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    state = GameState.create_minimal_test_state(days_per_loop=3)
+    apply_loaded_module(state, load_module("basic_tragedy_x"))
+    state.current_day = 1
+    state.characters["hermit"] = CharacterState(
+        character_id="hermit",
+        name="仙人",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+        paranoia_limit=2,
+    )
+    state.characters["hermit"].tokens.paranoia = 2
+    state.script.private_table.characters = [
+        CharacterSetup(character_id="hermit", identity_id="平民", hermit_x=2),
+    ]
+
+    disappearance = resolver.resolve_schedule(
+        state,
+        IncidentSchedule(
+            "disappearance",
+            day=1,
+            perpetrator_id="hermit",
+            target_selectors=[area_choice_selector("hospital")],
+            target_area_ids=["hospital"],
+        ),
+    )
+
+    assert disappearance.has_phenomenon is True
+    assert state.characters["hermit"].area == AreaId.HOSPITAL
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1
+    assert state.board.areas[AreaId.HOSPITAL].tokens.intrigue == 0
+
+
+def test_hermit_twins_incident_can_use_counterclockwise_override_area() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="hermit_twins_area",
+        name="仙人双胞胎区域",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target={"scope": "same_area", "subject": "board"},
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            )
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=1,
+        paranoia_limit=1,
+        incident_id="hermit_twins_area",
+        perpetrator_id="hermit",
+        incident_def=incident_def,
+    )
+    state.characters["hermit"].character_id = "hermit"
+    state.characters["hermit"].area = AreaId.SHRINE
+    state.characters["hermit"].initial_area = AreaId.SHRINE
+    state.characters["hermit"].identity_id = "twins"
+    state.characters["hermit"].original_identity_id = "twins"
+    state.script.private_table.characters = [
+        CharacterSetup(character_id="hermit", identity_id="twins", hermit_x=1),
+    ]
+    state.script.incidents[0].perpetrator_area = AreaId.HOSPITAL.value
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.board.areas[AreaId.HOSPITAL].tokens.intrigue == 1
+    assert state.board.areas[AreaId.CITY].tokens.intrigue == 0
+
+
+def test_cult_leader_incident_threshold_applies_modifier_twice() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="spree_like",
+        name="类猎奇杀人",
+        module="test",
+        effects=[Effect(effect_type=EffectType.NO_EFFECT)],
+        modifies_paranoia_limit=1,
+    )
+    state = _make_state_with_incident(
+        paranoia=4,
+        paranoia_limit=3,
+        incident_id="spree_like",
+        perpetrator_id="cult_leader",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is False
+    assert state.script.incidents[0].occurred is False
+
+
+def test_cult_leader_incident_resolves_effects_twice_in_order() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="double_effect",
+        name="双次结算事件",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target={"ref": "self"},
+                token_type=TokenType.PARANOIA,
+                amount=1,
+            )
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_id="double_effect",
+        perpetrator_id="cult_leader",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.characters["cult_leader"].tokens.paranoia == 4
+    assert len(result.mutations) == 2
+
+
+def test_cult_leader_incident_repeats_ex_gauge_increment_twice() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="double_ex",
+        name="双次EX变化事件",
+        module="test",
+        effects=[Effect(effect_type=EffectType.NO_EFFECT)],
+        ex_gauge_increment=1,
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_id="double_ex",
+        perpetrator_id="cult_leader",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.ex_gauge == 2
+
+
+def test_normal_incident_applies_ex_gauge_increment_once() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="single_ex",
+        name="单次EX变化事件",
+        module="test",
+        effects=[Effect(effect_type=EffectType.NO_EFFECT)],
+        ex_gauge_increment=1,
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_id="single_ex",
+        perpetrator_id="perp",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.ex_gauge == 1
+
+
+def test_cult_leader_incident_stops_second_resolution_after_protagonist_loss() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="double_but_stop",
+        name="第一次终局即停止",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target={"scope": "fixed_area", "subject": "board", "area": "school"},
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            ),
+            Effect(
+                effect_type=EffectType.PROTAGONIST_DEATH,
+                target={"ref": "self"},
+                value="incident",
+            ),
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_id="double_but_stop",
+        perpetrator_id="cult_leader",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert result.outcome == Outcome.PROTAGONIST_DEATH
+    assert state.board.areas[AreaId.SCHOOL].tokens.intrigue == 1
+
+
+def test_cult_leader_death_in_first_resolution_does_not_block_second_resolution() -> None:
+    bus = EventBus()
+    resolver = IncidentResolver(bus, AtomicResolver(bus, DeathResolver()))
+    incident_def = IncidentDef(
+        incident_id="double_even_if_dead",
+        name="教主死亡后仍继续第二次",
+        module="test",
+        sequential=True,
+        effects=[
+            Effect(
+                effect_type=EffectType.KILL_CHARACTER,
+                target={"ref": "self"},
+            ),
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target={"scope": "fixed_area", "subject": "board", "area": "city"},
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            ),
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_id="double_even_if_dead",
+        perpetrator_id="cult_leader",
+        incident_def=incident_def,
+    )
+
+    result = resolver.resolve_schedule(state, state.script.incidents[0])
+
+    assert result.occurred is True
+    assert state.characters["cult_leader"].life_state == CharacterLifeState.DEAD
+    assert state.board.areas[AreaId.CITY].tokens.intrigue == 2
 
 
 def test_resolve_effect_only_executes_effect_without_marking_incident_occurred() -> None:

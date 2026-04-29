@@ -211,6 +211,36 @@
       ],
       "paranoia_limit": 1,
       "base_traits": [],
+      "character_trait_ability": [
+        {
+          "ability_id": "character_trait_ability:temp_worker:turn_end_kill_when_token_total_ge_3",
+          "name": "临时工特性：回合结束总指示物达3时死亡",
+          "ability_type": "mandatory",
+          "timing": "turn_end",
+          "description": "回合结束阶段，如果该角色总共有3枚或以上的任意指示物，该角色死亡。",
+          "condition": {
+            "condition_type": "token_total_check",
+            "params": {
+              "target": {
+                "ref": "self"
+              },
+              "operator": ">=",
+              "value": 3
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "kill_character",
+              "target": {
+                "ref": "self"
+              }
+            }
+          ],
+          "sequential": false,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
+      ],
       "goodwill_ability_texts": [
         "",
         "",
@@ -299,21 +329,20 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
-      "goodwill_ability_texts": [
-        "将该角色移动至任意版图或远方。随后，复活同一区域任意1具尸体，并在那个角色上放置X枚友好指示物。",
-        "",
-        "",
-        ""
-      ],
-      "goodwill_ability_goodwill_requirements": [
-        5,
-        0,
-        0,
-        0
-      ],
-      "goodwill_ability_once_per_loop": [
-        true,
-        false
+      "goodwill_abilities": [
+        {
+          "ability_id": "goodwill:hermit:1",
+          "name": "仙人 友好能力1",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "将该角色移动至任意版图或远方。随后，复活同一区域任意1具尸体，并在那个角色上放置X枚友好指示物。",
+          "condition": null,
+          "effects": [],
+          "sequential": true,
+          "goodwill_requirement": 5,
+          "once_per_loop": true,
+          "can_be_refused": true
+        }
       ],
       "initial_area_candidates": [
         "shrine",
@@ -994,6 +1023,35 @@
       ],
       "paranoia_limit": 2,
       "base_traits": [],
+      "character_trait_ability": [
+        {
+          "ability_id": "character_trait_ability:scholar:loop_start_place_token",
+          "name": "学者特性：轮回开始放置1枚指示物",
+          "ability_type": "mandatory",
+          "timing": "loop_start",
+          "description": "每轮轮回开始时，往该角色身上放置友好，不安，密谋指示物中的任意1枚。",
+          "effects": [
+            {
+              "effect_type": "place_token",
+              "target": {
+                "ref": "self"
+              },
+              "amount": 1,
+              "value": {
+                "choice": "choose_token_type",
+                "options": [
+                  "goodwill",
+                  "paranoia",
+                  "intrigue"
+                ]
+              }
+            }
+          ],
+          "sequential": false,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
+      ],
       "goodwill_ability_texts": [
         "移除该角色身上所有的指示物。随后，如果本局游戏使用Ex槽，选择Ex槽+1或-1。",
         "",
@@ -2038,6 +2096,106 @@
       ],
       "paranoia_limit": 4,
       "base_traits": [],
+      "character_trait_ability": [
+        {
+          "ability_id": "character_trait_ability:sacred_tree:protagonist_move_token",
+          "name": "御神木特性：主人公阶段转移指示物",
+          "ability_type": "optional",
+          "timing": "protagonist_ability",
+          "description": "主人公能力阶段可将该角色身上1枚指示物移动至同区域另1名角色。",
+          "effects": [
+            {
+              "effect_type": "move_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "amount": 1,
+              "value": {
+                "choice": "choose_token_type",
+                "options": [
+                  "goodwill",
+                  "paranoia",
+                  "intrigue",
+                  "hope",
+                  "despair",
+                  "guard"
+                ],
+                "only_available_on_self": true
+              }
+            }
+          ],
+          "sequential": false,
+          "once_per_loop": false,
+          "can_be_refused": false
+        },
+        {
+          "ability_id": "character_trait_ability:sacred_tree:playwright_forced_move_token",
+          "name": "御神木特性：无视友好时剧作家强制发动",
+          "ability_type": "mandatory",
+          "timing": "playwright_ability",
+          "description": "当该角色带有无视友好、必定无视友好或傀儡无视友好特性时，剧作家能力阶段强制将该角色身上1枚指示物移动至同区域另1名角色。",
+          "condition": {
+            "condition_type": "any_of",
+            "params": {
+              "conditions": [
+                {
+                  "condition_type": "has_trait",
+                  "params": {
+                    "target": {
+                      "ref": "self"
+                    },
+                    "trait": "ignore_goodwill"
+                  }
+                },
+                {
+                  "condition_type": "has_trait",
+                  "params": {
+                    "target": {
+                      "ref": "self"
+                    },
+                    "trait": "must_ignore_goodwill"
+                  }
+                },
+                {
+                  "condition_type": "has_trait",
+                  "params": {
+                    "target": {
+                      "ref": "self"
+                    },
+                    "trait": "puppet_ignore_goodwill"
+                  }
+                }
+              ]
+            }
+          },
+          "effects": [
+            {
+              "effect_type": "move_token",
+              "target": {
+                "scope": "same_area",
+                "subject": "other_character"
+              },
+              "amount": 1,
+              "value": {
+                "choice": "choose_token_type",
+                "options": [
+                  "goodwill",
+                  "paranoia",
+                  "intrigue",
+                  "hope",
+                  "despair",
+                  "guard"
+                ],
+                "only_available_on_self": true
+              }
+            }
+          ],
+          "sequential": false,
+          "once_per_loop": false,
+          "can_be_refused": false
+        }
+      ],
       "goodwill_ability_texts": [
         "",
         "",

@@ -155,6 +155,7 @@ def build_game_state_from_module(
             defs,
             state.identity_defs,
         )
+        _sync_temp_worker_alt_setup_bindings(state)
 
     if incidents is not None:
         state.script.private_table.incidents = copy.deepcopy(incidents)
@@ -182,6 +183,32 @@ def build_game_state_from_module(
             raise ScriptValidationError(issues)
 
     return state
+
+
+def _sync_temp_worker_alt_setup_bindings(state: GameState) -> None:
+    """同步临时工？与临时工的剧本输入绑定（身份与事件当事人标记）。"""
+    if not state.script.private_table.characters:
+        return
+    temp_worker_setup = next(
+        (setup for setup in state.script.private_table.characters if setup.character_id == "temp_worker"),
+        None,
+    )
+    temp_worker_alt_setup = next(
+        (setup for setup in state.script.private_table.characters if setup.character_id == "temp_worker_alt"),
+        None,
+    )
+    if temp_worker_setup is None or temp_worker_alt_setup is None:
+        return
+
+    temp_worker_alt_setup.identity_id = temp_worker_setup.identity_id
+    temp_worker_alt_setup.is_incident_perpetrator = temp_worker_setup.is_incident_perpetrator
+
+    temp_worker_alt = state.characters.get("temp_worker_alt")
+    if temp_worker_alt is None:
+        return
+    normalized_identity = normalize_identity_id(temp_worker_setup.identity_id)
+    temp_worker_alt.identity_id = normalized_identity
+    temp_worker_alt.original_identity_id = normalized_identity
 
 
 def apply_script_setup_payload(state: GameState, payload: dict[str, Any]) -> None:
@@ -242,6 +269,7 @@ def build_script_setup_context(
         "available_characters": sorted(available_character_defs.keys()),
         "entry_loop_character_ids": sorted(ENTRY_LOOP_CHARACTER_IDS),
         "entry_day_character_ids": sorted(ENTRY_DAY_CHARACTER_IDS),
+        "hermit_x_character_ids": ["hermit"],
         "character_initial_area_specs": {
             character_id: {
                 "mode": character.initial_area_mode,
@@ -249,6 +277,13 @@ def build_script_setup_context(
                 "candidates": [area.value for area in character.initial_area_candidates],
             }
             for character_id, character in available_character_defs.items()
+        },
+        "character_hermit_x_specs": {
+            "hermit": {
+                "required": True,
+                "min": 0,
+                "default": 2,
+            }
         },
     }
 
@@ -382,6 +417,11 @@ def _parse_incident_def(data: dict[str, Any]) -> IncidentDef:
         effects=[_parse_effect(e) for e in data.get("effects", [])],
         sequential=data.get("sequential", False),
         extra_condition=_parse_condition(data["extra_condition"]) if data.get("extra_condition") else None,
+        is_crowd_event=bool(data.get("is_crowd_event", False)),
+        required_corpse_count=int(data.get("required_corpse_count", 0)),
+        modifies_paranoia_limit=int(data.get("modifies_paranoia_limit", 0)),
+        no_ex_gauge_increment=bool(data.get("no_ex_gauge_increment", False)),
+        ex_gauge_increment=int(data.get("ex_gauge_increment", 0)),
         description=data.get("description", ""),
     )
 
