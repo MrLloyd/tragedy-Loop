@@ -25,6 +25,7 @@ from ui.controllers.test_mode_controller import (
     TEST_MODE_DAYS_PER_LOOP,
     TEST_MODE_LOOP_COUNT,
     TestCharacterDraft,
+    TestIncidentDraft,
     TestModeController,
 )
 
@@ -82,6 +83,7 @@ else:
             self._after_apply: Callable[[], None] | None = None
             self._refreshing = False
             self._character_inputs: list[dict[str, QWidget]] = []
+            self._script_incident_inputs: list[tuple[QLabel, QComboBox, QComboBox]] = []
             self._shown_reveal_message_count = 0
             self._shown_incident_reveal_message_count = 0
 
@@ -151,8 +153,10 @@ else:
             phase_actions = QHBoxLayout()
             self.execute_phase_button = QPushButton("执行当前阶段")
             self.advance_phase_button = QPushButton("推进到下一阶段")
+            self.run_formal_flow_button = QPushButton("按正式流程推进到下一次输入")
             phase_actions.addWidget(self.execute_phase_button)
             phase_actions.addWidget(self.advance_phase_button)
+            phase_actions.addWidget(self.run_formal_flow_button)
             phase_layout.addLayout(phase_actions)
             self.phase_wait_value = QLabel("无")
             self.phase_wait_value.setWordWrap(True)
@@ -182,6 +186,15 @@ else:
             self.characters_grid = QGridLayout()
             roster_layout.addLayout(self.characters_grid)
             root.addWidget(roster_box)
+
+            script_incident_box = QGroupBox("剧本事件配置")
+            script_incident_layout = QVBoxLayout(script_incident_box)
+            script_incident_hint = QLabel("用于测试依赖公开/非公开事件表的角色能力，如 AI、神灵、侦探。")
+            script_incident_hint.setWordWrap(True)
+            script_incident_layout.addWidget(script_incident_hint)
+            self.script_incidents_grid = QGridLayout()
+            script_incident_layout.addLayout(self.script_incidents_grid)
+            root.addWidget(script_incident_box)
 
             board_setup_box = QGroupBox("版图配置")
             board_setup_layout = QVBoxLayout(board_setup_box)
@@ -238,12 +251,20 @@ else:
             rule_ability_form.addRow("", rule_ability_row)
             root.addWidget(rule_ability_box)
 
-            reserved_box = QGroupBox("角色能力（预留）")
+            reserved_box = QGroupBox("角色能力 / 特性")
             reserved_layout = QVBoxLayout(reserved_box)
-            self.trigger_character_ability_button = QPushButton("角色能力入口（预留）")
-            self.trigger_character_ability_button.setEnabled(False)
-            reserved_layout.addWidget(self.trigger_character_ability_button)
-            reserved_layout.addWidget(QLabel("后续接入角色能力专项测试。"))
+            helper = QLabel(
+                "友好能力与可声明特性统一复用正式阶段处理器。"
+                "友好能力可直接切到主人公能力阶段执行；其他特性请把上方阶段切到对应时点后执行。"
+            )
+            helper.setWordWrap(True)
+            reserved_layout.addWidget(helper)
+            character_actions = QHBoxLayout()
+            self.enter_goodwill_phase_button = QPushButton("切到主人公能力阶段并执行")
+            self.execute_character_phase_button = QPushButton("执行当前阶段角色特性")
+            character_actions.addWidget(self.enter_goodwill_phase_button)
+            character_actions.addWidget(self.execute_character_phase_button)
+            reserved_layout.addLayout(character_actions)
             root.addWidget(reserved_box)
 
             snapshot_box = QGroupBox("最近记录")
@@ -267,11 +288,14 @@ else:
             self.rule_ability_input.currentIndexChanged.connect(self._refresh_rule_abilities)
             self.execute_phase_button.clicked.connect(self._on_execute_phase)
             self.advance_phase_button.clicked.connect(self._on_advance_phase)
+            self.run_formal_flow_button.clicked.connect(self._on_run_formal_flow)
             self.refresh_ability_button.clicked.connect(self._refresh_identity_abilities)
             self.refresh_rule_ability_button.clicked.connect(self._refresh_rule_abilities)
             self.trigger_incident_button.clicked.connect(self._on_trigger_incident)
             self.trigger_identity_ability_button.clicked.connect(self._on_trigger_identity_ability)
             self.trigger_rule_ability_button.clicked.connect(self._on_trigger_rule_ability)
+            self.enter_goodwill_phase_button.clicked.connect(self._on_enter_goodwill_phase)
+            self.execute_character_phase_button.clicked.connect(self._on_execute_phase)
 
             self.refresh()
 
@@ -307,6 +331,9 @@ else:
             self._ensure_rule_x_inputs()
             self._refresh_rule_x_options()
             self._rebuild_character_rows()
+            self._refresh_character_script_inputs()
+            self._rebuild_script_incident_rows()
+            self._refresh_script_incident_inputs()
             self._rebuild_board_token_rows()
             self._refresh_incident_inputs()
             self._refresh_actor_inputs()
@@ -372,6 +399,15 @@ else:
                 self.controller.advance_phase()
             except Exception as exc:
                 QMessageBox.warning(self, "推进阶段失败", str(exc))
+                return
+            self.refresh()
+
+        def _on_run_formal_flow(self) -> None:
+            try:
+                self._ensure_session()
+                self.controller.run_formal_flow_until_wait_or_end()
+            except Exception as exc:
+                QMessageBox.warning(self, "按正式流程推进失败", str(exc))
                 return
             self.refresh()
 
@@ -447,6 +483,20 @@ else:
                 return
             self.refresh()
 
+        def _on_enter_goodwill_phase(self) -> None:
+            index = self.phase_input.findData(GamePhase.PROTAGONIST_ABILITY.value)
+            if index >= 0:
+                self.phase_input.setCurrentIndex(index)
+            try:
+                self._commit_inputs()
+                self.controller.rebuild_session()
+                self.controller.execute_current_phase()
+            except Exception as exc:
+                QMessageBox.warning(self, "进入角色能力阶段失败", str(exc))
+                return
+            self.refresh()
+            self._notify_after_apply()
+
         def _commit_inputs(self, *, module_override: str | None = None) -> None:
             module_id = module_override or self._combo_value(self.module_input)
             self.controller.set_module(module_id)
@@ -470,6 +520,11 @@ else:
                     TestCharacterDraft(
                         character_id=self._combo_value(row["character"]),  # type: ignore[arg-type]
                         identity_id=self._combo_value(row["identity"]),  # type: ignore[arg-type]
+                        initial_area_id=self._combo_value(row["initial_area"]),  # type: ignore[arg-type]
+                        territory_area_id=self._combo_value(row["territory_area"]),  # type: ignore[arg-type]
+                        entry_loop=row["entry_loop"].value(),  # type: ignore[index]
+                        entry_day=row["entry_day"].value(),  # type: ignore[index]
+                        hermit_x=row["hermit_x"].value(),  # type: ignore[index]
                         area=self._combo_value(row["area"]),  # type: ignore[arg-type]
                         life_state=self._combo_value(row["life_state"]),  # type: ignore[arg-type]
                         revealed=row["revealed"].isChecked(),  # type: ignore[index]
@@ -477,6 +532,17 @@ else:
                     )
                 )
             self.controller.replace_characters(rows)
+            incidents: list[TestIncidentDraft] = []
+            for day_label, incident_input, perpetrator_input in self._script_incident_inputs:
+                del day_label
+                incidents.append(
+                    TestIncidentDraft(
+                        incident_id=self._combo_value(incident_input),
+                        day=len(incidents) + 1,
+                        perpetrator_id=self._combo_value(perpetrator_input),
+                    )
+                )
+            self.controller.replace_incidents(incidents)
             board_tokens: dict[str, dict[str, int]] = {}
             for area_id, token_spins in self._board_token_inputs.items():
                 board_tokens[area_id] = {
@@ -520,7 +586,7 @@ else:
             self._character_inputs.clear()
 
             headers = [
-                "角色", "身份", "区域", "状态", "公开",
+                "角色", "身份", "剧本初始区", "领地", "登场轮", "登场天", "仙人X", "当前区域", "状态", "公开",
                 "不安", "密谋", "友好", "希望", "绝望", "护卫",
             ]
             for column, header in enumerate(headers):
@@ -549,6 +615,17 @@ else:
             for row_index, item in enumerate(self.controller.draft.characters, start=1):
                 character_input = QComboBox()
                 identity_input = QComboBox()
+                initial_area_input = QComboBox()
+                territory_area_input = QComboBox()
+                entry_loop_input = QSpinBox()
+                entry_loop_input.setMinimum(0)
+                entry_loop_input.setMaximum(TEST_MODE_LOOP_COUNT)
+                entry_day_input = QSpinBox()
+                entry_day_input.setMinimum(0)
+                entry_day_input.setMaximum(TEST_MODE_DAYS_PER_LOOP)
+                hermit_x_input = QSpinBox()
+                hermit_x_input.setMinimum(0)
+                hermit_x_input.setMaximum(99)
                 area_input = QComboBox()
                 life_state_input = QComboBox()
                 revealed_input = QCheckBox()
@@ -560,15 +637,25 @@ else:
                     [(state.value, state.value) for state in CharacterLifeState],
                     item.life_state,
                 )
+                entry_loop_input.setValue(item.entry_loop)
+                entry_day_input.setValue(item.entry_day)
+                hermit_x_input.setValue(item.hermit_x)
                 revealed_input.setChecked(item.revealed)
+                character_input.currentIndexChanged.connect(self._refresh_character_script_inputs)
+                character_input.currentIndexChanged.connect(self._refresh_script_incident_inputs)
                 self.characters_grid.addWidget(character_input, row_index, 0)
                 self.characters_grid.addWidget(identity_input, row_index, 1)
-                self.characters_grid.addWidget(area_input, row_index, 2)
-                self.characters_grid.addWidget(life_state_input, row_index, 3)
-                self.characters_grid.addWidget(revealed_input, row_index, 4)
+                self.characters_grid.addWidget(initial_area_input, row_index, 2)
+                self.characters_grid.addWidget(territory_area_input, row_index, 3)
+                self.characters_grid.addWidget(entry_loop_input, row_index, 4)
+                self.characters_grid.addWidget(entry_day_input, row_index, 5)
+                self.characters_grid.addWidget(hermit_x_input, row_index, 6)
+                self.characters_grid.addWidget(area_input, row_index, 7)
+                self.characters_grid.addWidget(life_state_input, row_index, 8)
+                self.characters_grid.addWidget(revealed_input, row_index, 9)
 
                 token_spins: dict[str, QSpinBox] = {}
-                for column_offset, (token_id, _label) in enumerate(token_columns, start=5):
+                for column_offset, (token_id, _label) in enumerate(token_columns, start=10):
                     spin = QSpinBox()
                     spin.setMinimum(0)
                     spin.setMaximum(99)
@@ -580,12 +667,107 @@ else:
                     {
                         "character": character_input,
                         "identity": identity_input,
+                        "initial_area": initial_area_input,
+                        "territory_area": territory_area_input,
+                        "entry_loop": entry_loop_input,
+                        "entry_day": entry_day_input,
+                        "hermit_x": hermit_x_input,
                         "area": area_input,
                         "life_state": life_state_input,
                         "revealed": revealed_input,
                         "token_spins": token_spins,
                     }
                 )
+
+        def _refresh_character_script_inputs(self) -> None:
+            for index, row in enumerate(self._character_inputs):
+                character_id = self._combo_value(row["character"])  # type: ignore[arg-type]
+                draft_item = self.controller.draft.characters[index]
+
+                current_initial_area = self._combo_value(row["initial_area"])  # type: ignore[arg-type]
+                if not current_initial_area:
+                    current_initial_area = draft_item.initial_area_id
+                initial_area_options, initial_area_enabled = self.controller.character_initial_area_options(character_id)
+                self._set_combo_items(row["initial_area"], initial_area_options, current_initial_area)  # type: ignore[arg-type]
+                row["initial_area"].setEnabled(initial_area_enabled)  # type: ignore[index]
+
+                current_territory_area = self._combo_value(row["territory_area"])  # type: ignore[arg-type]
+                if not current_territory_area:
+                    current_territory_area = draft_item.territory_area_id
+                territory_options, territory_enabled = self.controller.character_territory_area_options(character_id)
+                self._set_combo_items(row["territory_area"], territory_options, current_territory_area)  # type: ignore[arg-type]
+                row["territory_area"].setEnabled(territory_enabled)  # type: ignore[index]
+
+                entry_loop_enabled = self.controller.character_can_set_entry_loop(character_id)
+                current_entry_loop = row["entry_loop"].value() if row["entry_loop"].isEnabled() else draft_item.entry_loop  # type: ignore[index]
+                row["entry_loop"].blockSignals(True)  # type: ignore[index]
+                row["entry_loop"].setValue(current_entry_loop if entry_loop_enabled else 0)  # type: ignore[index]
+                row["entry_loop"].setEnabled(entry_loop_enabled)  # type: ignore[index]
+                row["entry_loop"].blockSignals(False)  # type: ignore[index]
+
+                entry_day_enabled = self.controller.character_can_set_entry_day(character_id)
+                current_entry_day = row["entry_day"].value() if row["entry_day"].isEnabled() else draft_item.entry_day  # type: ignore[index]
+                row["entry_day"].blockSignals(True)  # type: ignore[index]
+                row["entry_day"].setValue(current_entry_day if entry_day_enabled else 0)  # type: ignore[index]
+                row["entry_day"].setEnabled(entry_day_enabled)  # type: ignore[index]
+                row["entry_day"].blockSignals(False)  # type: ignore[index]
+
+                hermit_x_enabled = self.controller.character_can_set_hermit_x(character_id)
+                hermit_spec = self.controller.character_hermit_x_spec(character_id)
+                current_hermit_x = row["hermit_x"].value() if row["hermit_x"].isEnabled() else draft_item.hermit_x  # type: ignore[index]
+                hermit_value = current_hermit_x if hermit_x_enabled else 0
+                row["hermit_x"].blockSignals(True)  # type: ignore[index]
+                row["hermit_x"].setMinimum(int(hermit_spec.get("min", 0)))  # type: ignore[index]
+                row["hermit_x"].setValue(hermit_value)  # type: ignore[index]
+                row["hermit_x"].setEnabled(hermit_x_enabled)  # type: ignore[index]
+                row["hermit_x"].blockSignals(False)  # type: ignore[index]
+
+        def _rebuild_script_incident_rows(self) -> None:
+            while self.script_incidents_grid.count():
+                item = self.script_incidents_grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            self._script_incident_inputs.clear()
+
+            self.script_incidents_grid.addWidget(QLabel("天数"), 0, 0)
+            self.script_incidents_grid.addWidget(QLabel("事件"), 0, 1)
+            self.script_incidents_grid.addWidget(QLabel("当事人"), 0, 2)
+            for index, item in enumerate(self.controller.draft.incidents, start=1):
+                day_label = QLabel(f"第 {item.day} 天")
+                incident_input = QComboBox()
+                perpetrator_input = QComboBox()
+                self.script_incidents_grid.addWidget(day_label, index, 0)
+                self.script_incidents_grid.addWidget(incident_input, index, 1)
+                self.script_incidents_grid.addWidget(perpetrator_input, index, 2)
+                self._script_incident_inputs.append((day_label, incident_input, perpetrator_input))
+
+        def _refresh_script_incident_inputs(self) -> None:
+            incident_options = [("", "无事件")] + [
+                (incident_id, incident_option_label(incident_id))
+                for incident_id in self.controller.available_incident_ids
+            ]
+            selected_characters = self._selected_character_ids_from_inputs()
+            if not selected_characters:
+                selected_characters = self.controller.available_character_ids
+            character_options = [("", "未选择")] + [
+                (character_id, character_option_label(character_id))
+                for character_id in selected_characters
+            ]
+            for index, (_day_label, incident_input, perpetrator_input) in enumerate(self._script_incident_inputs):
+                draft_item = self.controller.draft.incidents[index]
+                current_incident = self._combo_value(incident_input) or draft_item.incident_id
+                current_perpetrator = self._combo_value(perpetrator_input) or draft_item.perpetrator_id
+                self._set_combo_items(incident_input, incident_options, current_incident)
+                self._set_combo_items(perpetrator_input, character_options, current_perpetrator)
+
+        def _selected_character_ids_from_inputs(self) -> list[str]:
+            selected: list[str] = []
+            for row in self._character_inputs:
+                character_id = self._combo_value(row["character"])  # type: ignore[arg-type]
+                if character_id and character_id not in selected:
+                    selected.append(character_id)
+            return selected
 
         def _rebuild_board_token_rows(self) -> None:
             while self.board_setup_grid.count():

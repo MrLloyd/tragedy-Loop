@@ -9,6 +9,7 @@ from ui.controllers.test_mode_controller import (
     TEST_MODE_DAYS_PER_LOOP,
     TEST_MODE_LOOP_COUNT,
     TestCharacterDraft,
+    TestIncidentDraft,
     TestModeController,
 )
 
@@ -50,6 +51,68 @@ def test_test_mode_controller_rebuilds_debug_session_without_rules() -> None:
     assert controller.session.state.characters["office_worker"].identity_id == "mastermind"
     assert controller.session.state.characters["office_worker"].tokens.get(TokenType.INTRIGUE) == 1
     assert controller.session.state.characters["office_worker"].revealed is True
+
+
+def test_test_mode_controller_rebuilds_script_character_fields_and_incidents() -> None:
+    controller = TestModeController("basic_tragedy_x")
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="vip",
+                identity_id="mastermind",
+                territory_area_id="shrine",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="servant",
+                identity_id="平民",
+                initial_area_id="school",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="deity",
+                identity_id="平民",
+                entry_loop=2,
+                area="city",
+            ),
+            TestCharacterDraft(
+                character_id="transfer_student",
+                identity_id="平民",
+                entry_day=3,
+                area="city",
+            ),
+            TestCharacterDraft(
+                character_id="hermit",
+                identity_id="平民",
+                hermit_x=2,
+                area="hospital",
+            ),
+        ]
+    )
+    controller.replace_incidents(
+        [
+            TestIncidentDraft("butterfly_effect", day=1, perpetrator_id="vip"),
+            TestIncidentDraft("", day=2, perpetrator_id=""),
+            TestIncidentDraft("spiritual_contamination", day=3, perpetrator_id="hermit"),
+        ]
+    )
+
+    controller.rebuild_session()
+
+    assert controller.session is not None
+    state = controller.session.state
+    assert state.characters["vip"].territory_area == AreaId.SHRINE
+    assert state.characters["servant"].initial_area == AreaId.SCHOOL
+    assert state.characters["deity"].entry_loop == 2
+    assert state.characters["transfer_student"].entry_day == 3
+    by_id = {setup.character_id: setup for setup in state.script.private_table.characters}
+    assert by_id["hermit"].hermit_x == 2
+    assert [(item.incident_id, item.day, item.perpetrator_id) for item in state.script.private_table.incidents] == [
+        ("butterfly_effect", 1, "vip"),
+        ("spiritual_contamination", 3, "hermit"),
+    ]
+    assert state.script.public_table.incidents[0]["name"] == "蝴蝶效应"
+    assert state.script.public_table.incidents[1]["name"] == "邪气污染"
 
 
 def test_test_mode_controller_can_trigger_identity_ability_and_incident() -> None:
@@ -477,6 +540,129 @@ def test_test_mode_controller_can_execute_and_advance_phase() -> None:
     assert controller.draft.current_phase == GamePhase.TURN_END.value
 
 
+def test_test_mode_controller_can_run_formal_flow_until_wait() -> None:
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.ACTION_RESOLVE.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="mastermind",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="shrine_maiden",
+                identity_id="平民",
+                area="school",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    controller.run_formal_flow_until_wait_or_end()
+
+    assert controller.pending_wait is not None
+    assert controller.pending_wait.input_type == "choose_playwright_ability"
+    assert controller.session is not None
+    assert controller.session.state.current_phase == GamePhase.PLAYWRIGHT_ABILITY
+
+
+def test_test_mode_controller_execute_protagonist_phase_lists_all_available_goodwill_abilities() -> None:
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.PROTAGONIST_ABILITY.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="平民",
+                area="city",
+                tokens={"goodwill": 3},
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="city",
+                tokens={"goodwill": 3},
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    controller.execute_current_phase()
+
+    wait = controller.pending_wait
+    assert wait is not None
+    assert wait.input_type == "choose_goodwill_ability"
+    ability_ids = {
+        getattr(getattr(option, "ability", None), "ability_id", "")
+        for option in wait.options
+        if getattr(option, "ability", None) is not None
+    }
+    assert ability_ids == {"goodwill:office_worker:1", "goodwill:ai:1"}
+
+
+def test_test_mode_controller_can_resume_hermit_goodwill_from_phase_input() -> None:
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.PROTAGONIST_ABILITY.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="hermit",
+                identity_id="平民",
+                hermit_x=2,
+                area="hospital",
+                tokens={"goodwill": 5},
+            ),
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="平民",
+                area="city",
+                life_state=CharacterLifeState.DEAD.value,
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    controller.execute_current_phase()
+
+    wait = controller.pending_wait
+    assert wait is not None
+    ability = next(
+        option
+        for option in wait.options
+        if getattr(getattr(option, "ability", None), "ability_id", "") == "goodwill:hermit:1"
+    )
+
+    controller.submit_input(ability)
+    destination_wait = controller.pending_wait
+    assert destination_wait is not None
+    assert destination_wait.input_type == "respond_goodwill_ability"
+
+    controller.submit_input("allow")
+
+    assert controller.session is not None
+    assert controller.session.state.characters["hermit"].area == AreaId.CITY
+    assert controller.session.state.characters["office_worker"].life_state == CharacterLifeState.ALIVE
+    assert controller.session.state.characters["office_worker"].tokens.goodwill == 2
+
+
 def test_test_mode_controller_execute_phase_records_wait_for_input() -> None:
     controller = TestModeController("first_steps")
     controller.set_runtime(
@@ -510,6 +696,51 @@ def test_test_mode_controller_execute_phase_records_wait_for_input() -> None:
         "player": "mastermind",
         "prompt": "剧作家请选择要声明的能力，或 pass",
     }
+
+
+def test_test_mode_controller_can_resume_character_trait_wait_from_phase_input() -> None:
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.PROTAGONIST_ABILITY.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="sacred_tree",
+                identity_id="平民",
+                area="shrine",
+                tokens={"paranoia": 1},
+            ),
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="平民",
+                area="shrine",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    controller.execute_current_phase()
+
+    wait = controller.pending_wait
+    assert wait is not None
+    ability = next(
+        option
+        for option in wait.options
+        if getattr(getattr(option, "ability", None), "ability_id", "") == "character_trait_ability:sacred_tree:protagonist_move_token"
+    )
+
+    controller.submit_input(ability)
+
+    target_wait = controller.pending_wait
+    assert target_wait is not None
+    assert target_wait.input_type == "choose_goodwill_ability"
+
+    assert controller.session is not None
+    assert controller.session.state.characters["sacred_tree"].tokens.paranoia == 0
+    assert controller.session.state.characters["office_worker"].tokens.paranoia == 1
 
 
 def test_test_mode_controller_can_resume_wait_with_phase_input() -> None:

@@ -41,6 +41,7 @@ from engine.state_machine import StateMachine
 
 TEST_MODE_LOOP_COUNT = 3
 TEST_MODE_DAYS_PER_LOOP = 3
+TEST_MODE_FORMAL_FLOW_MAX_STEPS = 64
 
 
 @dataclass(frozen=True)
@@ -49,10 +50,24 @@ class TestCharacterDraft:
 
     character_id: str
     identity_id: str = "平民"
+    initial_area_id: str = ""
+    territory_area_id: str = ""
+    entry_loop: int = 0
+    entry_day: int = 0
+    hermit_x: int = 0
     area: str = AreaId.CITY.value
     life_state: str = CharacterLifeState.ALIVE.value
     revealed: bool = False
     tokens: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TestIncidentDraft:
+    __test__ = False
+
+    incident_id: str
+    day: int
+    perpetrator_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,7 @@ class TestModeDraft:
     current_day: int = 1
     current_phase: str = GamePhase.PLAYWRIGHT_ABILITY.value
     characters: list[TestCharacterDraft] = field(default_factory=list)
+    incidents: list[TestIncidentDraft] = field(default_factory=list)
     board_tokens: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
@@ -227,6 +243,61 @@ class TestModeController:
     def available_token_ids() -> list[str]:
         return [token.value for token in TokenType]
 
+    def character_initial_area_spec(self, character_id: str) -> dict[str, object]:
+        raw_specs = self._context.get("character_initial_area_specs", {})
+        if not isinstance(raw_specs, dict):
+            return {}
+        raw = raw_specs.get(character_id, {})
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def character_initial_area_options(self, character_id: str) -> tuple[list[tuple[str, str]], bool]:
+        spec = self.character_initial_area_spec(character_id)
+        mode = str(spec.get("mode", "fixed") or "fixed")
+        default_area = str(spec.get("default_area", "") or "")
+        raw_candidates = spec.get("candidates", [])
+        candidates = [str(item) for item in raw_candidates] if isinstance(raw_candidates, list) else []
+
+        if mode == "script_choice":
+            return ([(area_id, area_name(area_id)) for area_id in candidates], True)
+        if mode == "mastermind_each_loop":
+            return ([("", "每轮回开始由剧作家决定")], False)
+        label = f"固定：{area_name(default_area)}" if default_area else "固定"
+        return ([("", label)], False)
+
+    @staticmethod
+    def character_territory_area_options(character_id: str) -> tuple[list[tuple[str, str]], bool]:
+        if character_id != "vip":
+            return ([("", "无领地")], False)
+        options = [(area.value, area_name(area.value)) for area in AreaId if area != AreaId.FARAWAY]
+        return (options, True)
+
+    def character_can_set_entry_loop(self, character_id: str) -> bool:
+        raw = self._context.get("entry_loop_character_ids", [])
+        allowed = {str(item) for item in raw} if isinstance(raw, list) else set()
+        return character_id in allowed
+
+    def character_can_set_entry_day(self, character_id: str) -> bool:
+        raw = self._context.get("entry_day_character_ids", [])
+        allowed = {str(item) for item in raw} if isinstance(raw, list) else set()
+        return character_id in allowed
+
+    def character_hermit_x_spec(self, character_id: str) -> dict[str, int]:
+        raw_specs = self._context.get("character_hermit_x_specs", {})
+        if not isinstance(raw_specs, dict):
+            return {}
+        raw = raw_specs.get(character_id, {})
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            "min": int(raw.get("min", 0)),
+            "default": int(raw.get("default", 0)),
+        }
+
+    def character_can_set_hermit_x(self, character_id: str) -> bool:
+        raw = self._context.get("hermit_x_character_ids", [])
+        allowed = {str(item) for item in raw} if isinstance(raw, list) else set()
+        return character_id in allowed
+
     def set_module(self, module_id: str) -> None:
         self._context = build_script_setup_context(
             module_id,
@@ -235,6 +306,8 @@ class TestModeController:
             errors=[],
         )
         characters = self.draft.characters or []
+        incidents = self.draft.incidents or []
+        normalized_characters = [self._normalize_character(item) for item in characters]
         self.draft = TestModeDraft(
             module_id=module_id,
             rule_y_id=self._normalize_rule_y_id(self.draft.rule_y_id),
@@ -242,7 +315,11 @@ class TestModeController:
             current_loop=self.draft.current_loop,
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
-            characters=[self._normalize_character(item) for item in characters],
+            characters=normalized_characters,
+            incidents=self._normalize_incidents(
+                incidents,
+                character_ids={item.character_id for item in normalized_characters if item.character_id},
+            ),
             board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
@@ -255,6 +332,7 @@ class TestModeController:
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
             characters=list(self.draft.characters),
+            incidents=list(self.draft.incidents),
             board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
@@ -267,10 +345,12 @@ class TestModeController:
             current_day=max(1, min(TEST_MODE_DAYS_PER_LOOP, int(current_day))),
             current_phase=current_phase,
             characters=list(self.draft.characters),
+            incidents=list(self.draft.incidents),
             board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
     def replace_characters(self, characters: list[TestCharacterDraft]) -> None:
+        normalized_characters = [self._normalize_character(item) for item in characters]
         self.draft = TestModeDraft(
             module_id=self.draft.module_id,
             rule_y_id=self.draft.rule_y_id,
@@ -278,7 +358,24 @@ class TestModeController:
             current_loop=self.draft.current_loop,
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
-            characters=[self._normalize_character(item) for item in characters],
+            characters=normalized_characters,
+            incidents=self._normalize_incidents(
+                self.draft.incidents,
+                character_ids={item.character_id for item in normalized_characters if item.character_id},
+            ),
+            board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
+        )
+
+    def replace_incidents(self, incidents: list[TestIncidentDraft]) -> None:
+        self.draft = TestModeDraft(
+            module_id=self.draft.module_id,
+            rule_y_id=self.draft.rule_y_id,
+            rule_x_ids=list(self.draft.rule_x_ids),
+            current_loop=self.draft.current_loop,
+            current_day=self.draft.current_day,
+            current_phase=self.draft.current_phase,
+            characters=list(self.draft.characters),
+            incidents=self._normalize_incidents(incidents),
             board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
 
@@ -291,6 +388,7 @@ class TestModeController:
             current_day=self.draft.current_day,
             current_phase=self.draft.current_phase,
             characters=list(self.draft.characters),
+            incidents=list(self.draft.incidents),
             board_tokens=self._normalize_board_tokens(board_tokens),
         )
 
@@ -303,6 +401,11 @@ class TestModeController:
             TestCharacterDraft(
                 character_id=character_id,
                 identity_id="平民",
+                initial_area_id=self._default_initial_area_choice_for(character_id),
+                territory_area_id="",
+                entry_loop=0,
+                entry_day=0,
+                hermit_x=self.character_hermit_x_spec(character_id).get("default", 0),
                 area=self._default_area_for(character_id),
                 tokens={},
             )
@@ -318,9 +421,26 @@ class TestModeController:
 
     def rebuild_session(self) -> None:
         character_setups = [
-            CharacterSetup(item.character_id, item.identity_id)
+            CharacterSetup(
+                item.character_id,
+                item.identity_id,
+                initial_area=item.initial_area_id,
+                territory_area=item.territory_area_id,
+                entry_loop=item.entry_loop,
+                entry_day=item.entry_day,
+                hermit_x=item.hermit_x,
+            )
             for item in self.draft.characters
             if item.character_id
+        ]
+        incidents = [
+            IncidentSchedule(
+                item.incident_id,
+                day=item.day,
+                perpetrator_id=item.perpetrator_id,
+            )
+            for item in self.draft.incidents
+            if item.incident_id and item.perpetrator_id
         ]
         self.session = build_debug_state(
             self.draft.module_id,
@@ -329,7 +449,7 @@ class TestModeController:
             rule_y_id=self.draft.rule_y_id or None,
             rule_x_ids=[rule_id for rule_id in self.draft.rule_x_ids if rule_id] or None,
             character_setups=character_setups,
-            incidents=[],
+            incidents=incidents,
             skip_script_validation=True,
         )
         apply_debug_setup(
@@ -770,6 +890,33 @@ class TestModeController:
         })
         self.status_message = f"阶段已推进：{phase_name(prev_phase.value)} → {phase_name(next_phase.value)}"
 
+    def run_formal_flow_until_wait_or_end(
+        self,
+        *,
+        max_steps: int = TEST_MODE_FORMAL_FLOW_MAX_STEPS,
+    ) -> None:
+        if self.session is None or self.state_machine is None:
+            raise RuntimeError("调试局尚未建立")
+        if self.pending_wait is not None:
+            raise RuntimeError("当前阶段正在等待输入，请先在下方提交")
+        if max_steps <= 0:
+            raise ValueError("max_steps 必须大于 0")
+
+        phase_steps = 0
+        while phase_steps < max_steps:
+            if self.state_machine.current_phase == GamePhase.GAME_END:
+                self.status_message = "当前已是游戏结束阶段"
+                return
+            self.execute_current_phase()
+            phase_steps += 1
+            if self.pending_wait is not None:
+                return
+            self.advance_phase()
+
+        raise RuntimeError(
+            f"按正式流程推进超过 {max_steps} 个阶段仍未到达输入点，请检查当前配置"
+        )
+
     @staticmethod
     def _ability_token_options(effect: Any) -> list[str]:
         value = getattr(effect, "value", None)
@@ -842,6 +989,37 @@ class TestModeController:
         character_id = item.character_id if item.character_id in self.available_character_ids else self._default_character_id()
         identity_id = item.identity_id if item.identity_id in self.available_identity_ids else "平民"
         area = item.area if item.area in self.available_area_ids() else self._default_area_for(character_id)
+        initial_area_options, initial_area_enabled = self.character_initial_area_options(character_id)
+        initial_area_values = {value for value, _label in initial_area_options if value}
+        if initial_area_enabled:
+            initial_area_id = (
+                item.initial_area_id
+                if item.initial_area_id in initial_area_values
+                else self._default_initial_area_choice_for(character_id)
+            )
+        else:
+            initial_area_id = ""
+
+        territory_options, territory_enabled = self.character_territory_area_options(character_id)
+        territory_values = {value for value, _label in territory_options if value}
+        if territory_enabled:
+            territory_area_id = item.territory_area_id if item.territory_area_id in territory_values else ""
+        else:
+            territory_area_id = ""
+
+        entry_loop = 0
+        if self.character_can_set_entry_loop(character_id):
+            entry_loop = max(0, min(TEST_MODE_LOOP_COUNT, int(item.entry_loop)))
+
+        entry_day = 0
+        if self.character_can_set_entry_day(character_id):
+            entry_day = max(0, min(TEST_MODE_DAYS_PER_LOOP, int(item.entry_day)))
+
+        hermit_x = 0
+        if self.character_can_set_hermit_x(character_id):
+            spec = self.character_hermit_x_spec(character_id)
+            hermit_x = max(int(spec.get("min", 0)), int(item.hermit_x))
+
         tokens = {
             token_id: max(0, int(amount))
             for token_id, amount in item.tokens.items()
@@ -850,11 +1028,37 @@ class TestModeController:
         return TestCharacterDraft(
             character_id=character_id,
             identity_id=identity_id,
+            initial_area_id=initial_area_id,
+            territory_area_id=territory_area_id,
+            entry_loop=entry_loop,
+            entry_day=entry_day,
+            hermit_x=hermit_x,
             area=area,
             life_state=item.life_state if item.life_state in {state.value for state in CharacterLifeState} else CharacterLifeState.ALIVE.value,
             revealed=item.revealed,
             tokens=tokens,
         )
+
+    def _normalize_incidents(
+        self,
+        incidents: list[TestIncidentDraft] | None,
+        *,
+        character_ids: set[str] | None = None,
+    ) -> list[TestIncidentDraft]:
+        incidents_by_day = {
+            item.day: item
+            for item in (incidents or [])
+            if 1 <= int(item.day) <= TEST_MODE_DAYS_PER_LOOP
+        }
+        valid_incident_ids = set(self.available_incident_ids)
+        valid_perpetrators = character_ids if character_ids is not None else set(self.available_perpetrator_ids())
+        normalized: list[TestIncidentDraft] = []
+        for day in range(1, TEST_MODE_DAYS_PER_LOOP + 1):
+            original = incidents_by_day.get(day, TestIncidentDraft("", day=day, perpetrator_id=""))
+            incident_id = original.incident_id if original.incident_id in valid_incident_ids else ""
+            perpetrator_id = original.perpetrator_id if original.perpetrator_id in valid_perpetrators else ""
+            normalized.append(TestIncidentDraft(incident_id=incident_id, day=day, perpetrator_id=perpetrator_id))
+        return normalized
 
     def _normalize_board_tokens(
         self,
@@ -896,6 +1100,12 @@ class TestModeController:
         if character is None:
             return AreaId.CITY.value
         return character.initial_area.value
+
+    def _default_initial_area_choice_for(self, character_id: str) -> str:
+        options, enabled = self.character_initial_area_options(character_id)
+        if not enabled:
+            return ""
+        return options[0][0] if options else ""
 
     def _normalize_rule_y_id(self, rule_y_id: str) -> str:
         return rule_y_id if rule_y_id in self.available_rule_y_ids else ""
@@ -980,6 +1190,7 @@ class TestModeController:
             current_day=self.session.state.current_day,
             current_phase=phase,
             characters=list(self.draft.characters),
+            incidents=list(self.draft.incidents),
             board_tokens=self._normalize_board_tokens(self.draft.board_tokens),
         )
         self.session.state.current_phase = GamePhase(phase)

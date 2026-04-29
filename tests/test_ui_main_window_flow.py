@@ -220,6 +220,160 @@ def test_test_mode_screen_applies_board_tokens_for_rule_test() -> None:
 
 
 @pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_exposes_special_script_fields_and_incident_rows() -> None:
+    app = QApplication.instance() or QApplication([])
+    screen = TestModeScreen(TestModeController("first_steps"))
+    screen.show()
+    app.processEvents()
+
+    row = screen._character_inputs[0]
+
+    row["character"].setCurrentIndex(row["character"].findData("servant"))  # type: ignore[index]
+    app.processEvents()
+    assert row["initial_area"].isEnabled() is True  # type: ignore[index]
+
+    row["character"].setCurrentIndex(row["character"].findData("vip"))  # type: ignore[index]
+    app.processEvents()
+    assert row["territory_area"].isEnabled() is True  # type: ignore[index]
+
+    row["character"].setCurrentIndex(row["character"].findData("deity"))  # type: ignore[index]
+    app.processEvents()
+    assert row["entry_loop"].isEnabled() is True  # type: ignore[index]
+
+    row["character"].setCurrentIndex(row["character"].findData("transfer_student"))  # type: ignore[index]
+    app.processEvents()
+    assert row["entry_day"].isEnabled() is True  # type: ignore[index]
+
+    row["character"].setCurrentIndex(row["character"].findData("hermit"))  # type: ignore[index]
+    app.processEvents()
+    assert row["hermit_x"].isEnabled() is True  # type: ignore[index]
+    assert len(screen._script_incident_inputs) == 3
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_enters_goodwill_phase_and_resolves_character_ability(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.TURN_START.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="平民",
+                area="school",
+                tokens={"goodwill": 3},
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="city",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    monkeypatch.setattr(
+        test_mode_screen_module.QMessageBox,
+        "information",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.enter_goodwill_phase_button.click()
+    app.processEvents()
+
+    wait = screen.phase_session.view_state.current_wait
+    assert wait is not None
+    assert wait.input_type == "choose_goodwill_ability"
+    ability_row = next(
+        index
+        for index, option in enumerate(wait.options)
+        if getattr(getattr(option, "ability", None), "ability_id", "") == "goodwill:office_worker:1"
+    )
+    screen.phase_game_screen.options_list.setCurrentRow(ability_row)
+    screen.phase_game_screen.submit_button.click()
+    app.processEvents()
+
+    assert screen.phase_session.view_state.current_wait is not None
+    assert screen.phase_session.view_state.current_wait.input_type == "respond_goodwill_ability"
+    screen.phase_game_screen.allow_button.click()
+    app.processEvents()
+
+    assert controller.session is not None
+    assert controller.session.state.characters["office_worker"].revealed is True
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_execute_phase_shows_all_available_goodwill_abilities() -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.PROTAGONIST_ABILITY.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="平民",
+                area="city",
+                tokens={"goodwill": 3},
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="city",
+                tokens={"goodwill": 3},
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.execute_phase_button.click()
+    app.processEvents()
+
+    wait = screen.phase_session.view_state.current_wait
+    assert wait is not None
+    assert wait.input_type == "choose_goodwill_ability"
+    ability_ids = {
+        getattr(getattr(option, "ability", None), "ability_id", "")
+        for option in wait.options
+        if getattr(option, "ability", None) is not None
+    }
+    assert ability_ids == {"goodwill:office_worker:1", "goodwill:ai:1"}
+    labels = [
+        screen.phase_game_screen.options_list.item(index).text()
+        for index in range(screen.phase_game_screen.options_list.count())
+    ]
+    assert "放弃 / 结束声明" in labels
+    assert "职员：职员 友好能力1" in labels
+    assert "AI：AI 友好能力1" in labels
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
 def test_test_mode_screen_trigger_identity_ability_keeps_previous_effects(monkeypatch) -> None:
     app = QApplication.instance() or QApplication([])
     controller = TestModeController("first_steps")
@@ -450,6 +604,52 @@ def test_test_mode_screen_reuses_game_screen_for_phase_wait_input(monkeypatch) -
 
     assert controller.session is not None
     assert controller.session.state.characters["ai"].tokens.get(TokenType.INTRIGUE) == 1
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_can_run_formal_flow_until_phase_wait() -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.ACTION_RESOLVE.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="mastermind",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="school",
+            ),
+            TestCharacterDraft(
+                character_id="shrine_maiden",
+                identity_id="平民",
+                area="school",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.run_formal_flow_button.click()
+    app.processEvents()
+
+    wait = screen.phase_session.view_state.current_wait
+    assert wait is not None
+    assert wait.input_type == "choose_playwright_ability"
+    assert screen.phase_value.text() == "剧作家能力阶段"
 
     screen.close()
     app.processEvents()
