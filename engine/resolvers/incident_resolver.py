@@ -91,6 +91,7 @@ class IncidentResolver:
         resolution.occurred = True
 
         if incident_def is None:
+            self._emit_phenomenon_report(state, schedule, has_phenomenon=False)
             resolution.public_result = self._build_public_result(
                 state,
                 schedule,
@@ -113,6 +114,7 @@ class IncidentResolver:
             effective_incident_def,
             location_context=location_context,
         ) is not None:
+            self._emit_phenomenon_report(state, schedule, has_phenomenon=False)
             resolution.public_result = self._build_public_result(
                 state,
                 schedule,
@@ -134,6 +136,11 @@ class IncidentResolver:
         resolution.mutations = effects_result.mutations
         resolution.outcome = effects_result.outcome
         resolution.has_phenomenon = effects_result.has_phenomenon
+        self._emit_phenomenon_report(
+            state,
+            schedule,
+            has_phenomenon=resolution.has_phenomenon,
+        )
         resolution.public_result = self._build_public_result(
             state,
             schedule,
@@ -417,6 +424,24 @@ class IncidentResolver:
                 "day": state.current_day,
             },
         ))
+
+    def _emit_phenomenon_report(
+        self,
+        state: GameState,
+        schedule: IncidentSchedule,
+        *,
+        has_phenomenon: bool,
+    ) -> None:
+        self.event_bus.emit(
+            GameEvent(
+                GameEventType.INCIDENT_PHENOMENON_REPORTED,
+                {
+                    "incident_id": schedule.incident_id,
+                    "day": state.current_day,
+                    "has_phenomenon": has_phenomenon,
+                },
+            )
+        )
 
     def _build_public_result(
         self,

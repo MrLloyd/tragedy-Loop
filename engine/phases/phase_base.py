@@ -2108,7 +2108,7 @@ class ProtagonistAbilityHandler(PhaseHandler):
             return self._resolve_candidate(
                 state,
                 target_candidates[0],
-                next_signal_factory=PhaseComplete,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
             )
 
         def _on_choice(choice: Any) -> PhaseSignal:
@@ -2118,7 +2118,7 @@ class ProtagonistAbilityHandler(PhaseHandler):
             return self._resolve_candidate(
                 state,
                 candidate,
-                next_signal_factory=PhaseComplete,
+                next_signal_factory=lambda: self._request_goodwill_ability(state),
             )
 
         return WaitForInput(
@@ -2137,25 +2137,28 @@ class ProtagonistAbilityHandler(PhaseHandler):
         if candidate.ability.ability_id == self._SISTER_ABILITY_ID:
             return self._resolve_goodwill_ability(state, candidate)
         owner_id = candidate.source_id
-        if candidate.ability.can_be_refused:
-            if self.ability_resolver.goodwill_refusal_is_mandatory(state, owner_id):
+        if not candidate.ability.can_be_refused:
+            return self._resolve_goodwill_ability(state, candidate)
+        if not self.ability_resolver.goodwill_should_be_ignored(state, owner_id):
+            return self._resolve_goodwill_ability(state, candidate)
+        options = ["allow", "refuse"]
+        if self.ability_resolver.goodwill_refusal_is_mandatory(state, owner_id):
+            options = ["refuse"]
+
+        def _on_refuse(choice: Any) -> PhaseSignal:
+            if choice not in options:
+                raise ValueError("invalid goodwill response")
+            if choice == "refuse":
                 return self._refuse_goodwill_ability(state, candidate)
+            return self._resolve_goodwill_ability(state, candidate)
 
-            def _on_refuse(choice: Any) -> PhaseSignal:
-                if choice not in {"allow", "refuse"}:
-                    raise ValueError("invalid goodwill response")
-                if choice == "refuse":
-                    return self._refuse_goodwill_ability(state, candidate)
-                return self._resolve_goodwill_ability(state, candidate)
-
-            return WaitForInput(
-                input_type="respond_goodwill_ability",
-                prompt="剧作家是否拒绝该友好能力？",
-                options=["allow", "refuse"],
-                player="mastermind",
-                callback=_on_refuse,
-            )
-        return self._resolve_goodwill_ability(state, candidate)
+        return WaitForInput(
+            input_type="respond_goodwill_ability",
+            prompt="剧作家是否拒绝该友好能力？",
+            options=options,
+            player="mastermind",
+            callback=_on_refuse,
+        )
 
     def _refuse_goodwill_ability(
         self,

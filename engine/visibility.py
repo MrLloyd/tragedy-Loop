@@ -187,7 +187,14 @@ class Visibility:
             case "incident_occurred":
                 incident_id = incident_name(str(details.get("incident_id", "?")))
                 day = details.get("day", "?")
-                return f"第 {day} 天发生事件：{incident_id}"
+                return f"第 {day} 天，{incident_id}事件发生了"
+
+            case "incident_phenomenon":
+                if bool(details.get("has_phenomenon")):
+                    return ""
+                incident_id = incident_name(str(details.get("incident_id", "?")))
+                day = details.get("day", "?")
+                return f"第 {day} 天，{incident_id}无现象"
 
             case "reveal_rule_x":
                 return f"公开规则 X：{rule_name(str(details.get('rule_x_id', '?')))}"

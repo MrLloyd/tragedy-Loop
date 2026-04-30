@@ -204,6 +204,7 @@ class TestModeGameSessionController(GameSessionController):
             "IDENTITY_REVEALED": "reveal_identity",
             "INCIDENT_REVEALED": "reveal_incident",
             "INCIDENT_OCCURRED": "incident_occurred",
+            "INCIDENT_PHENOMENON_REPORTED": "incident_phenomenon",
             "LOOP_ENDED": "loop_ended",
             "GAME_ENDED": "game_ended",
             "ABILITY_REFUSED": "ability_refused",

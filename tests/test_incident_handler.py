@@ -161,6 +161,84 @@ def test_incident_triggers_and_marks_occurred() -> None:
     assert emitted[0].data["perpetrator_id"] == "perp"
 
 
+def test_incident_reports_no_phenomenon_when_no_effect_runs() -> None:
+    handler, bus = _make_handler()
+    state = _make_state_with_incident(paranoia=2, paranoia_limit=2)
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    reports = [
+        event
+        for event in bus.log
+        if event.event_type == GameEventType.INCIDENT_PHENOMENON_REPORTED
+    ]
+    assert len(reports) == 1
+    assert reports[0].data["incident_id"] == "test_incident"
+    assert reports[0].data["day"] == 1
+    assert reports[0].data["has_phenomenon"] is False
+    occurred_index = next(
+        index
+        for index, event in enumerate(bus.log)
+        if event.event_type == GameEventType.INCIDENT_OCCURRED
+    )
+    report_index = next(
+        index
+        for index, event in enumerate(bus.log)
+        if event.event_type == GameEventType.INCIDENT_PHENOMENON_REPORTED
+    )
+    assert occurred_index < report_index
+
+
+def test_incident_reports_phenomenon_after_effect_resolution() -> None:
+    handler, bus = _make_handler()
+    incident_def = IncidentDef(
+        incident_id="test_incident",
+        name="测试事件",
+        module="test",
+        effects=[
+            Effect(
+                effect_type=EffectType.PLACE_TOKEN,
+                target="school",
+                token_type=TokenType.INTRIGUE,
+                amount=1,
+            )
+        ],
+    )
+    state = _make_state_with_incident(
+        paranoia=2,
+        paranoia_limit=2,
+        incident_def=incident_def,
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, PhaseComplete)
+    reports = [
+        event
+        for event in bus.log
+        if event.event_type == GameEventType.INCIDENT_PHENOMENON_REPORTED
+    ]
+    assert len(reports) == 1
+    assert reports[0].data["has_phenomenon"] is True
+    occurred_index = next(
+        index
+        for index, event in enumerate(bus.log)
+        if event.event_type == GameEventType.INCIDENT_OCCURRED
+    )
+    token_index = next(
+        index
+        for index, event in enumerate(bus.log)
+        if event.event_type == GameEventType.TOKEN_CHANGED
+    )
+    report_index = next(
+        index
+        for index, event in enumerate(bus.log)
+        if event.event_type == GameEventType.INCIDENT_PHENOMENON_REPORTED
+    )
+    assert occurred_index < token_index < report_index
+
+
 def test_temp_worker_and_alt_trigger_same_incident_with_simultaneous_resolution() -> None:
     handler, bus = _make_handler()
     state = GameState.create_minimal_test_state(days_per_loop=3)

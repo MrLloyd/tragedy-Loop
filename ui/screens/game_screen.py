@@ -379,9 +379,12 @@ else:
 
         def _toggle_action_buttons(self, wait_type: str) -> None:
             allow_response = wait_type == "respond_goodwill_ability"
-            self.allow_button.setVisible(allow_response)
-            self.refuse_button.setVisible(allow_response)
             wait = self._session.view_state.current_wait if self._session is not None else None
+            response_options = set(wait.options) if allow_response and wait is not None else set()
+            show_allow = allow_response and (not response_options or "allow" in response_options)
+            show_refuse = allow_response and (not response_options or "refuse" in response_options)
+            self.allow_button.setVisible(show_allow)
+            self.refuse_button.setVisible(show_refuse)
             requires_target = wait_type in {"place_action_cards", "place_action_card"}
             supports_confirm = bool(wait_type) and wait is not None and not wait.options and not allow_response
             supports_submit = bool(wait_type) and wait is not None and bool(wait.options) and not allow_response

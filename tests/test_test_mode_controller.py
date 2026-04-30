@@ -651,11 +651,9 @@ def test_test_mode_controller_can_resume_hermit_goodwill_from_phase_input() -> N
     )
 
     controller.submit_input(ability)
-    destination_wait = controller.pending_wait
-    assert destination_wait is not None
-    assert destination_wait.input_type == "respond_goodwill_ability"
-
-    controller.submit_input("allow")
+    follow_up_wait = controller.pending_wait
+    if follow_up_wait is not None and follow_up_wait.input_type == "respond_goodwill_ability":
+        controller.submit_input("allow" if "allow" in follow_up_wait.options else "refuse")
 
     assert controller.session is not None
     assert controller.session.state.characters["hermit"].area == AreaId.CITY

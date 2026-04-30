@@ -104,7 +104,7 @@ def _respond(session: GameSessionController) -> None:
         return
 
     if wait.input_type == "respond_goodwill_ability":
-        session.submit_goodwill_response(allow=True)
+        session.submit_goodwill_response(allow="allow" in wait.options)
         return
 
     if "pass" in wait.options:

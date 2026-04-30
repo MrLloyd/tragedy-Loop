@@ -31,9 +31,11 @@ def _protagonist_allow(signal: WaitForInput, ability_id: str):
         and option.ability.ability_id == ability_id
     )
     response = signal.callback(choice)
-    assert isinstance(response, WaitForInput)
-    assert response.input_type == "respond_goodwill_ability"
-    return response.callback("allow")
+    if isinstance(response, WaitForInput) and response.input_type == "respond_goodwill_ability":
+        if "allow" in response.options:
+            return response.callback("allow")
+        return response.callback("refuse")
+    return response
 
 
 def test_phase5_identity_abilities_are_available_for_configured_cast() -> None:
@@ -186,7 +188,7 @@ def test_phase5_idol_goodwill_places_goodwill_on_other_character() -> None:
     assert state.characters["male_student"].tokens.get(TokenType.GOODWILL) == 1
 
 
-def test_phase5_male_student_goodwill_can_be_refused() -> None:
+def test_phase5_male_student_goodwill_commoner_executes_without_refusal_prompt() -> None:
     bus, atomic = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, atomic)
     state = GameState()
@@ -221,14 +223,9 @@ def test_phase5_male_student_goodwill_can_be_refused() -> None:
     )
 
     response = signal.callback(choice)
-    assert isinstance(response, WaitForInput)
-    assert response.input_type == "respond_goodwill_ability"
-
-    follow_up = response.callback("refuse")
-
-    assert isinstance(follow_up, WaitForInput)
+    assert not (isinstance(response, WaitForInput) and response.input_type == "respond_goodwill_ability")
     assert state.characters["male_student"].tokens.get(TokenType.GOODWILL) == 2
-    assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 1
+    assert state.characters["female_student"].tokens.get(TokenType.PARANOIA) == 0
 
 
 def test_phase5_sister_forces_adult_goodwill_without_refusal() -> None:
@@ -319,6 +316,107 @@ def test_phase5_sister_forces_adult_goodwill_without_refusal() -> None:
     assert state.characters["victim"].tokens.get(TokenType.PARANOIA) == 2
     assert state.ability_runtime.usages_this_loop["goodwill:sister:goodwill:sister:1"] == 1
     assert state.ability_runtime.usages_this_loop["goodwill:soldier:goodwill:soldier:1"] == 1
+
+
+def test_phase5_sister_forced_goodwill_refreshes_list_for_remaining_goodwill_candidates() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["sister"] = CharacterState(
+        character_id="sister",
+        name="妹妹",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="sister",
+        original_identity_id="sister",
+        attributes={Attribute.GIRL, Attribute.SISTER},
+        goodwill_ability_texts=[
+            "同一区域的1名成人使用1个友好能力，此时无视该成人的友好指示物数量。",
+            "",
+            "",
+            "",
+        ],
+        goodwill_ability_goodwill_requirements=[5, 0, 0, 0],
+        goodwill_ability_once_per_loop=[True, False],
+    )
+    state.characters["soldier"] = CharacterState(
+        character_id="soldier",
+        name="军人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="soldier",
+        original_identity_id="soldier",
+        attributes={Attribute.ADULT, Attribute.MALE},
+        base_traits={Trait.IGNORE_GOODWILL},
+        goodwill_abilities=[
+            Ability(
+                ability_id="goodwill:soldier:1",
+                name="军人 友好能力1",
+                ability_type=AbilityType.OPTIONAL,
+                timing=AbilityTiming.PROTAGONIST_ABILITY,
+                description="往同一区域任意1名角色身上放置2枚不安指示物",
+                effects=[
+                    Effect(
+                        effect_type=EffectType.PLACE_TOKEN,
+                        target={"scope": "same_area", "subject": "character"},
+                        token_type=TokenType.PARANOIA,
+                        amount=2,
+                    )
+                ],
+                goodwill_requirement=2,
+                once_per_loop=True,
+                can_be_refused=True,
+            )
+        ],
+    )
+    state.characters["office_worker"] = CharacterState(
+        character_id="office_worker",
+        name="职员",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="killer",
+        original_identity_id="killer",
+        goodwill_ability_texts=["公开该角色的身份", "", "", ""],
+        goodwill_ability_goodwill_requirements=[3, 0, 0, 0],
+        goodwill_ability_once_per_loop=[True, False],
+    )
+    state.characters["victim"] = CharacterState(
+        character_id="victim",
+        name="路人",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+        attributes={Attribute.ADULT},
+    )
+    state.characters["sister"].tokens.add(TokenType.GOODWILL, 5)
+    state.characters["soldier"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["office_worker"].tokens.add(TokenType.GOODWILL, 3)
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    sister_choice = next(
+        option
+        for option in signal.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == "goodwill:sister:1"
+    )
+    target_wait = signal.callback(sister_choice)
+    assert isinstance(target_wait, WaitForInput)
+    soldier_wait = target_wait.callback("soldier")
+    assert isinstance(soldier_wait, WaitForInput)
+
+    refreshed_wait = soldier_wait.callback("victim")
+    assert isinstance(refreshed_wait, WaitForInput)
+    assert refreshed_wait.input_type == "choose_goodwill_ability"
+    refreshed_ids = {
+        option.ability.ability_id
+        for option in refreshed_wait.options
+        if getattr(option, "ability", None) is not None
+    }
+    assert "goodwill:office_worker:1" in refreshed_ids
+    assert "goodwill:sister:1" not in refreshed_ids
+    assert "goodwill:soldier:1" not in refreshed_ids
 
 
 def test_phase5_office_worker_goodwill_reveals_identity() -> None:

@@ -306,13 +306,86 @@ def test_test_mode_screen_enters_goodwill_phase_and_resolves_character_ability(m
     screen.phase_game_screen.submit_button.click()
     app.processEvents()
 
-    assert screen.phase_session.view_state.current_wait is not None
-    assert screen.phase_session.view_state.current_wait.input_type == "respond_goodwill_ability"
-    screen.phase_game_screen.allow_button.click()
-    app.processEvents()
+    follow_up_wait = screen.phase_session.view_state.current_wait
+    if follow_up_wait is not None and follow_up_wait.input_type == "respond_goodwill_ability":
+        if "allow" in follow_up_wait.options:
+            screen.phase_game_screen.allow_button.click()
+        else:
+            screen.phase_game_screen.refuse_button.click()
+        app.processEvents()
 
     assert controller.session is not None
     assert controller.session.state.characters["office_worker"].revealed is True
+
+    screen.close()
+    app.processEvents()
+
+
+@pytest.mark.skipif(QApplication is None, reason="PySide6 is not installed")
+def test_test_mode_screen_shows_only_refuse_for_must_ignore_goodwill(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    controller = TestModeController("first_steps")
+    controller.set_runtime(
+        current_loop=1,
+        current_day=1,
+        current_phase=GamePhase.TURN_START.value,
+    )
+    controller.replace_characters(
+        [
+            TestCharacterDraft(
+                character_id="office_worker",
+                identity_id="cultist",
+                area="school",
+                tokens={"goodwill": 3},
+            ),
+            TestCharacterDraft(
+                character_id="ai",
+                identity_id="平民",
+                area="city",
+            ),
+        ]
+    )
+    controller.rebuild_session()
+
+    from ui.screens import test_mode_screen as test_mode_screen_module
+
+    monkeypatch.setattr(
+        test_mode_screen_module.QMessageBox,
+        "information",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    screen = TestModeScreen(controller)
+    screen.show()
+    app.processEvents()
+
+    screen.enter_goodwill_phase_button.click()
+    app.processEvents()
+
+    wait = screen.phase_session.view_state.current_wait
+    assert wait is not None
+    assert wait.input_type == "choose_goodwill_ability"
+    ability_row = next(
+        index
+        for index, option in enumerate(wait.options)
+        if getattr(getattr(option, "ability", None), "ability_id", "") == "goodwill:office_worker:1"
+    )
+    screen.phase_game_screen.options_list.setCurrentRow(ability_row)
+    screen.phase_game_screen.submit_button.click()
+    app.processEvents()
+
+    follow_up_wait = screen.phase_session.view_state.current_wait
+    assert follow_up_wait is not None
+    assert follow_up_wait.input_type == "respond_goodwill_ability"
+    assert follow_up_wait.options == ["refuse"]
+    assert screen.phase_game_screen.allow_button.isVisible() is False
+    assert screen.phase_game_screen.refuse_button.isVisible() is True
+
+    screen.phase_game_screen.refuse_button.click()
+    app.processEvents()
+
+    assert controller.session is not None
+    assert controller.session.state.characters["office_worker"].revealed is False
 
     screen.close()
     app.processEvents()

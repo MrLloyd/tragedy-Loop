@@ -40,7 +40,9 @@ def _choose_goodwill(signal: WaitForInput, ability_id: str):
     )
     response = signal.callback(choice)
     if isinstance(response, WaitForInput) and response.input_type == "respond_goodwill_ability":
-        return response.callback("allow")
+        if "allow" in response.options:
+            return response.callback("allow")
+        return response.callback("refuse")
     return response
 
 
@@ -667,8 +669,14 @@ def test_henchman_structured_goodwill_refuse_does_not_suppress_incident() -> Non
     ability_handler = ProtagonistAbilityHandler(bus, atomic)
     incident_handler = IncidentHandler(bus, atomic)
     state = GameState()
+    state.identity_defs["ignore_identity"] = IdentityDef(
+        identity_id="ignore_identity",
+        name="无视友好身份",
+        module="test",
+        traits={Trait.IGNORE_GOODWILL},
+    )
     state.current_day = 1
-    state.characters["henchman"] = _instantiate("henchman")
+    state.characters["henchman"] = _instantiate("henchman", identity_id="ignore_identity")
     state.characters["henchman"].tokens.add(TokenType.GOODWILL, 3)
     state.characters["henchman"].tokens.add(
         TokenType.PARANOIA,
@@ -858,6 +866,79 @@ def test_alien_structured_goodwill_revives_dead_character() -> None:
     assert isinstance(result, (WaitForInput, PhaseComplete))
     assert state.characters["corpse_a"].life_state == CharacterLifeState.ALIVE
     assert state.characters["corpse_b"].life_state == CharacterLifeState.DEAD
+
+
+def test_alien_structured_goodwill_refreshes_options_after_kill_then_can_revive() -> None:
+    bus, atomic = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, atomic)
+    state = GameState()
+    state.characters["alien"] = _instantiate("alien")
+    state.characters["alien"].tokens.add(TokenType.GOODWILL, 6)
+    state.characters["victim_a"] = CharacterState(
+        character_id="victim_a",
+        name="受害者A",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+    state.characters["victim_b"] = CharacterState(
+        character_id="victim_b",
+        name="受害者B",
+        area=AreaId.CITY,
+        initial_area=AreaId.CITY,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+    assert isinstance(signal, WaitForInput)
+    assert signal.input_type == "choose_goodwill_ability"
+    first_ids = {
+        option.ability.ability_id
+        for option in signal.options
+        if getattr(option, "ability", None) is not None
+    }
+    assert first_ids == {"goodwill:alien:1"}
+
+    kill_choice = next(
+        option
+        for option in signal.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == "goodwill:alien:1"
+    )
+    kill_target_wait = signal.callback(kill_choice)
+    assert isinstance(kill_target_wait, WaitForInput)
+    assert kill_target_wait.input_type == "choose_ability_target"
+    assert set(kill_target_wait.options) == {"victim_a", "victim_b"}
+
+    refreshed_wait = kill_target_wait.callback("victim_a")
+    assert isinstance(refreshed_wait, WaitForInput)
+    assert refreshed_wait.input_type == "choose_goodwill_ability"
+    assert state.characters["victim_a"].life_state == CharacterLifeState.DEAD
+
+    refreshed_ids = {
+        option.ability.ability_id
+        for option in refreshed_wait.options
+        if getattr(option, "ability", None) is not None
+    }
+    assert refreshed_ids == {"goodwill:alien:2"}
+
+    revive_choice = next(
+        option
+        for option in refreshed_wait.options
+        if getattr(option, "ability", None) is not None
+        and option.ability.ability_id == "goodwill:alien:2"
+    )
+    revive_target_wait = refreshed_wait.callback(revive_choice)
+    if isinstance(revive_target_wait, WaitForInput):
+        assert revive_target_wait.input_type == "choose_ability_target"
+        assert set(revive_target_wait.options) == {"victim_a"}
+        done = revive_target_wait.callback("victim_a")
+        assert isinstance(done, PhaseComplete)
+    else:
+        assert isinstance(revive_target_wait, PhaseComplete)
+    assert state.characters["victim_a"].life_state == CharacterLifeState.ALIVE
 
 
 def test_hermit_goodwill_moves_then_revives_selected_corpse_and_places_scripted_x_goodwill() -> None:

@@ -44,6 +44,14 @@ def _ability_choice(wait: WaitForInput, ability_id: str):
     )
 
 
+def _allow_goodwill_response_if_needed(signal: object):
+    if isinstance(signal, WaitForInput) and signal.input_type == "respond_goodwill_ability":
+        if "allow" in signal.options:
+            return signal.callback("allow")
+        return signal.callback("refuse")
+    return signal
+
+
 def _build_reference_btx_state() -> GameState:
     return build_game_state_from_module(
         "basic_tragedy_x",
@@ -1155,13 +1163,14 @@ def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
     state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
     state.characters["ai"] = CharacterState(
         character_id="ai",
         name="AI",
         area=AreaId.CITY,
         initial_area=AreaId.CITY,
-        identity_id="平民",
-        original_identity_id="平民",
+        identity_id="killer",
+        original_identity_id="killer",
         goodwill_ability_texts=["能力1", "", "", ""],
         goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
         goodwill_ability_once_per_loop=[False],
@@ -1180,7 +1189,7 @@ def test_protagonist_ability_handler_supports_refuse_and_allow() -> None:
     assert state.characters["ai"].tokens.get(TokenType.GOODWILL) == 2
     assert any(event.event_type == GameEventType.ABILITY_REFUSED for event in bus.log)
 
-    allow_wait = next_signal.callback(choice)
+    allow_wait = next_signal.callback(_ability_choice(next_signal, "goodwill:ai:1"))
     assert isinstance(allow_wait, WaitForInput)
     done = allow_wait.callback("allow")
     assert isinstance(done, WaitForInput)
@@ -1191,13 +1200,14 @@ def test_protagonist_ability_refuse_consumes_once_per_loop_without_spending_good
     bus, resolver = _resolver_bundle()
     handler = ProtagonistAbilityHandler(bus, resolver)
     state = GameState()
+    apply_loaded_module(state, load_module("first_steps"))
     state.characters["ai"] = CharacterState(
         character_id="ai",
         name="AI",
         area=AreaId.CITY,
         initial_area=AreaId.CITY,
-        identity_id="平民",
-        original_identity_id="平民",
+        identity_id="killer",
+        original_identity_id="killer",
         goodwill_ability_texts=["能力1", "", "", ""],
         goodwill_ability_goodwill_requirements=[1, 0, 0, 0],
         goodwill_ability_once_per_loop=[True],
@@ -1268,7 +1278,11 @@ def test_protagonist_ability_must_refuse_when_identity_must_ignore_goodwill() ->
     choice = next(option for option in signal.options if getattr(option, "ability", None) is not None)
     follow_up = signal.callback(choice)
 
-    assert isinstance(follow_up, PhaseComplete)
+    assert isinstance(follow_up, WaitForInput)
+    assert follow_up.input_type == "respond_goodwill_ability"
+    assert follow_up.options == ["refuse"]
+    done = follow_up.callback("refuse")
+    assert isinstance(done, PhaseComplete)
     assert state.characters["cultist"].tokens.get(TokenType.GOODWILL) == 1
     assert any(event.event_type == GameEventType.ABILITY_REFUSED for event in bus.log)
 
@@ -1320,7 +1334,7 @@ def test_ai_goodwill_uses_public_incident_and_does_not_mark_incident_occurred() 
     public_wait = signal.callback(_ability_choice(signal, "goodwill:ai:1"))
     assert isinstance(public_wait, WaitForInput)
     if public_wait.input_type == "respond_goodwill_ability":
-        public_wait = public_wait.callback("allow")
+        public_wait = public_wait.callback("allow" if "allow" in public_wait.options else "refuse")
         assert isinstance(public_wait, WaitForInput)
     assert public_wait.input_type == "choose_public_incident"
     assert public_wait.player == "protagonist_0"
@@ -1387,11 +1401,9 @@ def test_informant_goodwill_reveals_other_selected_rule_x_after_declaration() ->
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
 
-    choose_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
-    assert isinstance(choose_wait, WaitForInput)
-    assert choose_wait.input_type == "respond_goodwill_ability"
-
-    declared_wait = choose_wait.callback("allow")
+    declared_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    )
     assert isinstance(declared_wait, WaitForInput)
     assert declared_wait.input_type == "choose_rule_x_declaration"
 
@@ -1430,10 +1442,9 @@ def test_informant_goodwill_allows_playwright_choice_when_both_selected_rules_di
 
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
-    assert isinstance(response_wait, WaitForInput)
-
-    declared_wait = response_wait.callback("allow")
+    declared_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    )
     assert isinstance(declared_wait, WaitForInput)
 
     reveal_wait = declared_wait.callback("btx_causal_line")
@@ -1471,10 +1482,9 @@ def test_informant_goodwill_reveals_first_steps_rule_x_directly() -> None:
 
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:informant:1"))
-    assert isinstance(response_wait, WaitForInput)
-
-    done = response_wait.callback("allow")
+    done = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:informant:1"))
+    )
 
     assert isinstance(done, PhaseComplete)
     assert state.revealed_rule_x_ids == ["fs_ripper_shadow"]
@@ -1501,11 +1511,9 @@ def test_appraiser_goodwill_moves_selected_token_between_two_same_area_character
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
 
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
-    assert isinstance(response_wait, WaitForInput)
-    assert response_wait.input_type == "respond_goodwill_ability"
-
-    source_wait = response_wait.callback("allow")
+    source_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    )
     assert isinstance(source_wait, WaitForInput)
     assert source_wait.input_type == "choose_ability_target"
     assert set(source_wait.options) == {"male_student", "female_student"}
@@ -1544,10 +1552,9 @@ def test_appraiser_goodwill_can_select_two_empty_characters_and_resolve_no_effec
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
 
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
-    assert isinstance(response_wait, WaitForInput)
-
-    source_wait = response_wait.callback("allow")
+    source_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    )
     assert isinstance(source_wait, WaitForInput)
 
     target_wait = source_wait.callback("male_student")
@@ -1577,10 +1584,9 @@ def test_appraiser_goodwill_must_choose_one_available_move_after_targets_selecte
 
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
-    assert isinstance(response_wait, WaitForInput)
-
-    source_wait = response_wait.callback("allow")
+    source_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    )
     assert isinstance(source_wait, WaitForInput)
     target_wait = source_wait.callback("male_student")
     assert isinstance(target_wait, WaitForInput)
@@ -1610,10 +1616,9 @@ def test_appraiser_goodwill_must_move_from_b_when_only_b_has_tokens() -> None:
 
     signal = handler.execute(state)
     assert isinstance(signal, WaitForInput)
-    response_wait = signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
-    assert isinstance(response_wait, WaitForInput)
-
-    source_wait = response_wait.callback("allow")
+    source_wait = _allow_goodwill_response_if_needed(
+        signal.callback(_ability_choice(signal, "goodwill:appraiser:1"))
+    )
     assert isinstance(source_wait, WaitForInput)
     target_wait = source_wait.callback("male_student")
     assert isinstance(target_wait, WaitForInput)
