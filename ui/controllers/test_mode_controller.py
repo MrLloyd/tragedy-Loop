@@ -35,6 +35,7 @@ from engine.models.selectors import (
 )
 from engine.models.script import CharacterSetup
 from engine.phases.phase_base import ForceLoopEnd, PhaseComplete, WaitForInput, create_phase_handlers
+from engine.rules.character_loader import load_character_defs
 from engine.rules.persistent_effects import settle_persistent_effects
 from engine.rules.module_loader import build_script_setup_context
 from engine.state_machine import StateMachine
@@ -91,6 +92,7 @@ class TestModeController:
     __test__ = False
 
     def __init__(self, module_id: str = "first_steps") -> None:
+        self._character_defs = load_character_defs()
         self._context: dict[str, object] = {}
         self.draft = TestModeDraft(module_id=module_id)
         self.session: DebugSession | None = None
@@ -396,6 +398,7 @@ class TestModeController:
         character_id = self._default_character_id(exclude={item.character_id for item in self.draft.characters if item.character_id})
         if not character_id:
             return
+        hermit_x = self._default_hermit_x_value(character_id)
         rows = list(self.draft.characters)
         rows.append(
             TestCharacterDraft(
@@ -405,12 +408,27 @@ class TestModeController:
                 territory_area_id="",
                 entry_loop=0,
                 entry_day=0,
-                hermit_x=self.character_hermit_x_spec(character_id).get("default", 0),
+                hermit_x=hermit_x,
                 area=self._default_area_for(character_id),
-                tokens={},
+                tokens=self.default_tokens_for_character(character_id, hermit_x=hermit_x),
             )
         )
         self.replace_characters(rows)
+
+    def default_tokens_for_character(
+        self,
+        character_id: str,
+        *,
+        hermit_x: int = 0,
+    ) -> dict[str, int]:
+        paranoia = self._default_paranoia_limit_for_character(character_id, hermit_x=hermit_x)
+        goodwill = self._default_goodwill_requirement_for_character(character_id)
+        defaults: dict[str, int] = {}
+        if paranoia > 0:
+            defaults[TokenType.PARANOIA.value] = paranoia
+        if goodwill > 0:
+            defaults[TokenType.GOODWILL.value] = goodwill
+        return defaults
 
     def remove_character(self) -> None:
         rows = list(self.draft.characters)
@@ -1086,20 +1104,44 @@ class TestModeController:
         return self.available_character_ids[0] if self.available_character_ids else ""
 
     def _default_area_for(self, character_id: str) -> str:
-        snapshot = build_script_setup_context(
-            self.draft.module_id,
-            loop_count=TEST_MODE_LOOP_COUNT,
-            days_per_loop=TEST_MODE_DAYS_PER_LOOP,
-            errors=[],
-        )
-        del snapshot  # 只为保持接口对齐，不额外依赖角色详情
-        from engine.rules.character_loader import load_character_defs
-
-        character_defs = load_character_defs()
-        character = character_defs.get(character_id)
+        character = self._character_defs.get(character_id)
         if character is None:
             return AreaId.CITY.value
         return character.initial_area.value
+
+    def _default_hermit_x_value(self, character_id: str) -> int:
+        if not self.character_can_set_hermit_x(character_id):
+            return 0
+        spec = self.character_hermit_x_spec(character_id)
+        min_value = int(spec.get("min", 0))
+        if character_id == "hermit":
+            return max(0, min_value)
+        return max(min_value, int(spec.get("default", 0)))
+
+    def _default_paranoia_limit_for_character(
+        self,
+        character_id: str,
+        *,
+        hermit_x: int,
+    ) -> int:
+        if character_id == "hermit":
+            return max(0, int(hermit_x))
+        character = self._character_defs.get(character_id)
+        if character is None:
+            return 0
+        return max(0, int(character.paranoia_limit))
+
+    def _default_goodwill_requirement_for_character(self, character_id: str) -> int:
+        character = self._character_defs.get(character_id)
+        if character is None:
+            return 0
+        requirements = [0]
+        requirements.extend(
+            max(0, int(getattr(ability, "goodwill_requirement", 0) or 0))
+            for ability in character.goodwill_abilities
+        )
+        requirements.extend(max(0, int(amount)) for amount in character.goodwill_ability_goodwill_requirements)
+        return max(requirements)
 
     def _default_initial_area_choice_for(self, character_id: str) -> str:
         options, enabled = self.character_initial_area_options(character_id)

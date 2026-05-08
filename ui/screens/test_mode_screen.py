@@ -639,8 +639,13 @@ else:
                 entry_day_input.setValue(item.entry_day)
                 hermit_x_input.setValue(item.hermit_x)
                 revealed_input.setChecked(item.revealed)
-                character_input.currentIndexChanged.connect(self._refresh_character_script_inputs)
-                character_input.currentIndexChanged.connect(self._refresh_script_incident_inputs)
+                row_number = row_index - 1
+                character_input.currentIndexChanged.connect(
+                    lambda _value, row_number=row_number: self._on_character_changed(row_number)
+                )
+                hermit_x_input.valueChanged.connect(
+                    lambda _value, row_number=row_number: self._on_hermit_x_changed(row_number)
+                )
                 self.characters_grid.addWidget(character_input, row_index, 0)
                 self.characters_grid.addWidget(identity_input, row_index, 1)
                 self.characters_grid.addWidget(initial_area_input, row_index, 2)
@@ -676,6 +681,35 @@ else:
                         "token_spins": token_spins,
                     }
                 )
+
+        def _on_character_changed(self, row_index: int) -> None:
+            self._refresh_character_script_inputs()
+            self._refresh_script_incident_inputs()
+            self._apply_default_tokens_to_row(row_index)
+
+        def _on_hermit_x_changed(self, row_index: int) -> None:
+            if row_index < 0 or row_index >= len(self._character_inputs):
+                return
+            row = self._character_inputs[row_index]
+            character_id = self._combo_value(row["character"])  # type: ignore[arg-type]
+            if character_id != "hermit":
+                return
+            self._apply_default_tokens_to_row(row_index)
+
+        def _apply_default_tokens_to_row(self, row_index: int) -> None:
+            if row_index < 0 or row_index >= len(self._character_inputs):
+                return
+            row = self._character_inputs[row_index]
+            character_id = self._combo_value(row["character"])  # type: ignore[arg-type]
+            hermit_x = row["hermit_x"].value()  # type: ignore[index]
+            defaults = self.controller.default_tokens_for_character(character_id, hermit_x=hermit_x)
+            token_spins = row["token_spins"]  # type: ignore[index]
+            if not isinstance(token_spins, dict):
+                return
+            for token_id, spin in token_spins.items():
+                spin.blockSignals(True)
+                spin.setValue(int(defaults.get(token_id, 0)))
+                spin.blockSignals(False)
 
         def _refresh_character_script_inputs(self) -> None:
             for index, row in enumerate(self._character_inputs):

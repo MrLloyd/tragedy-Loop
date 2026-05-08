@@ -79,6 +79,7 @@ class PreparedAbilityCandidate:
 
 
 _HERMIT_GOODWILL_ABILITY_ID = "goodwill:hermit:1"
+_APPRAISER_GOODWILL_ABILITY_ID = "goodwill:appraiser:1"
 _HERMIT_GOODWILL_DESTINATION_SELECTORS = (
     {"scope": "any_area", "subject": "board"},
     {"scope": "fixed_area", "subject": "board", "area": AreaId.FARAWAY.value},
@@ -210,7 +211,6 @@ class PhaseHandler(ABC):
         )
         if isinstance(prepared, WaitForInput):
             return prepared
-
         def _before_resolve() -> None:
             self._emit_ability_declared(candidate)
 
@@ -410,6 +410,17 @@ class PhaseHandler(ABC):
                     owner_id=owner_id,
                 )
             )
+        if self._is_appraiser_goodwill_candidate(candidate):
+            return (
+                len(
+                    self._appraiser_goodwill_target_options(
+                        state,
+                        owner_id=owner_id,
+                        location_context=location_context,
+                    )
+                )
+                >= 2
+            )
         return all(
             (
                 choice_request is None
@@ -437,6 +448,32 @@ class PhaseHandler(ABC):
             candidate.source_kind == "goodwill"
             and candidate.ability.ability_id == _HERMIT_GOODWILL_ABILITY_ID
         )
+
+    @staticmethod
+    def _is_appraiser_goodwill_candidate(candidate: AbilityCandidate) -> bool:
+        return (
+            candidate.source_kind == "goodwill"
+            and candidate.ability.ability_id == _APPRAISER_GOODWILL_ABILITY_ID
+        )
+
+    def _appraiser_goodwill_target_options(
+        self,
+        state: GameState,
+        *,
+        owner_id: str,
+        location_context: AbilityLocationContext | None = None,
+    ) -> list[str]:
+        owner = state.characters.get(owner_id)
+        if owner is None or not owner.is_active():
+            return []
+        owner_area = location_context.owner_area if location_context is not None else owner.area
+        return [
+            character_id
+            for character_id, character in state.characters.items()
+            if character_id != owner.character_id
+            and character.is_active()
+            and character.area == owner_area
+        ]
 
     def _hermit_goodwill_destination_options(
         self,
@@ -2688,13 +2725,10 @@ class ProtagonistAbilityHandler(PhaseHandler):
         owner = state.characters.get(candidate.source_id)
         if owner is None:
             return next_signal_factory()
-        options = [
-            character_id
-            for character_id, character in state.characters.items()
-            if character_id != owner.character_id
-            and character.area == owner.area
-            and character.is_active()
-        ]
+        options = self._appraiser_goodwill_target_options(
+            state,
+            owner_id=owner.character_id,
+        )
         if len(options) < 2:
             self.ability_resolver.mark_ability_used(state, candidate)
             return next_signal_factory()

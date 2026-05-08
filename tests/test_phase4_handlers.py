@@ -517,6 +517,37 @@ def test_protagonist_can_declare_sacred_tree_trait_even_with_puppet_ignore_goodw
     assert state.characters["staff"].tokens.get(TokenType.PARANOIA) == 0
 
 
+def test_protagonist_can_declare_sacred_tree_trait_without_tokens_and_resolve_no_effect() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = GameState()
+    defs = load_character_defs()
+    state.characters["sacred_tree"] = instantiate_character_state(
+        CharacterSetup(character_id="sacred_tree", identity_id="commoner"),
+        defs,
+    )
+    state.characters["sacred_tree"].area = AreaId.SHRINE
+    state.characters["sacred_tree"].initial_area = AreaId.SHRINE
+    state.characters["clerk"] = CharacterState(
+        character_id="clerk",
+        name="职员A",
+        area=AreaId.SHRINE,
+        initial_area=AreaId.SHRINE,
+        identity_id="平民",
+        original_identity_id="平民",
+    )
+
+    signal = handler.execute(state)
+
+    assert isinstance(signal, WaitForInput)
+    choice = _ability_choice(signal, "character_trait_ability:sacred_tree:protagonist_move_token")
+    result = signal.callback(choice)
+
+    assert isinstance(result, (WaitForInput, PhaseComplete))
+    assert state.characters["sacred_tree"].tokens.total() == 0
+    assert state.characters["clerk"].tokens.total() == 0
+
+
 def test_playwright_mandatory_executes_sacred_tree_trait_when_puppet_ignore_goodwill() -> None:
     bus, resolver = _resolver_bundle()
     handler = PlaywrightAbilityHandler(bus, resolver)
@@ -1493,6 +1524,31 @@ def test_informant_goodwill_reveals_first_steps_rule_x_directly() -> None:
         and event.data.get("rule_x_id") == "fs_ripper_shadow"
         for event in bus.log
     )
+
+
+def test_appraiser_goodwill_is_hidden_when_only_one_other_same_area_character() -> None:
+    bus, resolver = _resolver_bundle()
+    handler = ProtagonistAbilityHandler(bus, resolver)
+    state = _build_reference_btx_state()
+    state.characters["appraiser"].tokens.add(TokenType.GOODWILL, 2)
+    state.characters["appraiser"].area = AreaId.CITY
+    state.characters["male_student"].area = AreaId.CITY
+    state.characters["female_student"].area = AreaId.SCHOOL
+    state.characters["idol"].area = AreaId.SCHOOL
+    state.characters["office_worker"].area = AreaId.HOSPITAL
+    state.characters["alien"].area = AreaId.SHRINE
+
+    signal = handler.execute(state)
+
+    if isinstance(signal, WaitForInput):
+        ability_ids = [
+            option.ability.ability_id
+            for option in signal.options
+            if getattr(option, "ability", None) is not None
+        ]
+        assert "goodwill:appraiser:1" not in ability_ids
+    else:
+        assert isinstance(signal, PhaseComplete)
 
 
 def test_appraiser_goodwill_moves_selected_token_between_two_same_area_characters() -> None:
