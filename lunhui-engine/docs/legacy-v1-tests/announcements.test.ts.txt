@@ -1,0 +1,255 @@
+// Historical v1 specification; executable v2 regressions live in tests/.
+import { describe, expect, it } from 'vitest';
+import { Engine, createState, type Trace } from '../packages/engine/src/index.js';
+import { projectAnnouncements } from '../packages/engine/src/announcements.js';
+import {
+  announcementProjectionSchema,
+  type CommandEnvelope,
+} from '../packages/contracts/src/index.js';
+import { LocalTransport } from '../packages/transport/src/index.js';
+import { formatAnnouncement } from '../packages/contracts/src/index.js';
+import { batch, character, content, counter, death, hospital, source } from './fixtures.js';
+
+const facts = (e: Engine) => e.announcementsFor('protagonistA').announcements.map((a) => a.fact);
+function choose(e: Engine): CommandEnvelope {
+  const w = e.view('mastermind').waiting!;
+  return {
+    protocolVersion: 1,
+    sessionId: 'local',
+    branchId: 'main',
+    commandId: 'choose',
+    expectedRevision: w.revision,
+    waitingInputId: w.id,
+    command: { kind: 'choose', optionIds: ['yes'] },
+  };
+}
+describe('trace-derived public announcements', () => {
+  it('Chinese messages distinguish results and never fall back to secret IDs', () => {
+    expect(formatAnnouncement({ kind: 'protagonistResult', result: 'protagonistsDied' })).toBe(
+      '主人公死亡',
+    );
+    expect(formatAnnouncement({ kind: 'protagonistResult', result: 'protagonistsFailed' })).toBe(
+      '主人公失败',
+    );
+    expect(formatAnnouncement({ kind: 'characterDied', characterId: 'secret.name' })).toBe(
+      '未知角色死亡',
+    );
+    expect(formatAnnouncement({ kind: 'goodwillRefused' })).toBe('友好能力被拒绝');
+  });
+  it('announces phase entry once; projection is read-only and seat-independent', () => {
+    const e = new Engine(createState([]), content([]));
+    e.enterPhase('incident');
+    const saved = e.serialize();
+    const projection = e.announcementsFor('mastermind');
+    expect(projection).toEqual(e.announcementsFor('protagonistA'));
+    expect(facts(e)).toEqual([{ kind: 'phaseChanged', phase: 'incident', loop: 1, day: 1 }]);
+    projection.announcements[0]!.fact.kind = 'goodwillRefused';
+    expect(e.serialize()).toBe(saved);
+    expect(e.announcementsFor('protagonistA', projection.nextTraceSequence).announcements).toEqual(
+      [],
+    );
+  });
+  it('publishes net committed counters, not source-by-source changes or zero deltas', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([
+        source('secret.one', batch(counter('a', 2), counter('a', 0, 'hope'))),
+        source('secret.two', batch(counter('a', 3))),
+      ]),
+    );
+    e.start(['secret.one', 'secret.two']);
+    expect(facts(e)).toEqual([
+      { kind: 'counterChanged', characterId: 'a', counter: 'anxiety', before: 0, after: 5 },
+    ]);
+  });
+  it('immortality is silent, guard consumption visible, successful death once', () => {
+    const guarded = character('guarded');
+    guarded.counters.guard = 1;
+    const e = new Engine(
+      createState([character('immortal', { traits: ['immortal'] }), guarded, character('dead')]),
+      content([
+        source('s', batch(death('immortal'), death('guarded'), death('dead'), death('dead'))),
+      ]),
+    );
+    e.start(['s']);
+    expect(facts(e)).toEqual([
+      { kind: 'characterDied', characterId: 'dead' },
+      { kind: 'counterChanged', characterId: 'guarded', counter: 'guard', before: 1, after: 0 },
+    ]);
+  });
+  it('refusal exposes no source/cause and an invalid declaration emits nothing', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([source('secret', batch(counter('a', 1)))]),
+    );
+    expect(() => e.startGoodwill('secret', 'missing', true)).toThrow();
+    expect(facts(e)).toEqual([]);
+    e.startGoodwill('secret', 'a', true);
+    expect(facts(e)).toEqual([{ kind: 'goodwillRefused' }]);
+    expect(e.announcementsFor('protagonistA').announcements[0]!.stateRevision).toBe(
+      e.state.revision,
+    );
+  });
+  it.each(['failure', 'protagonists_dead'] as const)('separates result %s', (reason) => {
+    const e = new Engine(createState([]), content([source('s', batch({ kind: 'end', reason }))]));
+    e.start(['s']);
+    expect(facts(e)).toEqual([
+      {
+        kind: 'protagonistResult',
+        result: reason === 'failure' ? 'protagonistsFailed' : 'protagonistsDied',
+      },
+    ]);
+    const before = facts(e);
+    e.run();
+    expect(facts(e)).toEqual(before);
+  });
+  it('death suppresses failure across forced death and completion children', () => {
+    const f = hospital();
+    const e = new Engine(f.state, f.content);
+    e.start(f.roots);
+    expect(e.state.loopFailed && e.state.protagonistsDead).toBe(true);
+    expect(facts(e).filter((f) => f.kind === 'protagonistResult')).toEqual([
+      { kind: 'protagonistResult', result: 'protagonistsDied' },
+    ]);
+    expect(facts(e).at(-1)).toEqual({ kind: 'protagonistResult', result: 'protagonistsDied' });
+  });
+  it('defers failure across waiting, restore and cursor; later forced death wins', async () => {
+    const c = content(
+      [
+        source('root', batch({ kind: 'end', reason: 'failure' })),
+        source('follow', {
+          kind: 'batch',
+          optional: 'mastermind',
+          effects: [{ kind: 'end', reason: 'protagonists_dead' }],
+        }),
+      ],
+      {
+        triggers: [
+          {
+            id: 'secret.trigger',
+            event: 'completed',
+            subject: 'root',
+            sources: ['follow'],
+            priority: 0,
+            allowDead: true,
+          },
+        ],
+      },
+    );
+    const original = new Engine(createState([]), c);
+    original.start(['root']);
+    const cursor = original.announcementsFor('protagonistA').nextTraceSequence;
+    expect(facts(original)).toEqual([]);
+    const e = Engine.restore(original.serialize(), c);
+    expect(e.serialize()).toBe(original.serialize());
+    const transport = new LocalTransport(e, 'mastermind');
+    const cmd = choose(e);
+    expect((await transport.submit(cmd)).status).toBe('accepted');
+    const result = await transport.getAnnouncements(cursor);
+    expect(result.announcements.map((a) => a.fact)).toEqual([
+      { kind: 'protagonistResult', result: 'protagonistsDied' },
+    ]);
+    await transport.submit(cmd);
+    expect(await transport.getAnnouncements(result.nextTraceSequence)).toMatchObject({
+      announcements: [],
+    });
+    expect(Engine.restore(e.serialize(), c).announcementsFor('protagonistA')).toEqual(
+      e.announcementsFor('protagonistA'),
+    );
+  });
+  it('outer step IDs remain distinct across multi-step sources and explicit calls', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([
+        source('root', batch(counter('a', 1)), { kind: 'call', sources: ['child'] }),
+        source('child', batch({ kind: 'end', reason: 'failure' })),
+      ]),
+    );
+    e.start(['root']);
+    const endings = e.trace.filter((t) => t.kind === 'resolutionSettled');
+    expect(endings).toHaveLength(2);
+    expect(new Set(endings.map((t) => t.data.rootResolutionId)).size).toBe(2);
+    expect(facts(e).at(-1)).toEqual({ kind: 'protagonistResult', result: 'protagonistsFailed' });
+  });
+  it('unknown/private trace never becomes an announcement; P3 public incident is explicit', () => {
+    const announcementContext = { stateRevision: 1, phaseInstance: 1 };
+    const trace: Trace[] = [
+      { seq: 0, kind: 'secret.newRule', data: { announcementContext, message: 'leak' } },
+      { seq: 1, kind: 'completed', data: { announcementContext, source: 'incident' } },
+      {
+        seq: 2,
+        kind: 'incidentOccurred',
+        data: {
+          announcementContext,
+          publicIncidentId: 'public.hospital',
+          loop: 1,
+          day: 2,
+          culprit: 'secret',
+        },
+      },
+    ];
+    expect(projectAnnouncements(trace).announcements.map((a) => a.fact)).toEqual([
+      { kind: 'incidentOccurred', publicIncidentId: 'public.hospital', loop: 1, day: 2 },
+    ]);
+  });
+  it('legacy trace is not guessed into public history and remains restore-compatible', () => {
+    const c = content([source('secret', batch(counter('a', 1)))]);
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['secret']);
+    const saved = JSON.parse(e.serialize());
+    saved.trace = saved.trace
+      .filter((t: Trace) => t.kind !== 'resolutionSettled')
+      .map((t: Trace, seq: number) => {
+        const {
+          announcementContext,
+          rootResolutionId,
+          publicChanges,
+          protagonistsDiedRegistered,
+          protagonistsFailedRegistered,
+          ...data
+        } = t.data;
+        return { ...t, seq, data };
+      });
+    const restored = Engine.restore(JSON.stringify(saved), c);
+    expect(restored.state).toEqual(e.state);
+    expect(facts(restored)).toEqual([]);
+  });
+  it('wire output contains only allowed facts, never raw trace, rules, flags or identities', async () => {
+    const f = hospital();
+    f.state.characters.key!.identity = 'DO_NOT_SEND_IDENTITY';
+    f.state.flags.DO_NOT_SEND_FLAG = true;
+    const e = new Engine(f.state, f.content);
+    e.start(f.roots);
+    const transport = new LocalTransport(e, 'protagonistA');
+    const wire = await transport.getAnnouncements();
+    expect(announcementProjectionSchema.parse(wire)).toEqual(wire);
+    const encoded = JSON.stringify(wire);
+    for (const secret of [
+      'DO_NOT_SEND',
+      'key.death',
+      'keyDeath',
+      'attempts',
+      'checks',
+      'sources',
+      'rootResolutionId',
+      'announcementContext',
+      'victoryRules',
+    ])
+      expect(encoded).not.toContain(secret);
+    expect(JSON.stringify(await transport.getSnapshot())).not.toContain('DO_NOT_SEND');
+    expect(announcementProjectionSchema.safeParse({ ...wire, trace: e.trace }).success).toBe(false);
+    expect(Object.keys(transport).includes('trace')).toBe(false);
+  });
+  it('rejects invalid cursor and leaves no publication state in the save', () => {
+    const e = new Engine(createState([]), content([]));
+    for (const cursor of [-2, 0, 1.5, NaN])
+      expect(() => e.announcementsFor('protagonistA', cursor)).toThrow(
+        'INVALID_ANNOUNCEMENT_CURSOR',
+      );
+    const save = e.serialize();
+    e.announcementsFor('protagonistA');
+    expect(e.serialize()).toBe(save);
+    for (const field of ['publicFeed', 'publishedIds', 'pendingAnnouncements'])
+      expect(save).not.toContain(field);
+  });
+});

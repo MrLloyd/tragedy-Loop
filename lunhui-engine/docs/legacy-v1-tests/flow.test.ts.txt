@@ -1,0 +1,263 @@
+// Historical v1 specification; executable v2 regressions live in tests/.
+import { describe, expect, it } from 'vitest';
+import { Engine, createState, type Content } from '../packages/engine/src/index.js';
+import { LocalTransport } from '../packages/transport/src/index.js';
+import { batch, character, content, counter, death, source } from './fixtures.js';
+
+function choose(e: Engine, option = 'yes') {
+  const w = e.view('mastermind').waiting!;
+  return {
+    protocolVersion: 1 as const,
+    sessionId: 'local',
+    branchId: 'main',
+    commandId: w.id,
+    expectedRevision: w.revision,
+    waitingInputId: w.id,
+    command: { kind: 'choose' as const, optionIds: [option] },
+  };
+}
+function fixture(extra: Partial<Content> = {}) {
+  const c = content(
+    [
+      source('end', batch({ kind: 'end', reason: 'loop_end' })),
+      source('fail', batch({ kind: 'end', reason: 'failure' })),
+      source('cleanup', batch(counter('a', 1)), batch(counter('a', 2))),
+      source('optional', { kind: 'batch', optional: 'mastermind', effects: [counter('a', 4)] }),
+    ],
+    extra,
+  );
+  return { c, e: new Engine(createState([character('a')]), c) };
+}
+
+describe('confirmed flow semantics: outer boundary and loop-end processing', () => {
+  it('FLOW-13 failure inside cleanup entry rolls back all partial commits', () => {
+    const c = content([
+      source('end', batch({ kind: 'end', reason: 'loop_end' })),
+      source('bad', batch(counter('a', 1)), batch(counter('a', 1), counter('a', -1))),
+    ]);
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['end']);
+    const before = e.serialize();
+    expect(() => e.beginLoopEnd(['bad'])).toThrow('COUNTER_CONFLICT');
+    expect(e.serialize()).toBe(before);
+    e.beginLoopEnd([]);
+    expect(e.finishLoopEnd().failed).toBe(false);
+  });
+  it('FLOW-14 restored forced cleanup resumes inside the same source and continues subsequent text', () => {
+    const c = content([
+      source('end', batch({ kind: 'end', reason: 'failure' })),
+      source(
+        'forced',
+        { kind: 'batch', optional: 'mastermind', effects: [counter('a', 1)] },
+        batch(counter('a', 2)),
+      ),
+    ]);
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['end']);
+    e.beginLoopEnd(['forced']);
+    const restored = Engine.restore(e.serialize(), c);
+    expect(restored.loopEndProgress?.node).toBe('forced');
+    restored.submit('mastermind', choose(restored));
+    expect(restored.loopEndProgress?.node).toBe('optional');
+    const result = restored.finishLoopEnd();
+    expect(result.failed).toBe(true);
+    expect(result.finalState.characters.a!.counters.anxiety).toBe(3);
+    expect(Engine.restore(restored.serialize(), c).serialize()).toBe(restored.serialize());
+  });
+  it('FLOW-01 normal settlement is not game completion; repeated run is a no-op', () => {
+    const { e } = fixture();
+    expect(e.resolution).toEqual({ kind: 'idle' });
+    e.start(['cleanup']);
+    expect(e.resolution).toEqual({ kind: 'settled', exit: 'normal' });
+    expect(e.state.winners).toEqual([]);
+    const before = e.serialize();
+    e.run();
+    expect(e.serialize()).toBe(before);
+  });
+  it('FLOW-02 loop-end request is not failure; cleanup subsequently still runs', () => {
+    const { e } = fixture();
+    e.start(['end']);
+    expect(e.resolution).toEqual({ kind: 'settled', exit: 'loop_end' });
+    expect(() => e.start(['cleanup'])).toThrow('START_NOT_AVAILABLE');
+    e.beginLoopEnd(['cleanup']);
+    expect(e.state.phase).toBe('loop_end');
+    expect(e.state.characters.a!.counters.anxiety).toBe(3);
+    expect(e.resolution).toEqual({ kind: 'settled', exit: 'normal' });
+    expect(e.finishLoopEnd().failed).toBe(false);
+    expect(e.state.endRequests).toEqual(['loop_end']);
+  });
+  it('FLOW-03 old and newly registered failure do not truncate loop-end effects', () => {
+    const { e } = fixture();
+    e.start(['fail']);
+    e.beginLoopEnd(['cleanup', 'fail']);
+    expect(e.state.characters.a!.counters.anxiety).toBe(3);
+    const result = e.finishLoopEnd();
+    expect(result.failed).toBe(true);
+    expect(result.finalState.loopFailed).toBe(true);
+  });
+  it('FLOW-04 saves the final state after optional effects, not the entry state', () => {
+    const { e } = fixture();
+    e.start(['end']);
+    e.beginLoopEnd(['cleanup'], ['optional']);
+    e.runLoopEndOptional('optional');
+    expect(e.loopEndProgress?.node).toBe('resolving_optional');
+    expect(e.resolution.kind).toBe('waiting');
+    expect(() => e.finishLoopEnd()).toThrow('FLOW_NOT_AVAILABLE');
+    expect(e.submit('mastermind', choose(e)).status).toBe('accepted');
+    expect(e.loopEndProgress?.node).toBe('optional');
+    const result = e.finishLoopEnd();
+    expect(result.finalState.characters.a!.counters.anxiety).toBe(7);
+    expect(e.trace.at(-1)).toMatchObject({
+      kind: 'loopEndCompleted',
+      data: { failed: false, finalState: result.finalState },
+    });
+    result.finalState.characters.a!.counters.anxiety = 99;
+    expect(e.state.characters.a!.counters.anxiety).toBe(7);
+  });
+  it('FLOW-05 restores a waiting cleanup without replaying the entry or forced effects', () => {
+    const { e, c } = fixture();
+    e.start(['end']);
+    e.beginLoopEnd(['cleanup'], ['optional']);
+    e.runLoopEndOptional('optional');
+    const restored = Engine.restore(e.serialize(), c);
+    expect(restored.serialize()).toBe(e.serialize());
+    const cmd = choose(e);
+    e.submit('mastermind', cmd);
+    restored.submit('mastermind', cmd);
+    expect(restored.serialize()).toBe(e.serialize());
+    expect(restored.trace.filter((t) => t.kind === 'loopEndStarted')).toHaveLength(1);
+    expect(restored.trace.filter((t) => t.kind === 'phaseEntered')).toHaveLength(1);
+  });
+  it('FLOW-06 rejects re-entry, direct source bypass and repeated finalization', () => {
+    const { e } = fixture();
+    e.start(['end']);
+    e.beginLoopEnd([]);
+    const saved = e.serialize();
+    expect(() => e.beginLoopEnd([])).toThrow('LOOP_END_ALREADY_ENTERED');
+    expect(() => e.start(['cleanup'])).toThrow('USE_LOOP_END_FLOW');
+    expect(() => e.enterPhase('incident')).toThrow('PHASE_NOT_AVAILABLE');
+    expect(e.serialize()).toBe(saved);
+    e.finishLoopEnd();
+    const complete = e.serialize();
+    expect(() => e.finishLoopEnd()).toThrow('LOOP_END_NOT_READY');
+    expect(e.serialize()).toBe(complete);
+  });
+  it('FLOW-07 final-day entry is explicit and does not invent failure', () => {
+    const { e } = fixture();
+    expect(() => e.beginLoopEnd([])).toThrow('LOOP_END_NOT_DUE');
+    expect(() => e.beginLoopEnd([], [], 'final_day')).toThrow('LOOP_END_NOT_DUE');
+    e.enterPhase('turn_end');
+    e.beginLoopEnd([], [], 'final_day');
+    expect(e.finishLoopEnd().failed).toBe(false);
+  });
+  it('FLOW-08 errors in host cleanup entry roll back phase, state, trace and cursor', () => {
+    const { e } = fixture();
+    e.start(['end']);
+    const saved = e.serialize();
+    expect(() => e.beginLoopEnd(['missing'])).toThrow('UNKNOWN_SOURCE');
+    expect(e.serialize()).toBe(saved);
+    expect(() => e.beginLoopEnd(['cleanup', 'cleanup'])).toThrow('DUPLICATE_SOURCE');
+    expect(e.serialize()).toBe(saved);
+  });
+  it('FLOW-09 rejects unauthorized optional sources without state changes', () => {
+    const { e } = fixture();
+    e.start(['end']);
+    e.beginLoopEnd([], ['optional']);
+    const saved = e.serialize();
+    expect(() => e.runLoopEndOptional('cleanup')).toThrow('LOOP_END_OPTION_NOT_ALLOWED');
+    expect(e.serialize()).toBe(saved);
+    e.runLoopEndOptional('optional');
+    e.submit('mastermind', choose(e, 'no'));
+    expect(e.finishLoopEnd().finalState.characters.a!.counters.anxiety).toBe(0);
+  });
+  it('FLOW-10 pending forced children block phase exit and keep provisional results private', async () => {
+    const c = content(
+      [
+        source('root', batch({ kind: 'end', reason: 'failure' })),
+        source('follow', {
+          kind: 'batch',
+          optional: 'mastermind',
+          effects: [{ kind: 'end', reason: 'protagonists_dead' }],
+        }),
+      ],
+      {
+        triggers: [
+          {
+            id: 'after',
+            event: 'completed',
+            subject: 'root',
+            sources: ['follow'],
+            priority: 0,
+            allowDead: true,
+          },
+        ],
+      },
+    );
+    const e = new Engine(createState([]), c);
+    e.enterPhase('incident');
+    e.start(['root']);
+    expect(e.state.loopFailed).toBe(true);
+    expect(e.resolution).toEqual({ kind: 'waiting' });
+    expect(() => e.beginLoopEnd([])).toThrow('FLOW_NOT_AVAILABLE');
+    const t = new LocalTransport(e, 'protagonistA');
+    expect((await t.getSnapshot()).outcomes).toEqual({
+      loopFailed: false,
+      protagonistsDead: false,
+      loopEndRequested: false,
+      winners: [],
+    });
+    expect(
+      (await t.getAnnouncements()).announcements.some((a) => a.fact.kind === 'protagonistResult'),
+    ).toBe(false);
+    e.submit('mastermind', choose(e));
+    expect(e.state.loopFailed && e.state.protagonistsDead).toBe(true);
+    expect((await t.getSnapshot()).outcomes).toMatchObject({
+      loopFailed: false,
+      protagonistsDead: true,
+      loopEndRequested: true,
+    });
+    expect(e.resolution).toEqual({ kind: 'settled', exit: 'loop_end' });
+    e.beginLoopEnd([]);
+    expect(e.finishLoopEnd().failed).toBe(true);
+  });
+  it('FLOW-11 special victory drains required children and overrides loop-end routing', () => {
+    const state = createState([character('a'), character('b')]);
+    state.traitors = ['protagonistA'];
+    const c = content(
+      [
+        source('root', batch(death('a'), { kind: 'end', reason: 'failure' })),
+        source('after', batch(counter('b', 2))),
+      ],
+      {
+        victories: [
+          { id: 'win', phase: 'turn_end', mark: 'died', threshold: 1, seat: 'protagonistA' },
+        ],
+        triggers: [
+          {
+            id: 'after',
+            event: 'death',
+            subject: 'a',
+            sources: ['after'],
+            priority: 0,
+            allowDead: true,
+          },
+        ],
+      },
+    );
+    const e = new Engine(state, c);
+    e.enterPhase('turn_end');
+    e.start(['root']);
+    expect(e.state.characters.b!.counters.anxiety).toBe(2);
+    expect(e.resolution).toEqual({ kind: 'settled', exit: 'game_end' });
+    expect(() => e.beginLoopEnd([])).toThrow('FLOW_NOT_AVAILABLE');
+    expect(e.view('protagonistA').outcomes.winners).toEqual(['protagonistA']);
+  });
+  it('FLOW-12 restore rejects a cleanup cursor in the wrong phase', () => {
+    const { e, c } = fixture();
+    e.start(['end']);
+    e.beginLoopEnd([]);
+    const saved = JSON.parse(e.serialize());
+    saved.state.phase = 'incident';
+    expect(() => Engine.restore(JSON.stringify(saved), c)).toThrow('INVALID_LOOP_END_FLOW');
+  });
+});

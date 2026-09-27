@@ -1,0 +1,22 @@
+name: lunhui-engine-core
+on:
+  push:
+    paths: ['lunhui-engine/**', '.github/workflows/lunhui-engine.yml', '*.md']
+  pull_request:
+    paths: ['lunhui-engine/**', '.github/workflows/lunhui-engine.yml', '*.md']
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lunhui-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check

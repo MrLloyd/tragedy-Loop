@@ -1,0 +1,456 @@
+// Historical v1 specification; executable v2 regressions live in tests/.
+import { describe, expect, it } from 'vitest';
+import fc from 'fast-check';
+import {
+  Engine,
+  calculateBatch,
+  checkTarget,
+  createState,
+  evaluatePersistent,
+  orderPersistent,
+  type Content,
+  type PersistentRule,
+} from '../packages/engine/src/index.js';
+import { fsScenarioSchema, firstStepsBaseline } from '../packages/content/src/index.js';
+import {
+  batch,
+  character,
+  content,
+  counter,
+  death,
+  fixed,
+  hospital,
+  interrupted,
+  mutualKill,
+  source,
+  waitingFollowup,
+} from './fixtures.js';
+
+function run(f: ReturnType<typeof hospital>) {
+  const e = new Engine(f.state, f.content);
+  e.start(f.roots);
+  return e;
+}
+function traitRule(id: string, enabled = true): PersistentRule {
+  return {
+    id,
+    reference: 'PER fixture',
+    dependsOn: [],
+    when: { kind: 'counter', character: 'a', counter: 'anxiety', atLeast: 2 },
+    change: { kind: 'trait', character: 'a', trait: 'immortal', enabled },
+  };
+}
+function choose(e: Engine, id = 'cmd1', option?: string) {
+  const w = e.view('mastermind').waiting!;
+  return {
+    protocolVersion: 1 as const,
+    sessionId: 'local',
+    branchId: 'main',
+    commandId: id,
+    expectedRevision: w.revision,
+    waitingInputId: w.id,
+    command: { kind: 'choose' as const, optionIds: [option ?? w.options[0]!.id] },
+  };
+}
+
+describe('P0 content baseline', () => {
+  it('validates the frozen FS fixture and rejects wrong identities/date/culprit', () => {
+    expect(fsScenarioSchema.safeParse(firstStepsBaseline).success).toBe(true);
+    const bad = structuredClone(firstStepsBaseline);
+    bad.characters[0]!.identity = 'fs.gossip';
+    expect(fsScenarioSchema.safeParse(bad).success).toBe(false);
+    const dates = structuredClone(firstStepsBaseline);
+    dates.incidents[1]!.day = 2;
+    expect(fsScenarioSchema.safeParse(dates).success).toBe(false);
+    dates.incidents[1]!.day = 20;
+    dates.incidents[1]!.culprit = 'unknown';
+    expect(fsScenarioSchema.safeParse(dates).success).toBe(false);
+  });
+});
+
+describe('target checks and batch boundaries', () => {
+  it('TARGET-001 distinguishes all four states without mutation', () => {
+    const s = createState([character('a')]);
+    const c = content([]);
+    const original = JSON.stringify(s);
+    expect(checkTarget(counter('a', -2), s, c).status).toBe('has_target');
+    expect(checkTarget(death('absent'), s, c).status).toBe('no_target');
+    expect(checkTarget({ kind: 'end', reason: 'loop_end' }, s, c).status).toBe('not_required');
+    expect(
+      checkTarget({ ...death('a'), when: { kind: 'flag', key: 'inactive', value: true } }, s, c)
+        .status,
+    ).toBe('not_checked');
+    expect(JSON.stringify(s)).toBe(original);
+  });
+  it('RES-SIM-001 mutual kills survive reversed traversal', () => {
+    const f = mutualKill();
+    const a = run(f);
+    const b = run({ ...f, roots: [...f.roots].reverse() });
+    expect(a.state.characters.a!.alive).toBe(false);
+    expect(a.state.characters.b!.alive).toBe(false);
+    expect(a.state).toEqual(b.state);
+    expect(a.trace.filter((t) => t.kind === 'batch')).toHaveLength(1);
+  });
+  it('RES-DEATH-002 keeps repeated attempts, spends one guard, commits one death', () => {
+    const a = character('a');
+    a.counters.guard = 1;
+    const e = new Engine(
+      createState([a]),
+      content([source('double', batch(death('a'), death('a')))]),
+    );
+    e.start(['double']);
+    const b = e.trace.find((t) => t.kind === 'batch')!;
+    expect(b.data.attempts).toHaveLength(2);
+    expect(b.data.deaths).toEqual(['a']);
+    expect(e.state.characters.a!.counters.guard).toBe(0);
+    expect(e.state.characters.a!.alive).toBe(false);
+  });
+  it('RES-DEATH-003 immortality precedes guard and servant replacement', () => {
+    const a = character('a', { traits: ['immortal'] });
+    a.counters.guard = 1;
+    const c = content([source('kill', batch(death('a')))], {
+      replacements: [{ target: 'a', servant: 'b' }],
+    });
+    const e = new Engine(createState([a, character('b')]), c);
+    e.start(['kill']);
+    expect(e.state.characters.a!.counters.guard).toBe(1);
+    expect(e.state.characters.b!.alive).toBe(true);
+  });
+  it('RES-DEATH-004 servant direct and replacement requests remain separate', () => {
+    const b = character('b');
+    b.counters.guard = 1;
+    const e = new Engine(
+      createState([character('a'), b]),
+      content([source('kill', batch(death('a'), death('b')))], {
+        replacements: [{ target: 'a', servant: 'b' }],
+      }),
+    );
+    e.start(['kill']);
+    expect(e.state.characters.a!.alive).toBe(true);
+    expect(e.state.characters.b!.alive).toBe(false);
+    expect(e.trace.find((t) => t.kind === 'batch')!.data.attempts).toHaveLength(2);
+  });
+  it('RES-DEATH-005 rejects more than one global guard', () => {
+    const a = character('a'),
+      b = character('b');
+    a.counters.guard = b.counters.guard = 1;
+    expect(() => new Engine(createState([a, b]), content([]))).toThrow('GLOBAL_GUARD_LIMIT');
+  });
+  it('RES-CONFLICT reports mixed-sign ambiguity before committing', () => {
+    const state = createState([character('a')]);
+    expect(() =>
+      calculateBatch(
+        state,
+        [counter('a', 1), counter('a', -1)].map((effect, index) => ({
+          effect,
+          index,
+          source: 's',
+        })),
+        content([]),
+        'b',
+      ),
+    ).toThrow('COUNTER_CONFLICT');
+    expect(state.characters.a!.counters.anxiety).toBe(0);
+  });
+  it('RES-PROPERTY equivalent increments commute and counters remain nonnegative', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 20 }), { minLength: 1, maxLength: 15 }),
+        (values) => {
+          const state = createState([character('a')]);
+          const items = values.map((v, index) => ({ effect: counter('a', v), index, source: 's' }));
+          const forward = calculateBatch(state, items, content([]), 'b');
+          const reversed = calculateBatch(state, [...items].reverse(), content([]), 'b');
+          expect(forward.state).toEqual(reversed.state);
+          expect(forward.state.characters.a!.counters.anxiety).toBe(
+            values.reduce((a, b) => a + b, 0),
+          );
+        },
+      ),
+      { seed: 220922, numRuns: 100 },
+    );
+  });
+});
+
+describe('source completion and required continuations', () => {
+  it('RES-HOSPITAL death followups settle before incident completion then fool trigger', () => {
+    const e = run(hospital());
+    expect(e.state.loopFailed).toBe(true);
+    expect(e.state.protagonistsDead).toBe(true);
+    expect(e.state.characters.fool!.counters.anxiety).toBe(0);
+    const completed = e.trace.filter((t) => t.kind === 'completed').map((t) => t.data.source);
+    expect(completed).toEqual(['keyDeath', 'incident', 'foolAfter']);
+    expect(e.trace.at(-1)!.data.exit).toBe('loop_end');
+  });
+  it('RES-CUT does not execute subsequent text or completion hooks for truncated source', () => {
+    const e = run(interrupted());
+    expect(e.state.loopFailed).toBe(true);
+    expect(e.state.characters.fool!.counters.anxiety).toBe(3);
+    expect(Object.values(e.outcomes).find((o) => o.sourceId === 'incident')).toMatchObject({
+      completed: false,
+      truncated: true,
+    });
+    expect(e.trace.some((t) => t.kind === 'trigger' && t.data.trigger === 'fool.after')).toBe(
+      false,
+    );
+  });
+  it('RES-END ending alone is not failure', () => {
+    const e = new Engine(
+      createState([]),
+      content([source('end', batch({ kind: 'end', reason: 'loop_end' }))]),
+    );
+    e.start(['end']);
+    expect(e.state.loopFailed).toBe(false);
+    expect(e.state.protagonistsDead).toBe(false);
+    expect(e.state.endRequests).toEqual(['loop_end']);
+  });
+  it('RES-NOCHANGE completed source with zero removal consumes completion-based usage', () => {
+    const s = source('s', batch(counter('a', -2)));
+    s.usageKey = 'loop:s';
+    const e = new Engine(createState([character('a')]), content([s]));
+    e.start(['s']);
+    expect(e.state.usage['loop:s']).toBe(1);
+    expect(Object.values(e.outcomes)[0]!.completed).toBe(true);
+    expect(e.trace.find((t) => t.kind === 'batch')!.data.changed).toBe(false);
+    expect(() => e.start(['s'])).toThrow('USAGE_EXHAUSTED');
+  });
+  it('RES-NESTED inner completes while outer later text is truncated', () => {
+    const e = new Engine(
+      createState([]),
+      content([
+        source(
+          'outer',
+          { kind: 'call', sources: ['inner'] },
+          batch({ kind: 'flag', key: 'late', value: true }),
+        ),
+        source('inner', batch({ kind: 'end', reason: 'loop_end' })),
+      ]),
+    );
+    e.start(['outer']);
+    expect(Object.values(e.outcomes).find((o) => o.sourceId === 'inner')!.completed).toBe(true);
+    expect(Object.values(e.outcomes).find((o) => o.sourceId === 'outer')!.truncated).toBe(true);
+    expect(e.state.flags.late).toBeUndefined();
+  });
+  it('RES-NESTED-CUT a truncated called source cannot complete its caller', () => {
+    const e = new Engine(
+      createState([]),
+      content([
+        source('outer', { kind: 'call', sources: ['inner'] }),
+        source('inner', batch({ kind: 'end', reason: 'loop_end' }), batch()),
+      ]),
+    );
+    e.start(['outer']);
+    expect(Object.values(e.outcomes).every((o) => o.truncated && !o.completed)).toBe(true);
+  });
+  it('RES-OPTIONAL skip preserves previous effects and completes the source', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([
+        source('s', batch(counter('a', 1)), {
+          kind: 'batch',
+          effects: [counter('a', 3)],
+          optional: 'mastermind',
+        }),
+      ]),
+    );
+    e.start(['s']);
+    e.submit('mastermind', choose(e, 'skip', 'no'));
+    expect(e.state.characters.a!.counters.anxiety).toBe(1);
+    expect(Object.values(e.outcomes)[0]!.completed).toBe(true);
+  });
+  it('RES-LOOP trigger cycle faults explicitly instead of dropping effects', () => {
+    const c = content([source('s', batch())], {
+      triggers: [
+        {
+          id: 'cycle',
+          event: 'completed',
+          subject: 's',
+          sources: ['s'],
+          priority: 0,
+          allowDead: false,
+        },
+      ],
+    });
+    const e = new Engine(createState([]), c);
+    expect(() => e.start(['s'])).toThrow('RESOLUTION_LIMIT');
+    expect(e.status).toBe('faulted');
+  });
+});
+
+describe('persistent rules and victory checkpoints', () => {
+  it('PER-001 derives traits without deleting original grants', () => {
+    const s = createState([character('a')]);
+    const c = content([], { persistent: [traitRule('immortal')] });
+    s.characters.a!.counters.anxiety = 2;
+    expect(evaluatePersistent(s, c).characters.a!.traits).toContain('immortal');
+    s.characters.a!.counters.anxiety = 0;
+    expect(evaluatePersistent(s, c).characters.a!.traits).not.toContain('immortal');
+    s.characters.a!.traits.push('immortal');
+    expect(evaluatePersistent(s, c).characters.a!.traits).toContain('immortal');
+  });
+  it('PER-002 checks only a complete batch; protection gained afterwards is not retroactive', () => {
+    const c = content([source('s', batch(counter('a', 2), death('a')))], {
+      persistent: [traitRule('immortal')],
+    });
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['s']);
+    expect(e.state.characters.a!.alive).toBe(false);
+    expect(e.trace.filter((t) => t.kind === 'batch')).toHaveLength(1);
+  });
+  it('PER-003 next batch sees new derived protection', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([source('s', batch(counter('a', 2)), batch(death('a')))], {
+        persistent: [traitRule('immortal')],
+      }),
+    );
+    e.start(['s']);
+    expect(e.state.characters.a!.alive).toBe(true);
+  });
+  it('PER-004 pure reevaluation is idempotent; hope suppresses all ignore-goodwill traits', () => {
+    const a = character('a', { traits: ['ignore_goodwill', 'puppet_ignore_goodwill'] });
+    a.counters.hope = 1;
+    a.counters.despair = 2;
+    const s = createState([a]);
+    const original = JSON.stringify(s);
+    const c = content([]);
+    expect(evaluatePersistent(s, c)).toEqual(evaluatePersistent(s, c));
+    expect(JSON.stringify(s)).toBe(original);
+    const effective = evaluatePersistent(s, c).characters.a!;
+    expect(effective.traits).toEqual([]);
+    expect(effective.counters).toMatchObject({ goodwill: 1, anxiety: 2, intrigue: 1 });
+  });
+  const victoryContent = (): Content =>
+    content([source('friend', batch(counter('a', 1)))], {
+      victories: [
+        {
+          id: 'll.fixture.B',
+          phase: 'protagonist_ability',
+          mark: 'communicated',
+          threshold: 1,
+          seat: 'protagonistB',
+        },
+      ],
+    });
+  it('PER-005 stage entry checks victory even without counter changes; offboard marks count', () => {
+    const s = createState([character('a', { communicated: true, presence: 'removed' })]);
+    s.traitors = ['protagonistB'];
+    const e = new Engine(s, victoryContent());
+    e.enterPhase('turn_start');
+    expect(e.state.winners).toEqual([]);
+    e.enterPhase('protagonist_ability');
+    expect(e.state.winners).toEqual(['protagonistB']);
+  });
+  it('PER-006 communication victory prevents ability execution, refusal does not consume usage', () => {
+    const s = createState([character('a')]);
+    s.traitors = ['protagonistB'];
+    s.phase = 'protagonist_ability';
+    const c = victoryContent();
+    c.sources[0]!.usageKey = 'friend';
+    const e = new Engine(s, c);
+    e.startGoodwill('friend', 'a', true);
+    expect(e.state.characters.a!.communicated).toBe(false);
+    expect(e.state.usage.friend).toBeUndefined();
+    e.startGoodwill('friend', 'a', false);
+    expect(e.state.winners).toEqual(['protagonistB']);
+    expect(e.state.characters.a!.counters.anxiety).toBe(0);
+  });
+  it('PER-007 evaluates traitor eligibility before victory', () => {
+    const s = createState([character('a', { communicated: true })]);
+    s.traitors = ['protagonistB'];
+    const c = victoryContent();
+    c.persistent.push({
+      id: 'final-plan',
+      reference: 'fixture',
+      dependsOn: [],
+      when: { kind: 'always' },
+      change: { kind: 'traitor', seat: 'protagonistB', enabled: false },
+    });
+    const e = new Engine(s, c);
+    e.enterPhase('protagonist_ability');
+    expect(e.state.winners).toEqual([]);
+  });
+  it('PER-008 restoring cannot retain a stale derived cache', () => {
+    const f = waitingFollowup();
+    f.content.persistent.push(traitRule('immortal'));
+    const e = run(f);
+    const restored = Engine.restore(e.serialize(), f.content);
+    expect(evaluatePersistent(restored.state, f.content)).toEqual(
+      evaluatePersistent(e.state, f.content),
+    );
+  });
+  it('PER-009 rejects missing dependencies, cycles and competing writers', () => {
+    const a = traitRule('a'),
+      b = traitRule('b', false);
+    expect(() => orderPersistent([a, b])).toThrow('PERSISTENT_CONFLICT');
+    a.dependsOn = ['b'];
+    b.dependsOn = ['a'];
+    expect(() => orderPersistent([a, b])).toThrow('PERSISTENT_CYCLE');
+    expect(() => orderPersistent([a])).toThrow('MISSING_DEPENDENCY');
+  });
+});
+
+describe('serialized continuation and command boundary', () => {
+  it('SAVE-001 restores a choice inside a death followup and completes the outer source once', () => {
+    const f = waitingFollowup();
+    const e = run(f);
+    expect(e.status).toBe('waiting');
+    expect(Object.values(e.outcomes).find((o) => o.sourceId === 'root')!.completed).toBe(false);
+    const restored = Engine.restore(e.serialize(), f.content);
+    const command = choose(e);
+    expect(e.submit('mastermind', command).status).toBe('accepted');
+    expect(restored.submit('mastermind', command).status).toBe('accepted');
+    expect(restored.serialize()).toEqual(e.serialize());
+    expect(e.state.characters.b!.counters.anxiety).toBe(2);
+    expect(e.trace.filter((t) => t.kind === 'completed' && t.data.source === 'root')).toHaveLength(
+      1,
+    );
+  });
+  it('CMD-001 duplicate retries execute once, old and foreign commands never mutate state', () => {
+    const e = run(waitingFollowup());
+    const command = choose(e);
+    const before = e.serialize();
+    expect(e.submit('protagonistA', command)).toMatchObject({ code: 'NOT_ALLOWED' });
+    expect(e.submit('mastermind', { ...command, expectedRevision: 0 })).toMatchObject({
+      code: 'STALE',
+    });
+    expect(e.submit('mastermind', { ...command, actor: 'mastermind' })).toMatchObject({
+      code: 'INVALID_INPUT',
+    });
+    expect(e.submit('mastermind', { ...command, branchId: 'other' })).toMatchObject({
+      code: 'WRONG_SESSION',
+    });
+    expect(e.submit('mastermind', choose(e, 'bad', 'a'))).toMatchObject({ code: 'INVALID_OPTION' });
+    expect(e.serialize()).toBe(before);
+    const receipt = e.submit('mastermind', command);
+    const after = e.serialize();
+    expect(e.submit('mastermind', command)).toEqual(receipt);
+    expect(e.serialize()).toBe(after);
+    expect(e.submit('mastermind', { ...command, waitingInputId: 'other' })).toMatchObject({
+      code: 'ID_REUSED',
+    });
+  });
+  it('VIEW-001 hides secret identity, source trace and another seats legal options', () => {
+    const f = waitingFollowup();
+    f.state.characters.b!.identity = 'secret.key_person';
+    const e = run(f);
+    const json = JSON.stringify(e.view('protagonistA'));
+    expect(json).not.toContain('secret.key_person');
+    expect(json).not.toContain('death.choose');
+    expect(e.view('protagonistA').waiting).toBe(null);
+    expect(e.view('mastermind').waiting?.options).toEqual([{ id: 'b', label: 'b' }]);
+    expect(e.view('mastermind').characters.find((c) => c.id === 'b')!.identity).toBe(
+      'secret.key_person',
+    );
+  });
+  it('SAVE-002 rejects incompatible content and malformed engine version', () => {
+    const f = waitingFollowup();
+    const e = run(f);
+    const changed = structuredClone(f.content);
+    changed.version = 'different';
+    expect(() => Engine.restore(e.serialize(), changed)).toThrow('CONTENT_VERSION_MISMATCH');
+    const malformed = JSON.parse(e.serialize());
+    malformed.engineVersion = 'other';
+    expect(() => Engine.restore(JSON.stringify(malformed), f.content)).toThrow();
+  });
+});

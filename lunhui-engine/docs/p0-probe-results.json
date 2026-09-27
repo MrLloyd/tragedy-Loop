@@ -1,0 +1,48 @@
+{
+  "date": "2026-09-26",
+  "note": "直接设置状态的诊断夹具，不代表合法完整剧本；P0处理意见的结果断言见tests/p0-rulings.test.ts。",
+  "findings": [
+    {
+      "id": "P0-01",
+      "scenario": "纸老虎不安2，位于医院，启用怪物们的阴谋",
+      "expected": ["hospital"],
+      "actual": ["hospital"],
+      "effectiveTraits": ["must-ignore-goodwill"]
+    },
+    {
+      "id": "P0-02",
+      "scenario": "古墓活尸，医院只有密谋牺牲者丧尸，没有实体丧尸卡",
+      "expected": "可选择丧尸尸体移动",
+      "actual": ["zombie.move-corpse", "finish"]
+    },
+    {
+      "id": "P0-03",
+      "scenario": "妹妹调用鉴别员移动指示物，但同区只有妹妹和鉴别员，且无指示物",
+      "expected": "按用户确认裁定，成人能力无合法目标不阻止妹妹发动、登记沟通和完成",
+      "actual": {
+        "sisterCommunicated": true,
+        "outcomes": [
+          {
+            "sourceId": "sister.goodwill1@sister",
+            "started": true,
+            "completed": true
+          }
+        ],
+        "replies": [
+          {
+            "status": "accepted",
+            "revision": 3
+          },
+          {
+            "status": "accepted",
+            "revision": 7
+          },
+          {
+            "status": "accepted",
+            "revision": 10
+          }
+        ]
+      }
+    }
+  ]
+}

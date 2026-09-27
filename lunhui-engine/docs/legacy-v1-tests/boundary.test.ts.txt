@@ -1,0 +1,280 @@
+// Historical v1 specification; executable v2 regressions live in tests/.
+import { describe, expect, it } from 'vitest';
+import {
+  Engine,
+  createState,
+  evaluatePersistent,
+  orderPersistent,
+} from '../packages/engine/src/index.js';
+import { LocalTransport } from '../packages/transport/src/index.js';
+import { type CommandEnvelope } from '../packages/contracts/src/index.js';
+import {
+  batch,
+  character,
+  content,
+  counter,
+  death,
+  fixed,
+  source,
+  waitingFollowup,
+} from './fixtures.js';
+
+function command(engine: Engine, option: string, id = 'cmd'): CommandEnvelope {
+  const w = engine.view('mastermind').waiting!;
+  return {
+    protocolVersion: 1,
+    sessionId: 'local',
+    branchId: 'main',
+    commandId: id,
+    expectedRevision: w.revision,
+    waitingInputId: w.id,
+    command: { kind: 'choose', optionIds: [option] },
+  };
+}
+describe('P1 transport and P2 edge cases', () => {
+  it('TRANSPORT-001 concurrent retries mutate once; observer exceptions cannot roll back', async () => {
+    const f = waitingFollowup();
+    const e = new Engine(f.state, f.content);
+    e.start(f.roots);
+    const transport = new LocalTransport(e, 'mastermind');
+    let notified = 0;
+    transport.subscribe(() => {
+      throw new Error('broken display');
+    });
+    const unsubscribe = transport.subscribe(() => {
+      notified++;
+    });
+    const cmd = command(e, 'b');
+    const result = await Promise.all([transport.submit(cmd), transport.submit(cmd)]);
+    expect(result[0]).toEqual(result[1]);
+    expect(result[0]!.status).toBe('accepted');
+    expect(
+      (await transport.getSnapshot()).characters.find((c) => c.id === 'b')!.counters.anxiety,
+    ).toBe(2);
+    expect(e.trace.filter((t) => t.kind === 'choice')).toHaveLength(1);
+    expect(notified).toBe(2);
+    unsubscribe();
+    await transport.submit(cmd);
+    expect(notified).toBe(2);
+  });
+  it('CMD-ROLLBACK failure after a legal choice leaves the waiting checkpoint intact', () => {
+    const c = content([
+      source(
+        'bad',
+        batch(
+          {
+            kind: 'counter',
+            target: { kind: 'select', ids: ['a'], actor: 'mastermind', allowDead: false },
+            counter: 'anxiety',
+            delta: 1,
+          },
+          counter('a', -1),
+        ),
+      ),
+    ]);
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['bad']);
+    const before = e.serialize();
+    expect(e.submit('mastermind', command(e, 'a'))).toMatchObject({ code: 'ENGINE_ERROR' });
+    expect(e.serialize()).toBe(before);
+    expect(e.status).toBe('waiting');
+  });
+  it('DEATH-CORPSE cannot register a second death even when target allows corpses', () => {
+    const e = new Engine(
+      createState([character('a', { alive: false, died: true })]),
+      content(
+        [
+          source('s', batch({ kind: 'death', target: fixed('a', true) })),
+          source('bad', batch({ kind: 'end', reason: 'failure' })),
+        ],
+        {
+          triggers: [
+            {
+              id: 'death',
+              event: 'death',
+              subject: 'a',
+              sources: ['bad'],
+              priority: 0,
+              allowDead: true,
+            },
+          ],
+        },
+      ),
+    );
+    e.start(['s']);
+    expect(e.state.loopFailed).toBe(false);
+    expect(e.trace.find((t) => t.kind === 'batch')!.data.deaths).toEqual([]);
+  });
+  it('END-LATCH failure cannot be cancelled by later unrelated changes', () => {
+    const c = content(
+      [
+        source('root', batch(death('a'))),
+        source('fail', batch({ kind: 'end', reason: 'failure' })),
+        source('later', batch({ kind: 'flag', key: 'changed', value: true })),
+      ],
+      {
+        triggers: [
+          {
+            id: 'onDeath',
+            event: 'death',
+            subject: 'a',
+            sources: ['fail'],
+            priority: 0,
+            allowDead: true,
+          },
+          {
+            id: 'onCompleted',
+            event: 'completed',
+            subject: 'fail',
+            sources: ['later'],
+            priority: 0,
+            allowDead: true,
+          },
+        ],
+      },
+    );
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['root']);
+    expect(e.state.loopFailed).toBe(true);
+    expect(e.state.flags.changed).toBe(true);
+    expect(e.state.endRequests).toContain('failure');
+  });
+  it('FORCED-GROUP same-time followups share a batch without dropping distinct sources', () => {
+    const e = new Engine(
+      createState([character('a'), character('b'), character('c')]),
+      content(
+        [
+          source('root', batch(death('a'))),
+          source('one', batch(death('b'))),
+          source('two', batch(death('c'))),
+        ],
+        {
+          triggers: [
+            {
+              id: 'one',
+              event: 'death',
+              subject: 'a',
+              sources: ['one'],
+              priority: 0,
+              allowDead: true,
+            },
+            {
+              id: 'two',
+              event: 'death',
+              subject: 'a',
+              sources: ['two'],
+              priority: 0,
+              allowDead: true,
+            },
+          ],
+        },
+      ),
+    );
+    e.start(['root']);
+    expect(e.trace.filter((t) => t.kind === 'batch')).toHaveLength(2);
+    expect(e.trace.filter((t) => t.kind === 'completed')).toHaveLength(3);
+    expect(Object.values(e.state.characters).every((c) => !c.alive)).toBe(true);
+  });
+  it('COMPLETE-QUALIFICATION ordinary corpse owner cannot trigger while explicit exception can', () => {
+    const c = content(
+      [
+        source('root', batch(death('a'))),
+        source('ordinary', batch({ kind: 'flag', key: 'wrong', value: true })),
+        source('exception', batch({ kind: 'flag', key: 'right', value: true })),
+      ],
+      {
+        triggers: [
+          {
+            id: 'ordinary',
+            event: 'completed',
+            subject: 'root',
+            sources: ['ordinary'],
+            priority: 0,
+            owner: 'a',
+            allowDead: false,
+          },
+          {
+            id: 'exception',
+            event: 'completed',
+            subject: 'root',
+            sources: ['exception'],
+            priority: 0,
+            owner: 'a',
+            allowDead: true,
+          },
+        ],
+      },
+    );
+    const e = new Engine(createState([character('a')]), c);
+    e.start(['root']);
+    expect(e.state.flags.wrong).toBeUndefined();
+    expect(e.state.flags.right).toBe(true);
+  });
+  it('OPTIONAL-END does not ask for the unstarted optional text after loop end', () => {
+    const e = new Engine(
+      createState([character('a')]),
+      content([
+        source('s', batch({ kind: 'end', reason: 'loop_end' }), {
+          kind: 'batch',
+          effects: [counter('a', 1)],
+          optional: 'mastermind',
+        }),
+      ]),
+    );
+    e.start(['s']);
+    expect(e.status).toBe('finished');
+    expect(e.view('mastermind').waiting).toBe(null);
+    expect(Object.values(e.outcomes)[0]!.truncated).toBe(true);
+  });
+  it('NO-TARGET forced source still completes, while goodwill declaration is refused before starting', () => {
+    const s = createState([character('a', { presence: 'not_entered' }), character('b')]);
+    const c = content([source('s', batch(counter('a', 1)))]);
+    const e = new Engine(s, c);
+    expect(() => e.startGoodwill('s', 'b', false)).toThrow('NO_LEGAL_TARGET');
+    e.start(['s']);
+    expect(Object.values(e.outcomes)[0]!.completed).toBe(true);
+    expect(e.trace.find((t) => t.kind === 'batch')!.data.changed).toBe(false);
+  });
+  it('PUBLIC-CHOICE rejects secret-dependent protagonist selectors', () => {
+    const c = content([
+      source(
+        's',
+        batch({
+          kind: 'counter',
+          target: { kind: 'select', ids: ['a'], actor: 'protagonistA', allowDead: false },
+          when: { kind: 'identity', character: 'a', identity: 'secret' },
+          counter: 'anxiety',
+          delta: 1,
+        }),
+      ),
+    ]);
+    expect(() => new Engine(createState([character('a')]), c)).toThrow(
+      'SECRET_DEPENDENT_PUBLIC_CHOICE',
+    );
+  });
+  it('DEPENDENCY enforces explicit derived-identity dependencies and resolves declared order', () => {
+    const c = content([], {
+      persistent: [
+        {
+          id: 'identity',
+          reference: 'fixture',
+          dependsOn: [],
+          when: { kind: 'always' },
+          change: { kind: 'identity', character: 'a', identity: 'new' },
+        },
+        {
+          id: 'trait',
+          reference: 'fixture',
+          dependsOn: [],
+          when: { kind: 'identity', character: 'a', identity: 'new' },
+          change: { kind: 'trait', character: 'a', trait: 'immortal', enabled: true },
+        },
+      ],
+    });
+    expect(() => orderPersistent(c.persistent)).toThrow('UNDECLARED_DEPENDENCY');
+    c.persistent[1]!.dependsOn = ['identity'];
+    expect(evaluatePersistent(createState([character('a')]), c).characters.a!.traits).toContain(
+      'immortal',
+    );
+  });
+});

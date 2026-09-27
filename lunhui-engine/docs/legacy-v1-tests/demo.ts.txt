@@ -1,0 +1,75 @@
+import { createHash } from 'node:crypto';
+// Historical v1 demo, preserved as reference.
+import { Engine } from '../../packages/engine/src/runtime.js';
+import { formatAnnouncement } from '../../packages/contracts/src/index.js';
+import { createState } from '../../packages/engine/src/model.js';
+import {
+  character,
+  content,
+  source,
+  batch,
+  death,
+  mutualKill,
+  hospital,
+  interrupted,
+  waitingFollowup,
+} from '../../tests/fixtures.js';
+
+const guarded = character('guarded');
+guarded.counters.guard = 1;
+const cases = [
+  { name: '两个杀人狂同时互杀', ...mutualKill() },
+  {
+    name: '一枚护卫与两项死亡请求',
+    state: createState([guarded]),
+    content: content([source('doubleDeath', batch(death('guarded'), death('guarded')))]),
+    roots: ['doubleDeath'],
+  },
+  { name: '医院事故：死亡后续 → 来源完成 → 愚者后续', ...hospital() },
+  { name: '随后被截断：不触发未完成来源的完成后能力', ...interrupted() },
+  { name: '强制后续选择：保存、恢复、完成外层', ...waitingFollowup() },
+];
+for (const fixture of cases) {
+  let engine = new Engine(fixture.state, fixture.content);
+  engine.start(fixture.roots);
+  console.log(`\n${fixture.name}`);
+  if (engine.status === 'waiting') {
+    const snapshot = engine.serialize();
+    engine = Engine.restore(snapshot, fixture.content);
+    const waiting = engine.view('mastermind').waiting!;
+    const receipt = engine.submit('mastermind', {
+      protocolVersion: 1,
+      sessionId: 'local',
+      branchId: 'main',
+      commandId: 'demo-1',
+      expectedRevision: waiting.revision,
+      waitingInputId: waiting.id,
+      command: { kind: 'choose', optionIds: [waiting.options[0]!.id] },
+    });
+    console.log('  恢复后选择:', receipt.status);
+  }
+  console.log('  主人公告告（只读投影）：');
+  const characters = Object.fromEntries(
+    engine.view('protagonistA').characters.map((c) => [c.id, c.name]),
+  );
+  for (const announcement of engine.announcementsFor('protagonistA').announcements)
+    console.log('   ', formatAnnouncement(announcement.fact, { characters }));
+  console.log('  内部轨迹（仅本机调试，禁止经网络发送）：');
+  for (const entry of engine.trace) {
+    const { state: _state, ...summary } = entry.data;
+    console.log(`  ${entry.seq} ${entry.kind} ${JSON.stringify(summary)}`);
+  }
+  console.log(
+    '  最终盘面:',
+    Object.values(engine.state.characters)
+      .map(
+        (c) =>
+          `${c.name}:${c.alive ? '存活' : '死亡'}/不安${c.counters.anxiety}/护卫${c.counters.guard}`,
+      )
+      .join('，'),
+  );
+  console.log(
+    '  状态校验:',
+    createHash('sha256').update(engine.serialize()).digest('hex').slice(0, 16),
+  );
+}

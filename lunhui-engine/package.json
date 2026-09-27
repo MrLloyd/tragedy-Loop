@@ -1,0 +1,29 @@
+{
+  "name": "lunhui-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "demo": "tsx apps/cli/demo.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "baseline": "tsx scripts/baseline.ts",
+    "check": "pnpm baseline && pnpm format:check && pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "fast-check": "4.3.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4",
+    "prettier": "3.6.2"
+  }
+}

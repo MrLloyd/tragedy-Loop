@@ -1,0 +1,125 @@
+// Historical v1 specification; executable v2 regressions live in tests/.
+import {
+  blankCounts,
+  createState,
+  contentSchema,
+  sourceSchema,
+  type CharacterState,
+  type Effect,
+  type Step,
+  type Content,
+  type Source,
+} from '../packages/engine/src/model.js';
+import { emptyContent } from '../packages/content/src/index.js';
+export function character(id: string, change: Partial<CharacterState> = {}): CharacterState {
+  return {
+    id,
+    name: id,
+    identity: 'fixture.civilian',
+    revealedIdentity: null,
+    area: 'hospital',
+    presence: 'board',
+    alive: true,
+    counters: blankCounts(),
+    traits: [],
+    communicated: false,
+    died: false,
+    ...change,
+  };
+}
+export const fixed = (id: string, allowDead = false) => ({ kind: 'fixed' as const, id, allowDead });
+export const death = (id: string): Effect => ({ kind: 'death', target: fixed(id) });
+export const counter = (
+  id: string,
+  delta: number,
+  kind: keyof CharacterState['counters'] = 'anxiety',
+  allowDead = false,
+): Effect => ({ kind: 'counter', target: fixed(id, allowDead), counter: kind, delta });
+export const batch = (...effects: Effect[]): Step => ({ kind: 'batch', effects });
+export const source = (id: string, ...steps: Step[]): Source =>
+  sourceSchema.parse({ id, reference: 'test fixture / not a playable module', steps });
+export const content = (sources: Source[], extra: Partial<Content> = {}): Content =>
+  contentSchema.parse({ ...emptyContent(), sources, ...extra });
+export function mutualKill() {
+  return {
+    state: createState([character('a'), character('b')]),
+    content: content([source('killA', batch(death('b'))), source('killB', batch(death('a')))]),
+    roots: ['killA', 'killB'],
+  };
+}
+export function hospital() {
+  const fool = character('fool');
+  fool.counters.anxiety = 3;
+  return {
+    state: createState([character('key'), fool]),
+    content: content(
+      [
+        source(
+          'incident',
+          batch(death('key'), death('fool'), { kind: 'end', reason: 'protagonists_dead' }),
+        ),
+        source('keyDeath', batch({ kind: 'end', reason: 'failure' })),
+        source('foolAfter', batch(counter('fool', -99, 'anxiety', true))),
+      ],
+      {
+        triggers: [
+          {
+            id: 'key.death',
+            event: 'death',
+            subject: 'key',
+            sources: ['keyDeath'],
+            priority: 0,
+            allowDead: true,
+          },
+          {
+            id: 'fool.after',
+            event: 'completed',
+            subject: 'incident',
+            sources: ['foolAfter'],
+            priority: 0,
+            owner: 'fool',
+            allowDead: true,
+          },
+        ],
+      },
+    ),
+    roots: ['incident'],
+  };
+}
+export function interrupted() {
+  const f = hospital();
+  f.content.sources[0] = source('incident', batch(death('key')), batch(counter('fool', 2)));
+  return f;
+}
+export function waitingFollowup() {
+  return {
+    state: createState([character('a'), character('b')]),
+    content: content(
+      [
+        source('root', batch(death('a'))),
+        source(
+          'follow',
+          batch({
+            kind: 'counter',
+            target: { kind: 'select', ids: ['b'], actor: 'mastermind', allowDead: false },
+            counter: 'anxiety',
+            delta: 2,
+          }),
+        ),
+      ],
+      {
+        triggers: [
+          {
+            id: 'death.choose',
+            event: 'death',
+            subject: 'a',
+            sources: ['follow'],
+            priority: 0,
+            allowDead: true,
+          },
+        ],
+      },
+    ),
+    roots: ['root'],
+  };
+}

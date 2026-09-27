@@ -1,0 +1,99 @@
+// Historical First Steps v1 frozen configuration.
+import { z } from 'zod';
+import {
+  blankCounts,
+  characterSchema,
+  contentSchema,
+  type Content,
+} from '../../engine/src/model.js';
+
+export const fsScenarioSchema = z
+  .object({
+    id: z.literal('fs.p0.training-01'),
+    module: z.literal('first_steps'),
+    rules: z.tuple([z.literal('fs.y.murder_plan'), z.literal('fs.x.shadow_of_the_ripper')]),
+    loops: z.number().int().positive(),
+    days: z.number().int().positive(),
+    characters: z.array(characterSchema).length(5),
+    incidents: z.array(
+      z
+        .object({
+          id: z.string(),
+          day: z.number().int().positive(),
+          kind: z.enum(['suicide', 'hospital_accident']),
+          culprit: z.string(),
+        })
+        .strict(),
+    ),
+    support: z.literal('baseline_only'),
+  })
+  .strict()
+  .superRefine((s, ctx) => {
+    const ids = s.characters.map((c) => c.id);
+    if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', message: '角色 ID 重复' });
+    const expected = [
+      'fs.key_person',
+      'fs.killer',
+      'fs.mastermind',
+      'fs.gossip',
+      'fs.serial_killer',
+    ].sort();
+    if (JSON.stringify(s.characters.map((c) => c.identity).sort()) !== JSON.stringify(expected))
+      ctx.addIssue({ code: 'custom', message: '身份配置与规则 Y/X 不符' });
+    if (new Set(s.incidents.map((i) => i.day)).size !== s.incidents.length)
+      ctx.addIssue({ code: 'custom', message: '同日只能有一个预定事件' });
+    for (const i of s.incidents)
+      if (i.day > s.days || !ids.includes(i.culprit))
+        ctx.addIssue({ code: 'custom', message: '事件日期或当事人非法' });
+    const initial: Record<string, string> = {
+      doctor: 'hospital',
+      male_student: 'school',
+      female_student: 'school',
+      shrine_maiden: 'shrine',
+      police: 'city',
+    };
+    if (s.characters.some((c) => initial[c.id] !== c.area || !c.alive || c.presence !== 'board'))
+      ctx.addIssue({ code: 'custom', message: '角色初始配置非法' });
+  });
+const cast = [
+  ['doctor', '医生', 'hospital', 'fs.key_person'],
+  ['male_student', '男子学生', 'school', 'fs.killer'],
+  ['female_student', '女子学生', 'school', 'fs.mastermind'],
+  ['shrine_maiden', '巫女', 'shrine', 'fs.gossip'],
+  ['police', '刑警', 'city', 'fs.serial_killer'],
+];
+export const firstStepsBaseline = fsScenarioSchema.parse({
+  id: 'fs.p0.training-01',
+  module: 'first_steps',
+  rules: ['fs.y.murder_plan', 'fs.x.shadow_of_the_ripper'],
+  loops: 3,
+  days: 4,
+  characters: cast.map(([id, name, area, identity]) => ({
+    id,
+    name,
+    area,
+    identity,
+    revealedIdentity: null,
+    alive: true,
+    presence: 'board',
+    counters: blankCounts(),
+    traits: ['fs.killer', 'fs.mastermind'].includes(identity!) ? ['ignore_goodwill'] : [],
+    communicated: false,
+    died: false,
+  })),
+  incidents: [
+    { id: 'fs.p0.training-01.day2', day: 2, kind: 'hospital_accident', culprit: 'doctor' },
+    { id: 'fs.p0.training-01.day4', day: 4, kind: 'suicide', culprit: 'police' },
+  ],
+  support: 'baseline_only',
+});
+// Empty catalog is intentional: P2 scenarios are explicit fixtures, not a playable module.
+export const emptyContent = (): Content =>
+  contentSchema.parse({
+    version: 'p2-fixtures-v1',
+    sources: [],
+    persistent: [],
+    triggers: [],
+    victories: [],
+    replacements: [],
+  });

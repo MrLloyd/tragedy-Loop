@@ -1,0 +1,30 @@
+# 数据契约与校验：在推送/PR 上自动运行，无需本地手动执行。
+# 亦可通过 Actions 页「Run workflow」手动触发。
+
+name: Data validation
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Validate JSON contracts (CLI)
+        run: python -m engine.validation
+
+      - name: Pytest (data validation smoke)
+        run: pytest tests/test_data_validation.py -q

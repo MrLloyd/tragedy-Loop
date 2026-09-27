@@ -1,0 +1,25 @@
+{
+  "version": "2026-09-22.p0-v1",
+  "files": [
+    {
+      "path": "步骤结算流程（独立稿）.md",
+      "sha256": "33cabc2c7523f1fd9be99519fc0bfbdeb5c63fb97bcf350f371867f62e183026"
+    },
+    {
+      "path": "全阶段逻辑样例.md",
+      "sha256": "c2053e8d0a3c16b9fefd41d2f5c478b47c530817c1abc5ae369b5031693c4869"
+    },
+    {
+      "path": "事件阶段逻辑样例.md",
+      "sha256": "29eb929182b6b3e344b97a22deebe2fa590ba94ef7ed03d88e73288583ee935f"
+    },
+    {
+      "path": "tragedy_loop_game_rules(3)(1).md",
+      "sha256": "02ba734e8c2838add791a7104af28af0d12dfebdd34f8b82153c6f92ef69f14a"
+    },
+    {
+      "path": "tragedy_loop_appendix(3)(1).md",
+      "sha256": "0697a4e41effcdb8ebc116ec9b4a14630b7df268f8679ffef369ccf263498c1c"
+    }
+  ]
+}
